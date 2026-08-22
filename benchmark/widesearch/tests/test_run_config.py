@@ -38,5 +38,6 @@ def test_treatment_objective_can_append_verification_hint() -> None:
     )
     assert "VERIFICATION DISCIPLINE" not in base
     assert "VERIFICATION DISCIPLINE" in hinted
-    assert "independent sources agree" in hinted
-    assert "review pass" in hinted
+    assert "NEVER leave a cell empty" in hinted
+    assert "third-party aggregator" in hinted
+    assert "bounded review pass" in hinted
