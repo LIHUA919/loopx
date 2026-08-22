@@ -79,22 +79,25 @@ image、verifier image、verifier test.sh、job.yaml）。要点：
 - **agent 镜像 `/bin/sh` 需是 bash**：pier 用 `set -o pipefail` 执行 agent
   setup，Debian 默认 dash 不支持（`ln -sf /usr/bin/bash /bin/sh`）。
 
-## LoopX treatment 验证提示词（可选）
+## LoopX treatment 验证提示词（可选，case 通用）
 
-对 Web 表格类任务（高歧义列：deadline/fee 常被幻觉），treatment 臂可追加
+对 Web 表格类任务（细节列如日期/价格/编号常被幻觉），treatment 臂可追加
 public-safe 的验证/复核纪律（借鉴 deepswe review/refine treatment 模式）：
 
 ```bash
 uv run --python 3.12 --with dateparser==1.2.2 \
   python benchmark/widesearch/run_widesearch_case.py \
-  --arm treatment --case ws_en_001 --data-root <data-root> \
+  --arm treatment --case <case_id> --data-root <data-root> \
   --verification-hint
 ```
 
-`--verification-hint` 会让 treatment objective 追加：官方来源权威 + 每格独立双源
-交叉核验 + 对 deadline/fee 逐项质询（排除国家申请处理费/本科 deadline/片面 per-course
-值）+ 成表后逐格证据复核 + 干净收尾。它把 LoopX 控制面从"进度记账"升级为"事实核验"，
-针对 Web 表格 bench 的高幻觉列（如申请费/截止日期）比裸 goal 更有机会提升。
+`--verification-hint` 会让 treatment objective 追加 **case 通用**的验证纪律：
+把 required 列映射成 research + 独立验证 todo；list/ranking 类格子以官方/一手来源
+为权威；明细类格子（日期/价格/费用/编号/名称等可与"相关但不同"值混淆的）要求
+一手来源 + 第二来源交叉核验、双源语义一致才接受；对每个明细格做语义质询（是否
+精确回答该列问题，而非处理费/聚合值/不同时期或主体等）；成表后逐格对照证据复核，
+标出记忆或单来源格子并修正；干净收尾。它把 LoopX 控制面从"进度记账"升级为
+"事实核验"，对 Web 表格 bench 的高幻觉明细列比裸 goal 更有机会提升。
 
 ## 测试
 
