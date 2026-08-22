@@ -20,18 +20,49 @@ from tasks import answer_is_fresh, fresh_workspace, prepare_case, stamp_run_star
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Public-safe, provider-neutral verification discipline for web-research table
+# benchmarks. Mirrors the review/refine treatment pattern used on code benchmarks:
+# map the work to Todos, treat official sources as authoritative, cross-check
+# high-ambiguity cells, run a review pass, and stop cleanly once verified.
+WIDESEARCH_VERIFICATION_HINT = (
+    "VERIFICATION DISCIPLINE (required): "
+    "1. For each ranking column, use the official ranking publisher as the single "
+    "authoritative reference and record its source URL as Todo evidence. "
+    "2. For each admission detail column (home page, application deadline, application "
+    "fee), require the value from the university's own official admissions page and "
+    "independently cross-check it against a second source; accept it only when two "
+    "independent sources agree on the same semantics. "
+    "3. Before accepting any deadline or fee, verify it is the university's own "
+    "postgraduate regular-decision value - not a national application-processing fee, "
+    "an undergraduate deadline, or an unrepresentative per-course figure. Reject values "
+    "from memory, fee-waiver pages, or third-party aggregators. "
+    "4. After composing the full table, run a review pass that re-reads every cell "
+    "against its recorded evidence, explicitly flags cells sourced from memory or a "
+    "single source, and fixes them before writing the final answer. "
+    "5. Do not add speculative rows or cells. "
+    "6. Once the review pass is clean, write the final answer, mark the LoopX goal "
+    "complete, and stop; do not perform unrelated control-plane cleanup."
+)
 
-def _objective(case_id: str, workspace: Path, instruction: str, treatment: bool) -> str:
+
+def _objective(
+    case_id: str,
+    workspace: Path,
+    instruction: str,
+    treatment: bool,
+    verification_hint: bool = False,
+) -> str:
     common = (
         f"Write the final markdown table to {workspace}/final_answer.md and stop. "
         "Use web_search / web_fetch to gather facts from the web."
     )
     if treatment:
+        hint = f"\n{WIDESEARCH_VERIFICATION_HINT}" if verification_hint else ""
         return (
             "Use the installed LoopX skill (/loopx) to start a goal for the benchmark "
             "task in this workspace, then complete the task through LoopX's guided "
             "control (follow its todos and state writebacks). "
-            f"Task instruction is in instruction.md: {instruction} {common}"
+            f"Task instruction is in instruction.md: {instruction} {common}{hint}"
         )
     return (
         "Complete the benchmark task described in instruction.md inside this "
@@ -82,6 +113,7 @@ def run_case(
     data_root: Path,
     timeout_sec: int,
     enable_web_search: bool = True,
+    verification_hint: bool = False,
 ) -> dict:
     raw = data_root / "widesearch.jsonl"
     gold_dir = data_root / "gold"
@@ -97,7 +129,13 @@ def run_case(
     model = os.environ.get("ARK_OPENAI_MODEL", "deepseek-v4-flash-ga-260731")
     config = NativeGoalConfig(
         cwd=str(workspace),
-        objective=_objective(case_id, workspace, instruction, treatment=(arm == "treatment")),
+        objective=_objective(
+            case_id,
+            workspace,
+            instruction,
+            treatment=(arm == "treatment"),
+            verification_hint=verification_hint,
+        ),
         task_instruction=instruction,
         model=model,
         effort=os.environ.get("CODEX_GOAL_EFFORT", "xhigh"),
@@ -143,6 +181,15 @@ def main() -> int:
             "(some hosted Responses endpoints reject its external_web_access field)."
         ),
     )
+    p.add_argument(
+        "--verification-hint",
+        action="store_true",
+        help=(
+            "Append the public-safe verification/review discipline to the treatment "
+            "objective so LoopX-guided runs independently verify and review each "
+            "table cell (mirrors the deepswe review/refine treatment pattern)."
+        ),
+    )
     args = p.parse_args()
     outcome = run_case(
         case_id=args.case,
@@ -150,6 +197,7 @@ def main() -> int:
         data_root=args.data_root,
         timeout_sec=args.timeout_sec,
         enable_web_search=not args.disable_web_search,
+        verification_hint=args.verification_hint,
     )
     print(json.dumps(outcome, ensure_ascii=False, sort_keys=True))
     return 0 if outcome["status"] == "completed" else 2

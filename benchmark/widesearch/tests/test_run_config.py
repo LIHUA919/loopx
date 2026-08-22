@@ -28,3 +28,15 @@ def test_app_server_command_can_disable_web_search() -> None:
     command = mod._app_server_command(codex_bin="codex", enable_web_search=False)
     assert "tools.web_search=false" in command
     assert "tools.web_search=true" not in command
+
+
+def test_treatment_objective_can_append_verification_hint() -> None:
+    mod = _load_runner()
+    base = mod._objective("c1", Path("/ws"), "instruction text", treatment=True)
+    hinted = mod._objective(
+        "c1", Path("/ws"), "instruction text", treatment=True, verification_hint=True
+    )
+    assert "VERIFICATION DISCIPLINE" not in base
+    assert "VERIFICATION DISCIPLINE" in hinted
+    assert "independent sources agree" in hinted
+    assert "review pass" in hinted
