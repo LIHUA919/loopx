@@ -702,9 +702,14 @@ def _project_quota_action_portfolio(
     prepared: _QuotaDecisionPreparation,
     route: _QuotaDecisionRoute,
 ) -> dict[str, Any] | None:
+    selection_available = route.normal_delivery_allowed or bool(
+        route.workspace_repair_allowed
+        and prepared.workspace_guard
+        and prepared.normal_delivery_allowed
+    )
     if (
         not route.should_run
-        or not route.normal_delivery_allowed
+        or not selection_available
         or prepared.receipt_bound_todo_id is not None
         or prepared.requested_action_todo_id is not None
         or route.receipt_bound_replan_decision
