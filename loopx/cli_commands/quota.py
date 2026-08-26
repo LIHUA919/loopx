@@ -71,8 +71,11 @@ from ..quota import (
 )
 from ..status import collect_status
 from ..upgrade import resolve_codex_app_automation_rrule
+from .lark_inbox import (
+    build_lark_operator_inbox_urgency_projector,
+    dispatch_goal_lark_turn_start_hooks,
+)
 from .quota_context import QuotaCommandContext, prepare_quota_command_context
-from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .quota_host_poll import attach_host_poll_receipt
 from .quota_monitor_poll import record_quota_monitor_poll_for_cli
 from .quota_registration import (
@@ -412,7 +415,20 @@ def handle_quota_command(
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
     context: QuotaCommandContext | None = None
+    turn_start_hook_dispatch: dict[str, object] | None = None
     try:
+        if args.quota_command == "should-run":
+            turn_start_hook_dispatch = dispatch_goal_lark_turn_start_hooks(
+                registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+            )
+        turn_start_mutated = any(
+            isinstance(result, Mapping)
+            and result.get("local_private_state_mutated") is True
+            for result in ((turn_start_hook_dispatch or {}).get("results") or [])
+        )
         context = prepare_quota_command_context(
             args,
             registry_path=registry_path,
@@ -421,6 +437,7 @@ def handle_quota_command(
             operator_inbox_urgency_projector_factory=(
                 build_lark_operator_inbox_urgency_projector
             ),
+            force_projection_refresh=turn_start_mutated,
         )
         heartbeat_turn_id = context.heartbeat_turn_id
         detail_sections = context.detail_sections
@@ -476,6 +493,13 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
             )
+            if turn_start_hook_dispatch and (
+                turn_start_hook_dispatch.get("registered_count")
+                or turn_start_hook_dispatch.get("failures")
+            ):
+                payload["turn_start_capability_hook_dispatch"] = (
+                    turn_start_hook_dispatch
+                )
             _require_requested_quota_action_selection(
                 payload,
                 requested_todo_id=_requested_quota_action_todo_id(args),

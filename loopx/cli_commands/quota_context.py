@@ -97,6 +97,7 @@ def prepare_quota_command_context(
     operator_inbox_urgency_projector_factory: Callable[
         ..., Callable[..., dict[str, object]]
     ],
+    force_projection_refresh: bool = False,
 ) -> QuotaCommandContext:
     command = args.quota_command
     if bool(getattr(args, "turn_envelope", False)) and command != "should-run":
@@ -200,7 +201,10 @@ def prepare_quota_command_context(
     )
     status_payload = None
     cache_metadata = None
-    if bool(getattr(args, "use_projection_cache", False)):
+    if (
+        bool(getattr(args, "use_projection_cache", False))
+        and not force_projection_refresh
+    ):
         status_payload, cache_metadata = load_status_projection_cache(
             registry_path=registry_path,
             runtime_root=runtime_root,
