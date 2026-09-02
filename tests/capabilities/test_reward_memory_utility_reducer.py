@@ -504,6 +504,30 @@ def test_private_or_unknown_observation_fields_fail_closed() -> None:
     assert projection["rejections"][0]["reason_codes"] == ["observation_malformed"]
 
 
+def test_reason_codes_use_typed_observation_failures_not_field_name_substrings() -> (
+    None
+):
+    unknown_field = _observation()
+    unknown_field["scope_hint"] = "not-a-scope-error"
+
+    unknown_projection = _reduce([unknown_field])
+
+    assert unknown_projection["status"] == "rejected"
+    assert unknown_projection["rejections"][0]["reason_codes"] == [
+        "observation_malformed"
+    ]
+
+    write_boundary = _observation()
+    write_boundary["provider_write_performed"] = True
+
+    boundary_projection = _reduce([write_boundary])
+
+    assert boundary_projection["status"] == "rejected"
+    assert boundary_projection["rejections"][0]["reason_codes"] == [
+        "observation_write_boundary_violation"
+    ]
+
+
 def test_harmful_utility_only_proposes_attenuation_not_deletion_or_authority() -> None:
     harmful = _observation(
         proposal=_proposal(
@@ -674,6 +698,62 @@ def test_history_budget_retains_each_subject_latest_observation() -> None:
     unsupported_label["subjects"][0]["utility_estimate"] = 0.0
     with pytest.raises(ValueError, match="has no supporting observation"):
         validate_reward_memory_utility_projection(unsupported_label)
+
+
+def test_truncated_history_preserves_joint_label_evidence_semantics() -> None:
+    observations = [
+        _observation(
+            proposal=_proposal(
+                label="harmful",
+                basis="owner_correction",
+                confidence=0.8,
+                evidence_refs=["owner:correction"],
+                evaluation_version="evaluation:owner-correction",
+            ),
+            created_at="2026-08-15T00:00:00Z",
+        )
+    ]
+    observations.extend(
+        _observation(
+            proposal=_proposal(
+                label="helpful",
+                basis="evaluator_inference",
+                confidence=0.1,
+                evidence_refs=[f"inference:{index}"],
+                evaluation_version=f"evaluation:weak-{index}",
+            ),
+            created_at=f"2026-08-15T00:{index // 60:02d}:{index % 60:02d}Z",
+        )
+        for index in range(1, 257)
+    )
+
+    projection = _reduce(observations)
+    subject = projection["subjects"][0]
+
+    assert projection["observation_history_truncated"] is True
+    assert subject["effective_utility_label"] == "harmful"
+    assert subject["effective_evidence_basis"] == "owner_correction"
+    assert all(
+        entry["observation_id"] != observations[0]["observation_id"]
+        for entry in projection["observation_history"]
+    )
+
+    tampered = deepcopy(projection)
+    tampered_subject = tampered["subjects"][0]
+    tampered_subject["effective_utility_label"] = "helpful"
+    tampered_subject["utility_estimate"] = tampered_subject["confidence"]
+    tampered_subject["review"] = {
+        "state": "none",
+        "proposed_action": "none",
+        "reason_codes": [],
+        "quarantine_proposed": False,
+        "automatic_deletion": False,
+        "action_authority_granted": False,
+    }
+    tampered["review_proposals"] = []
+
+    with pytest.raises(ValueError, match="joint evidence summary"):
+        validate_reward_memory_utility_projection(tampered)
 
 
 def test_projection_validator_rejects_noncanonical_timestamp_whitespace() -> None:

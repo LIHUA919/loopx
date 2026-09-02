@@ -48,13 +48,17 @@ Reducer 首先使用 Stage 1 validator 校验每条 observation，并要求 scop
    set-level 证据绝不会复制到 item subject；`none` subject 仅用于 lineage，单独保留。
 
 Utility 限制在 `[-1.0, 1.0]`，confidence 和 uncertainty 限制在 `[0.0, 1.0]`。
-支持计数保留四种 label 和五种 evidence tier。Projection 记录最近接受的 observation
-身份、时间以及有界的 public-safe 历史。超过 history 上限时，会先保留每个 subject 的
-最近一条记录，再用最新记录填满剩余空间，保证截断后仍能审计 subject 的 latest 字段。
+支持计数保留四种 label 和五种 evidence tier。每个 subject 还保留稀疏的
+`evidence_label_summary`，记录实际出现的每组 evidence-tier/utility-label 的计数与组合
+confidence。Projection 记录最近接受的 observation 身份、时间以及有界的 public-safe
+历史。超过 history 上限时，会先保留每个 subject 的最近一条记录，再用最新记录填满
+剩余空间，保证截断后仍能审计 subject 的 latest 字段。
 
-即使 history 被截断，readback validator 仍然 fail-closed：它会从聚合计数推导最高
-evidence tier，并要求每个 effective 有方向 label 都有 support（`unknown` 的显式同 tier
-冲突除外）。Projection 时间戳也必须保持 canonical，首尾空白会被拒绝。
+即使 history 被截断，readback validator 仍然 fail-closed：它会从联合
+`evidence_label_summary` 推导最高 evidence tier、effective label、confidence 与 review
+状态，并验证联合计数能够还原 label 和 evidence-tier 两组边际计数。因此，即使决定性
+history 已被截断，也不能用较弱 support 把最高层级的 harmful 或 unknown 改成其他结果。
+Projection 时间戳也必须保持 canonical，首尾空白会被拒绝。
 
 ## Review 与安全边界
 
@@ -88,8 +92,8 @@ transcript、credential、本地路径或 provider 私有 URI。
 顶层 packet 使用 `memory_utility_projection_v0`，包含 accepted、duplicate、conflicting、
 rejected delivery 的有界计数、`subjects`、subject-level `review_proposals`、带
 quarantine metadata 的 conflict rejection 记录以及 `observation_history`。Subject 携带 attribution level、digest 集合、effective label 与
-evidence basis、有界 utility/confidence/uncertainty、支持计数、证据强度计数、最近观察及
-review 状态。
+evidence basis、有界 utility/confidence/uncertainty、支持计数、证据强度计数、稀疏的
+evidence-label 联合摘要、最近观察及 review 状态。
 
 相同的语义观察流、scope、snapshot 和 reducer version 无论输入顺序如何，都会产生相同
 projection。
