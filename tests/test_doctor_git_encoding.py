@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopx import doctor
+from loopx import doctor_git
 
 pytestmark = pytest.mark.filterwarnings(
     "error::pytest.PytestUnhandledThreadExceptionWarning"
@@ -48,12 +48,12 @@ def test_git_metadata_preserves_unicode_refs(git_repo, gbk_host, detached):
     else:
         git("branch", "-m", ref)
 
-    metadata = doctor.git_metadata_for_root(root)
+    metadata = doctor_git.git_metadata_for_root(root)
     assert metadata["git_commit"] == git("rev-parse", "HEAD")
     assert metadata["git_ref"] == ref
     assert metadata["git_dirty"] is False
     (root / "中文.txt").write_text("fixture", encoding="utf-8")
-    assert doctor.git_metadata_for_root(root)["git_dirty"] is True
+    assert doctor_git.git_metadata_for_root(root)["git_dirty"] is True
 
 
 def test_trusted_release_preserves_unicode_remote_and_ref(git_repo, gbk_host):
@@ -62,14 +62,14 @@ def test_trusted_release_preserves_unicode_remote_and_ref(git_repo, gbk_host):
     git("remote", "add", "上游🚀", "https://github.com/example/project.git")
     git("update-ref", "refs/remotes/上游🚀/发布", commit)
 
-    trusted = doctor.trusted_release_ref_for_root(
+    trusted = doctor_git.trusted_release_ref_for_root(
         root, repository="example/project", ref="发布"
     )
     assert trusted is not None
     assert trusted["git_commit"] == commit
     assert trusted["git_ref"] == "上游🚀/发布"
     assert (
-        doctor.trusted_release_ref_for_root(
+        doctor_git.trusted_release_ref_for_root(
             root, repository="someone-else/project", ref="发布"
         )
         is None
@@ -111,7 +111,7 @@ def git_output(monkeypatch, gbk_host):
                 [sys.executable, "-c", script], check=kwargs.pop("check"), **kwargs
             )
 
-        monkeypatch.setattr(doctor, "subprocess", SimpleNamespace(run=run))
+        monkeypatch.setattr(doctor_git, "subprocess", SimpleNamespace(run=run))
         return calls
 
     return install
@@ -119,7 +119,7 @@ def git_output(monkeypatch, gbk_host):
 
 def test_metadata_replaces_malformed_bytes(git_output, tmp_path):
     git_output()
-    metadata = doctor.git_metadata_for_root(tmp_path)
+    metadata = doctor_git.git_metadata_for_root(tmp_path)
     assert metadata["git_commit"] == "a" * 40
     assert metadata["git_ref"] == "before\ufffdafter"
     assert metadata["git_dirty"] is False
@@ -138,7 +138,7 @@ def test_revision_relation_tolerates_malformed_stderr(
     git_output, tmp_path, returncodes, expected
 ):
     calls = git_output(returncode=returncodes)
-    relation = doctor.git_revision_relation(
+    relation = doctor_git.git_revision_relation(
         tmp_path, installed_commit="a" * 40, comparison_commit="b" * 40
     )
     assert relation == expected
@@ -150,7 +150,7 @@ def test_revision_relation_tolerates_malformed_stderr(
 )
 def test_trusted_release_tolerates_malformed_stderr(git_output, tmp_path, fail_at):
     calls = git_output(returncode=128 if fail_at else 0, fail_at=fail_at)
-    trusted = doctor.trusted_release_ref_for_root(
+    trusted = doctor_git.trusted_release_ref_for_root(
         tmp_path, repository="example/project", ref="main"
     )
     if fail_at:
@@ -164,7 +164,7 @@ def test_trusted_release_tolerates_malformed_stderr(git_output, tmp_path, fail_a
 
 def test_metadata_failure_remains_unavailable(git_output, tmp_path):
     git_output(returncode=128)
-    metadata = doctor.git_metadata_for_root(tmp_path)
+    metadata = doctor_git.git_metadata_for_root(tmp_path)
     assert metadata["git_commit"] is None
     assert metadata["git_ref"] is None
     assert metadata["git_dirty"] is None

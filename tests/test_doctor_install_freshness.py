@@ -12,11 +12,10 @@ from loopx.doctor import (
     REQUIRED_INSTALLED_SKILL_PHRASES,
     build_install_freshness,
     current_script_invocation_path,
-    git_revision_relation,
     installed_skill_summary,
     python_distribution_install,
-    trusted_release_ref_for_root,
 )
+from loopx.doctor_git import git_revision_relation, trusted_release_ref_for_root
 
 
 class _FakeDistributionFile:
