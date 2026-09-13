@@ -168,13 +168,10 @@ def test_monitor_successor_selection_preserves_admission_and_retry(
             runtime_root=runtime,
         )
         assert envelope_code == 1
-        assert (
-            envelope["action_selection"]
-            == selected["action_selection"]
-        )
-        assert envelope["interaction_contract"]["cli_channel"][
-            "next_cli_actions"
-        ] == [selected["recommended_action"]]
+        assert envelope["action_selection"] == selected["action_selection"]
+        assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == [
+            selected["recommended_action"]
+        ]
         # Re-entry follows the real gate and binds its semantic replan obligation.
         command = shlex.split(retry["recommended_action"])
         assert "--todo-id" not in command
@@ -188,3 +185,96 @@ def test_monitor_successor_selection_preserves_admission_and_retry(
             == (reentry["autonomous_replan_obligation"]["obligation_id"])
         )
         assert reentry["normal_delivery_allowed"] is False
+
+
+def test_canonical_add_after_pending_guard_reports_final_boundary(tmp_path):
+    from test_quota_settlement_cli import (
+        AGENT_ID as agent_id,
+        GOAL_ID as goal_id,
+        _write_fixture as write_fixture,
+        _configure_selectable_alternative,
+    )
+
+    project, runtime, registry = write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state = project / f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md"
+    items = list_goal_todos(registry_path=registry, goal_id=goal_id, role="agent")[
+        "todos"
+    ]
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=goal_id,
+        todos=items,
+        leases=[],
+        handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(runtime, goal_id, projection, state_path=state)
+    args = (
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        agent_id,
+        "--codex-app",
+        "--turn-instance-id",
+        "add-after-guard",
+    )
+    initial = run_json_cli(*args, registry_path=registry, runtime_root=runtime)
+    assert (
+        initial["interaction_contract"]["agent_channel"]["selection_required"] is True
+    )
+    assert "settlement_identity" not in initial["heartbeat_receipt"]
+    receipt = find_heartbeat_receipt(
+        runtime, goal_id=goal_id, agent_id=agent_id, turn_instance_id="add-after-guard"
+    )
+    added = run_json_cli(
+        "todo",
+        "add",
+        "--goal-id",
+        goal_id,
+        "--role",
+        "agent",
+        "--task-class",
+        "advancement_task",
+        "--action-kind",
+        "implement",
+        "--claimed-by",
+        agent_id,
+        "--text",
+        "Validate the new canonical task",
+        "--task-repository",
+        "git:github.com/example/read-only-settlement-fixture",
+        "--required-write-scope",
+        "loopx/**",
+        registry_path=registry,
+        runtime_root=runtime,
+    )
+    selection = (*args, "--todo-id", added["todo_id"])
+    code, rejected = run_json_cli_result(
+        *selection, registry_path=registry, runtime_root=runtime
+    )
+    assert code == 1
+    assert rejected["error_code"] == "quota_action_selection_deferred"
+    assert rejected["action_selection"]["reason"] == "control_repair"
+    assert rejected["action_selection"]["requested_todo_id"] == added["todo_id"]
+    assert rejected["normal_delivery_allowed"] is False
+    assert "heartbeat_receipt" not in rejected
+    assert (
+        find_heartbeat_receipt(
+            runtime,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            turn_instance_id="add-after-guard",
+        )
+        == receipt
+    )
+    code, repeated = run_json_cli_result(
+        *selection, registry_path=registry, runtime_root=runtime
+    )
+    assert code == 1
+    assert repeated["action_selection"] == rejected["action_selection"]
+    command = shlex.split(repeated["recommended_action"])
+    assert "--todo-id" not in command
+    guard = run_json_cli(*command[1:], registry_path=registry, runtime_root=runtime)
+    assert guard["normal_delivery_allowed"] is False
+    assert guard["workspace_repair_allowed"] or guard["self_repair_allowed"]
