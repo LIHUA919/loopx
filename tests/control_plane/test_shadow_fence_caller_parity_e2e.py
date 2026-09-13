@@ -232,7 +232,9 @@ def observe_row(ws: Workspace, row: dict) -> dict:
 def test_fence_caller_parity(workspaces: Callable[[str], Workspace], row: dict) -> None:
     if row["id"] == "fixture-missing":
         pytest.fail(f"parity fixture is missing: {FIXTURE}")
-    observed = observe_row(workspaces(row["workspace"]), row)
+    ws = workspaces(row["workspace"])
+    canonical_before = native(ws.w, "read", {}) if row["caller"] == "task_lease_renew" else None
+    observed = observe_row(ws, row)
     assert observed["exit"] == row["exit"], observed
     if row.get("match") == "subset":
         assert {key: observed["envelope"].get(key) for key in row["expect"]} == row["expect"], observed
@@ -243,6 +245,27 @@ def test_fence_caller_parity(workspaces: Callable[[str], Workspace], row: dict) 
         # operation ID and lease expiry are not a literal legacy-writer envelope.
         assert observed["envelope"].get("claimed_todos") or observed["envelope"].get("active_leases"), observed
         assert observed["envelope"].get("provider_revision"), observed
+    if row["caller"] == "task_lease_renew":
+        # The public CLI now uses a canonical-only request. Keep the old wire
+        # fence rows intact, and prove the new route changes only its real lease.
+        assert "lease_path" not in observed["envelope"], observed
+        canonical_after = native(ws.w, "read", {})
+        before = canonical_before["head"]
+        after = canonical_after["head"]
+        assert int(after["cursor"]) == int(before["cursor"]) + 1
+        assert after["head"]["todos"] == before["head"]["todos"]
+        old_lease = next(item for item in before["head"]["leases"] if item["todo_id"] == ws.ids["todo_b"])
+        renewed = next(item for item in after["head"]["leases"] if item["todo_id"] == ws.ids["todo_b"])
+        assert renewed["version"] == old_lease["version"] + 1
+        for field in ("owner", "idempotency_key", "lease_epoch", "write_scopes"):
+            assert renewed[field] == old_lease[field]
+        # A later completion must refresh its proof after this successful renew.
+        # Explicitly preserve the stale-proof rejection before updating the
+        # fixture's current version for the existing valid-preview row.
+        stale = ws.call(*row_args(ws, "todo_complete_dry_run_leased"))
+        assert stale["ok"] is False and stale["error_code"] == "version_mismatch", stale
+        assert native(ws.w, "read", {}) == canonical_after
+        ws.lease_version = renewed["version"]
     assert observed["effect"] == row["effect"], observed
     assert observed["outbox_added"] == row.get("outbox_added", []), observed
 
