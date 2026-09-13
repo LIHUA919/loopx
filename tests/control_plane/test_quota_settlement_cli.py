@@ -2477,7 +2477,8 @@ def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
     assert first_rc == 0, first
     assert invalid_rc != 0, invalid
     assert invalid["ok"] is False
-    assert invalid["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert invalid["error_code"] == "quota_action_selection_rejected"
+    assert invalid["action_selection"]["reason"] == "candidate_not_currently_eligible"
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
@@ -2522,8 +2523,18 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
 
     assert first_rc == 0, first
     assert blocked_rc != 0, blocked
-    assert blocked["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert blocked["error_code"] == "quota_action_selection_rejected"
+    assert blocked["action_selection"]["reason"] == "candidate_not_currently_eligible"
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+    ready_rc, ready = _run_cli(
+        registry_path, runtime, *guard_args, "--todo-id",
+        OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID, "--available-capability", "network",
+    )
+    assert ready_rc == 0, ready
+    assert ready["selected_todo"]["todo_id"] == OUTSIDE_BOUNDED_PORTFOLIO_TODO_ID
+    assert ready["heartbeat_receipt"]["status"] == "upgraded"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
 def test_first_call_agent_selection_is_qualified_before_receipt_commit(
@@ -2598,7 +2609,7 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     )
 
     assert selected_rc == 1, selected
-    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert selected["error_code"] == "quota_action_selection_deferred"
     events = _heartbeat_receipt_events(runtime, turn_instance_id)
     assert len(events) == 1
     assert not events[0]["details"].get("todo_id")
@@ -2740,7 +2751,7 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
     )
 
     assert selected_rc == 1, selected
-    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert selected["error_code"] == "quota_action_selection_deferred"
     events = _heartbeat_receipt_events(runtime, turn_instance_id)
     assert len(events) == 1
     assert not events[0]["details"].get("todo_id")

@@ -1250,6 +1250,8 @@ def _build_quota_should_run_payload(
     }
     if payload["safe_bypass_policy"] is None:
         payload.pop("safe_bypass_policy")
+    if (prepared.action_selection_qualification or {}).get("state") in {"rejected", "deferred"}:
+        payload["action_selection"] = prepared.action_selection_qualification
     payload = attach_task_orchestration_payload(
         payload,
         prepared.task_orchestration_contract,

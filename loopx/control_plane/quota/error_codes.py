@@ -12,6 +12,10 @@ class HeartbeatReceiptIdentityConflictError(ValueError):
     """Public-safe diagnostic for a same-turn settlement identity conflict."""
 
 
+class QuotaActionSelectionNotAdmitted(ValueError):
+    """A typed selection preflight result, before any receipt is committed."""
+
+
 class QuotaIdentityPrecondition(StrEnum):
     """Typed identity admission preconditions for scoped quota decisions."""
 

@@ -20,6 +20,7 @@ from ..control_plane.quota.cli_projection import (
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
+    QuotaActionSelectionNotAdmitted,
     QuotaCommandValidationError,
     QuotaIdentityPreconditionError,
     quota_error_code,
@@ -76,6 +77,11 @@ from ..upgrade import resolve_codex_app_automation_rrule
 from .lark_inbox import (
     build_lark_operator_inbox_urgency_projector,
     dispatch_goal_lark_turn_start_hooks,
+)
+from .quota_action_selection import (
+    commit_requested_action_selection,
+    reject_action_selection,
+    require_requested_quota_action_selection,
 )
 from .quota_context import (
     QuotaCommandContext,
@@ -379,79 +385,6 @@ def _heartbeat_quota_action_selection_bindings(
     return existing, todo_id, replan_obligation_id
 
 
-def _require_requested_quota_action_selection(
-    payload: Mapping[str, object],
-    *,
-    requested_todo_id: str | None,
-    receipt_bound_todo_id: str | None,
-    receipt_bound_replan_obligation_id: str | None,
-) -> None:
-    if not requested_todo_id or (
-        receipt_bound_todo_id or receipt_bound_replan_obligation_id
-    ):
-        return
-    selected_todo = payload.get("selected_todo")
-    selected_todo_id = (
-        normalize_todo_id(selected_todo.get("todo_id"))
-        if isinstance(selected_todo, Mapping)
-        else None
-    )
-    selection_binding = (
-        selected_todo.get("selection_binding")
-        if isinstance(selected_todo, Mapping)
-        else None
-    )
-    execution_obligation_value = payload.get("execution_obligation")
-    execution_obligation: Mapping[str, object] = (
-        execution_obligation_value
-        if isinstance(execution_obligation_value, Mapping)
-        else {}
-    )
-    interaction_value = payload.get("interaction_contract")
-    interaction: Mapping[str, object] = (
-        interaction_value if isinstance(interaction_value, Mapping) else {}
-    )
-    agent_channel_value = interaction.get("agent_channel")
-    agent_channel: Mapping[str, object] = (
-        agent_channel_value if isinstance(agent_channel_value, Mapping) else {}
-    )
-    pending_selection_qualified = (
-        selection_binding == "pending_action_selection"
-        and payload.get("normal_delivery_allowed") is True
-    )
-    exact_current_obligation_qualified = (
-        selection_binding != "pending_action_selection"
-        and execution_obligation.get("must_attempt_work") is True
-        and agent_channel.get("must_attempt") is True
-    )
-    if (
-        selected_todo_id != requested_todo_id
-        or payload.get("ok") is not True
-        or payload.get("should_run") is not True
-        or not (pending_selection_qualified or exact_current_obligation_qualified)
-    ):
-        raise HeartbeatReceiptIdentityConflictError(
-            "explicit action selection must name one currently projected "
-            "agent-scoped, capability-ready Todo"
-        )
-
-
-def _commit_requested_action_selection(
-    payload: Mapping[str, object],
-    *,
-    requested_todo_id: str | None,
-) -> None:
-    """Project the exact requested selection only after receipt reconciliation."""
-
-    selected_todo = payload.get("selected_todo")
-    if (
-        requested_todo_id
-        and isinstance(selected_todo, dict)
-        and normalize_todo_id(selected_todo.get("todo_id")) == requested_todo_id
-    ):
-        selected_todo["selection_binding"] = "heartbeat_receipt"
-
-
 def _dispatch_quota_turn_start_hooks(
     args: argparse.Namespace,
     *,
@@ -509,7 +442,6 @@ def _attach_turn_start_hook_dispatch(
         payload["turn_start_capability_hook_dispatch"] = dict(dispatch)
 
 
-
 def _render_turn_envelope_payload(
     payload: dict[str, object],
     scheduler_context: object,
@@ -521,6 +453,13 @@ def _render_turn_envelope_payload(
     renderer rejection keeps the typed diagnostic itself (with the skip reason)
     instead of masking it with a crash (issue #3687).
     """
+    if payload.get("error_code") in {
+        "quota_action_selection_rejected", "quota_action_selection_deferred",
+    }:
+        # This is a failed preflight, not an executable Turn. Keep its typed
+        # reason and exact re-entry command rather than truncating the command
+        # or replacing it with the unbound replan's settlement actions.
+        return payload
     try:
         return build_turn_envelope(
             payload,
@@ -530,6 +469,7 @@ def _render_turn_envelope_payload(
         degraded = dict(payload)
         degraded["turn_envelope_skipped"] = str(envelope_error)[:200]
         return degraded
+
 
 def handle_quota_command(
     args: argparse.Namespace,
@@ -547,6 +487,7 @@ def handle_quota_command(
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
     context: QuotaCommandContext | None = None
+    selection_not_admitted = False
     try:
         turn_start_hook_dispatch, turn_start_mutated = _dispatch_quota_turn_start_hooks(
             args,
@@ -636,7 +577,7 @@ def handle_quota_command(
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)
-            _require_requested_quota_action_selection(
+            require_requested_quota_action_selection(
                 payload,
                 requested_todo_id=_requested_quota_action_todo_id(args),
                 receipt_bound_todo_id=receipt_bound_todo_id,
@@ -797,6 +738,13 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except QuotaActionSelectionNotAdmitted:
+        # The preflight did not accept any Todo or replan settlement identity.
+        selection_not_admitted = True
+        assert context is not None
+        payload = reject_action_selection(
+            payload, args=args, registry_path=registry_path, context=context,
+        )
     except QuotaCommandValidationError as exc:
         # Only typed CLI validation diagnostics are public-safe by contract.
         payload = _quota_validation_failure_payload(
@@ -812,7 +760,7 @@ def handle_quota_command(
             runtime_root_arg=runtime_root_arg,
             error=exc,
         )
-    if _should_log_quota(args.quota_command, payload):
+    if not selection_not_admitted and _should_log_quota(args.quota_command, payload):
         spend_turn_instance_id = _effective_spend_turn_instance_id(
             payload,
             heartbeat_turn_id=heartbeat_turn_id,
@@ -846,7 +794,7 @@ def handle_quota_command(
                     status=heartbeat_receipt_existing_status,
                     appended=heartbeat_receipt_existing_appended,
                 )
-                _commit_requested_action_selection(
+                commit_requested_action_selection(
                     payload,
                     requested_todo_id=_requested_quota_action_todo_id(args),
                 )
@@ -913,7 +861,7 @@ def handle_quota_command(
                         if rollout_event.get("appended")
                         else "replayed",
                     )
-                    _commit_requested_action_selection(
+                    commit_requested_action_selection(
                         payload,
                         requested_todo_id=_requested_quota_action_todo_id(args),
                     )
