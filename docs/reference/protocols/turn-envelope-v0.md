@@ -71,6 +71,33 @@ only a qualified request upgrades the identity-less receipt. A newly due hard
 lane leaves the receipt unbound, and only the resulting receipt-bound envelope
 is a delivery contract.
 
+An explicit selection that is not admitted returns the shared TypeScript
+`action_selection_qualification_v0` result as `action_selection` in the quota
+packet. `--turn-envelope` also retains this typed failed-preflight packet,
+including its exact re-entry command, instead of rendering an executable Turn.
+`quota_action_selection_rejected`
+means the requested candidate is not currently eligible;
+`quota_action_selection_deferred` preserves the current preemption reason,
+such as `autonomous_replan`. A displayed runnable Todo alone does not override
+`normal_delivery_allowed=false`. These are preflight outcomes, not heartbeat
+receipt identity conflicts: no receipt is created or upgraded, and no quota is
+spent. The returned `recommended_action` and `next_cli_actions[0]` re-enter the
+current guard with the same registry, runtime, Goal, Agent, Turn and scheduler
+context, without the refused `--todo-id`. Follow that guard's actual obligation
+before retrying selection. Repeated unsuccessful preflight leaves existing
+receipts unchanged; a genuinely conflicting committed identity still fails
+with `heartbeat_receipt_identity_conflict`.
+
+显式选择未获准时，quota 的 `action_selection` 保留 TypeScript 类型化结果；
+`--turn-envelope` 同样返回这个失败预检载荷，保留完整重入命令，不渲染可执行 Turn。
+其中 `quota_action_selection_rejected` 表示当前候选不满足资格；`quota_action_selection_deferred` 保留 `autonomous_replan` 等
+真实抢占原因。列表中显示可执行 Todo，并不能覆盖 `normal_delivery_allowed=false`。
+此时不创建或升级回执、不扣额度，也不伪报回执身份冲突。返回命令保留 registry、
+runtime、Goal、Agent、Turn 和调度上下文，去掉被拒的 `--todo-id`，先重新进入 guard
+并处理其真实义务，再重试选择。重复失败不改变已有回执；已提交身份的真实冲突仍
+返回 `heartbeat_receipt_identity_conflict`。能力验证通过后的重试仍需重新声明实际
+可用的能力，不因错误诊断或列表显示获得额外权限。
+
 Portfolio v2 preserves v1's selection policy, candidate ordering, and
 settlement rules, and adds an optional `continuation_hint` to each suggested
 action. The default quota producer and Turn controller now require v2. The
