@@ -190,3 +190,7 @@ payload, 10k/100k commits, and 100 samples per read workload. It emits measured
 latency percentiles and database bytes, then deletes only its temporary
 database. These accelerated measurements do not satisfy the separate ten-day
 soak, retention, disk-exhaustion, restore or promotion gates.
+
+For an already promoted Goal, [canonical lease renewal](canonical-lease-renew.md)
+uses the selected provider's CAS and original receipt. It is a command-coverage
+slice, not D2 qualification or a provider-default change.
