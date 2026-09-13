@@ -120,7 +120,7 @@ jobs:
       - name: Set up the qualified SQLite runtime
         uses: actions/setup-node@v6
         with:
-          node-version: "22.18.0"
+          node-version: "22.22.3"
 
       - name: Qualify the TypeScript Effect core
         run: |
@@ -165,7 +165,7 @@ jobs:
       - name: Set up the qualified Node.js runtime
         uses: actions/setup-node@v6
         with:
-          node-version: "22.18.0"
+          node-version: "22.22.3"
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -225,9 +225,17 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run typecheck:control-plane
-          # The public minimum is qualified for every TypeScript control-plane
-          # provider, including SQLite statement finalization.
-          node --no-warnings --experimental-sqlite --experimental-strip-types --test tests/control_plane_ts/*.test.ts
+          # Default File/control-plane compatibility stays on the public minimum.
+          # SQLite requires a WAL-fixed embedded driver; its admission rejection
+          # runs here, while full SQLite suites run on the qualified runtime.
+          tests=()
+          for test in tests/control_plane_ts/*.test.ts; do
+            case "$test" in
+              */sqlite_authority_store.test.ts|*/local_authority_provider.test.ts|*/authority_provider_parity.test.ts|*/sqlite_capacity.test.ts) continue ;;
+            esac
+            tests+=("$test")
+          done
+          node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"
 
   node-forward-compatibility:
     needs: changes
@@ -486,7 +494,7 @@ jobs:
       - name: Set up the qualified SQLite runtime
         uses: actions/setup-node@v6
         with:
-          node-version: "22.18.0"
+          node-version: "22.22.3"
 
       - name: Run SQLite CLI integration
         run: python -m pytest -q tests/control_plane/test_sqlite_authority_cli.py

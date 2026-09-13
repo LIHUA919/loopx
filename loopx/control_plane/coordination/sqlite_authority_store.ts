@@ -1,7 +1,7 @@
 import {AuthorityJournalScan} from "./authority_journal_scan.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
-import { createRequire } from "node:module";
+import {sqliteAuthorityRuntime} from "./sqlite_runtime.ts";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -17,28 +17,6 @@ const IDENTITY = /^sqlite:[0-9a-f]{32}$/;
 const REVISION = /^sqlite:([0-9a-f]{32}):([1-9]\d*)$/;
 const MAX_SEQUENCE = 9223372036854775807n;
 const ROW_COLUMNS = "CAST(cursor AS TEXT) AS sequence, operation_id, commit_digest, projection, events, receipts";
-const require = createRequire(import.meta.url);
-let qualifiedSqlite: typeof import("node:sqlite") | undefined;
-
-function sqliteDriver(): typeof import("node:sqlite") {
-  if (qualifiedSqlite) return qualifiedSqlite;
-  let sqlite: typeof import("node:sqlite");
-  try { sqlite = require("node:sqlite") as typeof import("node:sqlite"); }
-  catch { return protocol("SQLite authority requires a qualified node:sqlite runtime (Node 22.18.0 or newer)"); }
-  // Early experimental drivers defer statement finalization until GC, leaving
-  // closed file handles locked on Windows. Probe in memory before touching any
-  // authority path; never force GC or hide the leak with cleanup retries.
-  const probe = new sqlite.DatabaseSync(":memory:");
-  const statement = probe.prepare("SELECT 1");
-  probe.close();
-  let finalized = false;
-  try { statement.get(); }
-  catch (error) { finalized = (error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"; }
-  if (!finalized) protocol("SQLite authority requires synchronous statement finalization on close; use Node 22.18.0 or newer");
-  qualifiedSqlite = sqlite;
-  return sqlite;
-}
-
 // The retained transactions are also the durable projection outbox consumed by
 // scanCommitted. Keeping one row avoids a second copy/ACK authority. Retention
 // and compaction are deliberately not part of this provider-conformance slice.
@@ -89,7 +67,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
   }
 
   private open(write: boolean): DatabaseSync | null {
-    const sqlite = sqliteDriver();
+    const {driver: sqlite} = sqliteAuthorityRuntime();
     if (!write && !existsSync(this.path)) return null;
     if (write && this.existingOnly && !existsSync(this.path)) protocol("Selected SQLite authority database is missing");
     if (write) mkdirSync(dirname(this.path), {recursive: true, mode: 0o700});
