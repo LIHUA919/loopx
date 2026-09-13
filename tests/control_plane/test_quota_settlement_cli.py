@@ -299,20 +299,45 @@ def _configure_runtime_capability_reentry_fixture(project: Path) -> None:
     )
 
 
-def _append_newly_due_monitor(project: Path) -> None:
+def _append_newly_due_monitor(
+    project: Path,
+    *,
+    priority: str = "P0-monitor",
+) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
     state_path.write_text(
         state_text.replace(
             "## Agent Todo\n\n",
             "## Agent Todo\n\n"
-            "- [ ] [P0-monitor] Observe the newly due public target.\n"
+            f"- [ ] [{priority}] Observe the newly due public target.\n"
             f"  <!-- loopx:todo todo_id={DUE_MONITOR_TODO_ID} status=open "
             "task_class=continuous_monitor action_kind=observe "
             f"claimed_by={AGENT_ID} target_key=due-monitor-fixture "
             "required_capabilities=network%2Cexternal_evidence_poll "
             "cadence=1m next_due_at=2000-01-01T00%3A00%3A00Z -->\n",
         ),
+        encoding="utf-8",
+    )
+
+
+def _append_due_monitors(
+    project: Path,
+    monitors: list[tuple[str, str]],
+) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    rows = "".join(
+        "- [ ] [P2-monitor] Observe an independent due target.\n"
+        f"  <!-- loopx:todo todo_id={todo_id} status=open "
+        "task_class=continuous_monitor action_kind=observe "
+        f"claimed_by={AGENT_ID} target_key={target_key} "
+        "required_capabilities=network%2Cexternal_evidence_poll "
+        "cadence=1m next_due_at=2000-01-01T00%3A00%3A00Z -->\n"
+        for todo_id, target_key in monitors
+    )
+    state_path.write_text(
+        state_text.replace("## Agent Todo\n\n", f"## Agent Todo\n\n{rows}"),
         encoding="utf-8",
     )
 
@@ -2584,6 +2609,70 @@ def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
+def test_same_turn_can_select_eligible_todo_created_after_unbound_receipt(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-agent-selection-after-todo-create"
+    late_todo_id = "todo_fixture_late_alternative"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_path.write_text(
+        state_text.replace(
+            "## Agent Todo\n\n",
+            "## Agent Todo\n\n"
+            "- [ ] [P1] Advance the newly created same-Turn alternative.\n"
+            f"  <!-- loopx:todo todo_id={late_todo_id} status=open "
+            "task_class=advancement_task action_kind=research "
+            f"claimed_by={AGENT_ID} -->\n",
+        ),
+        encoding="utf-8",
+    )
+    reentry_rc, reentry = _run_cli(registry_path, runtime, *guard_args)
+    assert reentry_rc == 0, reentry
+    assert late_todo_id in {
+        item["todo_id"]
+        for item in reentry["action_portfolio"]["suggested_actions"]
+    }
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        late_todo_id,
+    )
+    assert selected_rc == 0, selected
+    assert selected["action_selection_qualification"]["state"] == "qualified"
+    assert selected["selected_todo"]["todo_id"] == late_todo_id
+    assert selected["selected_todo"]["selection_binding"] == (
+        "heartbeat_receipt"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "upgraded"
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        late_todo_id
+    )
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+
+
 def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -2613,7 +2702,15 @@ def test_agent_selection_rejects_unprojected_todo(tmp_path: Path) -> None:
     assert first_rc == 0, first
     assert invalid_rc != 0, invalid
     assert invalid["ok"] is False
-    assert invalid["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert invalid["error_code"] == "quota_action_selection_rejected"
+    assert invalid["action_selection_qualification"] == {
+        "schema_version": "action_selection_qualification_v0",
+        "state": "rejected",
+        "requested_todo_id": "todo_not_projected",
+        "reason": "candidate_not_currently_eligible",
+    }
+    assert invalid["heartbeat_receipt"]["status"] == "replayed"
+    assert invalid["rollout_event"]["appended"] is False
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
@@ -2658,8 +2755,48 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
 
     assert first_rc == 0, first
     assert blocked_rc != 0, blocked
-    assert blocked["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert blocked["error_code"] == "quota_action_selection_rejected"
+    assert blocked["action_selection_qualification"]["reason"] == (
+        "candidate_not_currently_eligible"
+    )
+    assert blocked["heartbeat_receipt"]["status"] == "replayed"
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    turn_instance_id = "turn-agent-selection-first-call-rejected"
+
+    rejected_rc, rejected = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+        "--todo-id",
+        "todo_not_projected",
+    )
+
+    assert rejected_rc == 1, rejected
+    assert rejected["error_code"] == "quota_action_selection_rejected"
+    assert rejected["heartbeat_receipt"] == {
+        "schema_version": "heartbeat_quota_receipt_v0",
+        "turn_instance_id": turn_instance_id,
+        "status": "not_committed",
+        "stall_observation": "not_evaluated",
+        "reason_code": "quota_action_selection_rejected",
+    }
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 0
 
 
 def test_first_call_agent_selection_is_qualified_before_receipt_commit(
@@ -2695,6 +2832,109 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
         ALTERNATIVE_TODO_ID
     )
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"]["registered_agents"].append(
+        "codex-settlement-peer"
+    )
+    registry_path.write_text(
+        json.dumps(registry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _initialize_git_checkout(project)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=LoopX Test",
+            "-c",
+            "user.email=loopx-test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+        check=True,
+    )
+    turn_instance_id = "turn-pending-selection-workspace-repair"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+
+    first_rc, first = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        cwd=project,
+    )
+    repair_rc, repair = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        cwd=project,
+    )
+
+    assert first_rc == 0, first
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    assert repair_rc == 0, repair
+    assert repair.get("error_code") != "heartbeat_receipt_identity_conflict"
+    assert repair["effective_action"] == "agent_workspace_repair"
+    assert repair["workspace_repair_allowed"] is True
+    assert repair["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert repair["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert repair["execution_obligation"]["kind"] == "agent_workspace_repair"
+    assert repair["interaction_contract"]["agent_channel"]["primary_action"] == (
+        "create or switch to an independent worktree/branch, then rerun quota "
+        "guard before file edits"
+    )
+    assert repair["heartbeat_receipt"]["status"] == "upgraded"
+    assert repair["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        ALTERNATIVE_TODO_ID
+    )
+
+    linked_worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(linked_worktree)],
+        cwd=project,
+        check=True,
+    )
+    resumed_rc, resumed = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        cwd=linked_worktree,
+    )
+
+    assert resumed_rc == 0, resumed
+    assert resumed["effective_action"] == "normal_run"
+    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["workspace_repair_allowed"] is False
+    assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert resumed["heartbeat_receipt"]["status"] == "replayed"
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
 def test_pending_action_selection_does_not_preempt_newly_due_monitor(
@@ -2734,11 +2974,121 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
     )
 
     assert selected_rc == 1, selected
-    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert selected["error_code"] == "quota_action_selection_deferred"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "blocking_work_lane"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "replayed"
+    assert selected["rollout_event"]["appended"] is False
     events = _heartbeat_receipt_events(runtime, turn_instance_id)
     assert len(events) == 1
     assert not events[0]["details"].get("todo_id")
     assert not events[0]["details"].get("settlement_effect_id")
+
+
+def test_pending_action_selection_reports_autonomous_replan_preemption(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    turn_instance_id = "turn-pending-selection-replan-preemption"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["decision"] == "run"
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    _append_surface_only_runs(
+        runtime,
+        count=AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
+    )
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "quota_action_selection_deferred"
+    assert selected["action_selection_qualification"] == {
+        "schema_version": "action_selection_qualification_v0",
+        "state": "deferred",
+        "requested_todo_id": ALTERNATIVE_TODO_ID,
+        "reason": "autonomous_replan",
+        "delivery_preemptions": ["autonomous_replan", "delivery_not_allowed"],
+    }
+    assert selected["heartbeat_receipt"]["status"] == "replayed"
+    assert selected["rollout_event"]["appended"] is False
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_due_monitor_auxiliary_context_has_typed_selection_rejection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _append_newly_due_monitor(project, priority="P2-monitor")
+    turn_instance_id = "turn-auxiliary-due-monitor-selection"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["work_lane_contract"]["lane"] == "advancement_task"
+    assert first["work_lane_contract"]["monitor_policy"] == (
+        "material_transition_only"
+    )
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+
+    selected_rc, selected = _run_cli(
+        registry_path,
+        runtime,
+        *guard_args,
+        "--todo-id",
+        DUE_MONITOR_TODO_ID,
+    )
+
+    assert selected_rc == 1, selected
+    assert selected["error_code"] == "quota_action_selection_rejected"
+    assert selected["action_selection_qualification"]["state"] == "rejected"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "auxiliary_monitor_not_selectable_in_advancement_lane"
+    )
+    assert selected["recommended_action"].startswith(
+        "the due monitor is visible as auxiliary context"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "replayed"
+    assert selected["rollout_event"]["appended"] is False
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
 def test_pending_action_selection_can_bind_exact_newly_due_monitor(
@@ -2843,6 +3193,135 @@ def test_pending_action_selection_can_bind_exact_newly_due_monitor(
     assert _spend_run_count(runtime) == 0
 
 
+def test_receipt_bound_advancement_turn_records_multiple_due_monitors(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    monitors = [
+        ("todo_fixture_monitor_alpha", "monitor-alpha"),
+        ("todo_fixture_monitor_beta", "monitor-beta"),
+        ("todo_fixture_monitor_gamma", "monitor-gamma"),
+    ]
+    _append_due_monitors(project, monitors)
+    turn_instance_id = "turn-multiple-auxiliary-monitors"
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--scan-path",
+        str(project),
+        "--available-capability",
+        "network",
+        "--available-capability",
+        "external_evidence_poll",
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        TODO_ID
+    )
+    projected_due = [
+        *(first["work_lane_contract"].get("monitor_due_items") or []),
+        *(first["agent_todo_summary"].get("monitor_due_items") or []),
+    ]
+    projected_due_ids = {
+        item["todo_id"] for item in projected_due if item.get("todo_id")
+    }
+    assert projected_due_ids < {todo_id for todo_id, _ in monitors}
+
+    poll_args: list[tuple[str, ...]] = []
+    for index, (todo_id, target_key) in enumerate(monitors):
+        args = (
+            "quota",
+            "monitor-poll",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--turn-instance-id",
+            turn_instance_id,
+            "--todo-id",
+            todo_id,
+            *(() if index == 2 else ("--target-key", target_key)),
+            "--result-hash",
+            f"unchanged-{target_key}",
+            "--available-capability",
+            "network",
+            "--available-capability",
+            "external_evidence_poll",
+            "--execute",
+            "--scan-path",
+            str(project),
+        )
+        poll_args.append(args)
+        poll_rc, poll = _run_cli(registry_path, runtime, *args)
+        assert poll_rc == 0, poll
+        assert poll["settlement_todo_id"] == TODO_ID
+        assert poll["todo_id"] == todo_id
+        assert poll["target_key"] == target_key
+        assert poll["material_change"] is False
+        assert poll["replayed"] is False
+
+    for args in poll_args:
+        replay_rc, replay = _run_cli(registry_path, runtime, *args)
+        assert replay_rc == 0, replay
+        assert replay["settlement_todo_id"] == TODO_ID
+        assert replay["replayed"] is True
+        assert replay["appended"] is False
+
+    changed_args = list(poll_args[1])
+    changed_args[changed_args.index("unchanged-monitor-beta")] = (
+        "changed-monitor-beta"
+    )
+    conflict_rc, conflict = _run_cli(
+        registry_path,
+        runtime,
+        *changed_args,
+    )
+    assert conflict_rc == 1, conflict
+    assert conflict["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert conflict["conflict_fields"] == ["result_hash"]
+
+    index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    observation_rows = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("classification") == "quota_monitor_poll"
+    ]
+    effect_ids = {
+        row["quota_monitor_poll_commit"]["effect_id"]
+        for row in observation_rows
+    }
+    assert len(observation_rows) == 3
+    assert effect_ids == {
+        f"quota-monitor-poll:{GOAL_ID}:{AGENT_ID}:{turn_instance_id}:todo:{todo_id}"
+        for todo_id, _ in monitors
+    }
+    assert {
+        row["todo_id"] for row in observation_rows
+    } == {todo_id for todo_id, _ in monitors}
+    assert all(
+        row["settlement_todo_id"] == TODO_ID for row in observation_rows
+    )
+    assert _spend_run_count(runtime) == 0
+
+    settled_rc, settled = _run_cli(registry_path, runtime, *guard_args)
+    assert settled_rc == 0, settled
+    assert settled["selected_todo"]["todo_id"] == TODO_ID
+    assert settled["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
+        TODO_ID
+    )
+
+
 def test_pending_action_selection_does_not_commit_after_new_user_gate(
     tmp_path: Path,
 ) -> None:
@@ -2876,7 +3355,12 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
     )
 
     assert selected_rc == 1, selected
-    assert selected["error_code"] == "heartbeat_receipt_identity_conflict"
+    assert selected["error_code"] == "quota_action_selection_deferred"
+    assert selected["action_selection_qualification"]["reason"] == (
+        "delivery_not_allowed"
+    )
+    assert selected["heartbeat_receipt"]["status"] == "replayed"
+    assert selected["rollout_event"]["appended"] is False
     events = _heartbeat_receipt_events(runtime, turn_instance_id)
     assert len(events) == 1
     assert not events[0]["details"].get("todo_id")

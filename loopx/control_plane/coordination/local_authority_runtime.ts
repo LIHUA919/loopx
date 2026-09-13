@@ -98,7 +98,7 @@ export {
 } from "./coordination_state_contract.generated.ts";
 export { LEGACY_COORDINATION_WRITER_FENCE_SCHEMA } from "./legacy_writer_fence.ts";
 
-function sourceAuthorityFor(store: AuthorityStore): "sqlite_v0" | "file_v0" {
+export function sourceAuthorityFor(store: AuthorityStore): "sqlite_v0" | "file_v0" {
   return store instanceof SqliteAuthorityStore ? "sqlite_v0" : "file_v0";
 }
 
@@ -139,7 +139,7 @@ interface LocalAuthorityRuntimeDependencies {
   createCanonicalStore?: (directory: string, goalId: string) => AuthorityStore;
 }
 
-function runtimeRoot(value: unknown): string {
+export function runtimeRoot(value: unknown): string {
   if (typeof value !== "string" || value.trim() !== value || !isAbsolute(value)) {
     throw new Error("runtime_root must be an absolute path");
   }

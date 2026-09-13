@@ -4,8 +4,10 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject} from "./authority
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 import {indexCoordinationProjection, prepareCoordinationProjectionCommit, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {decideTaskLeaseLifecycle} from "../work_items/task_lease_lifecycle_decision.ts";
+import {requireStringLiteral} from "../runtime_decode.ts";
+import {HANDOFF_MODES} from "./handoff_mode_policy.ts";
 import {leaseEpoch, leaseIsActive, leaseVersion, normalizeAgent, normalizeGoalId,
-  normalizeHandoffMode, normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
+  normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
   normalizeTtl, TaskLeaseAcquireError, utcIsoformat, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
 import {taskLeaseOperationIdentity, taskLeaseOperationRequestDigest} from "../work_items/task_lease_operation_identity.ts";
 
@@ -87,7 +89,7 @@ export async function executeCanonicalTaskLeaseRenew(store: AuthorityStore, raw:
     const lease = rawLease ? leaseRecord(rawLease, input) : null;
     const excluded = todo?.excluded_agents ?? [];
     if (!Array.isArray(excluded) || excluded.some(value => typeof value !== "string")) return failed("invalid_coordination_projection", "Todo exclusions must be strings");
-    const mode = normalizeHandoffMode(head.head.handoff_mode);
+    const mode = requireStringLiteral(head.head.handoff_mode ?? "legacy", HANDOFF_MODES, "canonical handoff_mode");
     const decision = decideTaskLeaseLifecycle({handoff_mode: mode, registered_agents: input.registered_agents,
       todo: todo ? {todo_id: input.todo_id, status: String(todo.status), claimed_by: normalizeAgent(todo.claimed_by), excluded_agents: excluded as string[]} : null,
       lease: lease ? {present: true, active: leaseIsActive(lease, input.now), status: String(lease.status),

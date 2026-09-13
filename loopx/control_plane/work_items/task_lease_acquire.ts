@@ -421,7 +421,7 @@ export function decodeTaskLeaseAuthority(value: unknown): AuthorityFacts {
   };
 }
 
-export function normalizeHandoffMode(value: unknown): string {
+function normalizeHandoffMode(value: unknown): string {
   const mode = compact(value) || "legacy";
   if (!new Set(["legacy", "soft_claim", "hard_lease"]).has(mode)) {
     throw new TaskLeaseAcquireError(

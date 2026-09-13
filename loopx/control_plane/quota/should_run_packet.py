@@ -114,7 +114,7 @@ from ..todos.write_hint import build_todo_write_hint
 from ..turn_driver.delivery_continuity import evaluate_delivery_route
 from ..work_items.action_portfolio import (
     build_quota_planning_packet,
-    qualify_action_selection,
+    qualify_action_selection_from_inventory,
 )
 from ..work_items.execution_obligation import build_execution_obligation
 from ..work_items.goal_route_hint import build_goal_route_hint
@@ -553,9 +553,10 @@ def _resolve_agent_lane_delivery_route(
         return prepared.guarded_agent_lane_next_action
 
     if prepared.requested_action_todo_id is not None:
-        qualification = qualify_action_selection(
+        qualification = qualify_action_selection_from_inventory(
             requested_todo_id=prepared.requested_action_todo_id,
             candidate=prepared.requested_action_candidate,
+            source_items=prepared.agent_todo_planning_source_items,
             should_run=should_run,
             normal_delivery_allowed=normal_delivery_allowed,
             delivery_preemptions=delivery_preemptions,
@@ -1281,6 +1282,7 @@ def _build_quota_should_run_payload(
     _attach_truthy_fields(
         payload,
         agent_lane_next_action=public_agent_lane_next_action,
+        action_selection_qualification=prepared.action_selection_qualification,
     )
     selected_todo_projection = (
         None
