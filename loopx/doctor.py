@@ -283,6 +283,8 @@ def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except OSError:
             return None
@@ -343,6 +345,8 @@ def git_revision_relation(
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except OSError:
             return None
@@ -395,6 +399,8 @@ def trusted_release_ref_for_root(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except OSError:
         return None
@@ -411,6 +417,8 @@ def trusted_release_ref_for_root(
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except OSError:
             continue
@@ -425,6 +433,8 @@ def trusted_release_ref_for_root(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         commit = resolved.stdout.strip() if resolved.returncode == 0 else ""
         if commit:
