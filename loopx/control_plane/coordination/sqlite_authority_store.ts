@@ -130,10 +130,12 @@ export class SqliteAuthorityStore implements AuthorityStore {
     // Positive unique integer cursors are exactly 1..head iff min=1 and
     // count=max=head. SQLite counts the compact covering operation-id index;
     // no retained projection/event/receipt payload is scanned here.
+    // Cast the scalar result, not the aggregate expression: otherwise SQLite
+    // cannot use its fast Count opcode and aggregates every retained row.
     const bounds = db.prepare(`SELECT
       (SELECT CAST(MIN(cursor) AS TEXT) FROM commits) AS first,
       (SELECT CAST(MAX(cursor) AS TEXT) FROM commits) AS last,
-      (SELECT CAST(COUNT(*) AS TEXT) FROM commits) AS count,
+      CAST((SELECT COUNT(*) FROM commits) AS TEXT) AS count,
       (SELECT CAST(cursor AS TEXT) FROM head WHERE singleton=1) AS head`).get()!;
     if (bounds.count === "0" && bounds.head === null) return null;
     if (bounds.first !== "1" || bounds.last !== bounds.count || bounds.head !== bounds.last) {

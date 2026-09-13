@@ -16,6 +16,51 @@ async function fixture(t: test.TestContext) {
 }
 registerAuthorityStoreConformance("SQLite", fixture);
 
+test("SQLite head continuity uses exact fast counting instead of row aggregation", async t => {
+  const {store} = await fixture(t);
+  assert.equal((await store.storeIdentity()).status, "available");
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  const prepare = DatabaseSync.prototype.prepare;
+  let boundsSql = "";
+  DatabaseSync.prototype.prepare = function(this: import("node:sqlite").DatabaseSync, sql: string) {
+    if (sql.includes("COUNT(*)")) boundsSql = sql;
+    return prepare.call(this, sql);
+  };
+  try { assert.equal((await store.loadAuthority()).status, "missing"); }
+  finally { DatabaseSync.prototype.prepare = prepare; }
+  assert.notEqual(boundsSql, "");
+  const db = new DatabaseSync(store.path);
+  try {
+    // Inspect the query captured from the production entrypoint. A covering
+    // index alone is insufficient: CAST around the aggregate disables SQLite's
+    // simple-count optimization and visits every retained operation row.
+    const instructions = db.prepare(`EXPLAIN ${boundsSql}`).all();
+    assert(instructions.some((row: {opcode: string}) => row.opcode === "Count"), "head continuity needs SQLite's fast Count path");
+    assert(!instructions.some((row: {opcode: string; p4: unknown}) =>
+      row.opcode === "AggStep" && String(row.p4).startsWith("count(")), "COUNT must not use per-row aggregation");
+    assert.deepEqual({...db.prepare(boundsSql).get()}, {first: null, last: null, count: "0", head: null});
+  } finally { db.close(); }
+  let revision: string | null = null;
+  for (let i = 1; i <= 3; i++) {
+    const result = await store.commitAuthority(authorityStoreCommitFixture(revision, `count-${i}`, i, i));
+    assert.equal(result.status, "applied"); if (result.status !== "applied") return;
+    revision = result.provider_revision;
+  }
+  const reader = new DatabaseSync(store.path);
+  try {
+    assert.deepEqual({...reader.prepare(boundsSql).get()}, {first: "1", last: "3", count: "3", head: "3"});
+    reader.exec("DELETE FROM commits WHERE cursor=2");
+    assert.deepEqual({...reader.prepare(boundsSql).get()}, {first: "1", last: "3", count: "2", head: "3"});
+    reader.exec("BEGIN; PRAGMA defer_foreign_keys=ON; UPDATE commits SET cursor=9223372036854775807 WHERE cursor=3; UPDATE head SET cursor=9223372036854775807; COMMIT");
+    assert.deepEqual({...reader.prepare(boundsSql).get()}, {
+      first: "1", last: "9223372036854775807", count: "2", head: "9223372036854775807",
+    });
+  } finally { reader.close(); }
+  const rejected = await store.loadAuthority();
+  assert.equal(rejected.status, "failed");
+  if (rejected.status === "failed") assert.equal(rejected.reason_code, "provider_protocol_violation");
+});
+
 for (const fault of ["crash-before", "crash-after", "capacity-full"]) {
   test(`SQLite real-process ${fault} preserves the exact committed state and proof`, {timeout: 30000}, async t => {
     const {store} = await fixture(t);
