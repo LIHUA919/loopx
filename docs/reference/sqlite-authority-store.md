@@ -72,11 +72,25 @@ outside this slice's qualification boundary.
 ## Explicit selection
 
 Use an isolated qualification runtime and an empty, unpromoted goal. Set
-`RUNTIME_ROOT` to that runtime's absolute directory. SQLite qualification uses the public minimum Node 22.18 runtime. The provider checks that
-`DatabaseSync.close()` finalizes prepared statements synchronously before
-opening an authority file; older experimental drivers are rejected. In
-older Node 22 releases leave closed database handles alive until GC on Windows
-and are not supported for this provider. The module loads SQLite only after opt-in.
+`RUNTIME_ROOT` to that runtime's absolute directory. The SQLite qualification
+reference is **Node 22.22.3 with SQLite 3.51.3**. The provider checks the actual
+embedded SQLite version and synchronous prepared-statement finalization before
+creating or opening an authority database. Record both `sqlite_version()` and
+`sqlite_source_id()`; the Node version alone is insufficient.
+
+SQLite 3.51.3 and later 3.x releases contain the
+[WAL-reset concurrency fix](https://www.sqlite.org/wal.html#the_wal_reset_bug).
+The fixed 3.44.x (3.44.6+) and 3.50.x (3.50.7+) backport lines are also admitted
+when their driver finalizes statements on close. Unknown version strings or
+unverified vendor backports fail closed. Passing these prerequisites does not
+qualify the complete D2 profile.
+
+This intentionally rejects SQLite runtimes previously accepted by the
+statement-only probe, including vulnerable drivers shipped with older Node 22
+releases. The public Node minimum remains 22.18 for the default File path;
+SQLite requires the additional fix. No provider selection changes and no
+fallback to File occur when an explicitly selected SQLite runtime is rejected.
+The optional driver is still loaded only after opt-in.
 
 From the repository checkout, preview selection:
 
@@ -170,23 +184,93 @@ external service access, cross-host synchronization or promotion authority.
 
 ## Reproduce validation
 
+Use the qualified Node executable on PATH, including the Python CLI's managed
+Effect runtime. The runner records the actual Node/SQLite/source identity.
+
 ```sh
 npm ci --ignore-scripts
 npm run typecheck:control-plane
 node --no-warnings --experimental-sqlite --experimental-strip-types --test \
   tests/control_plane_ts/sqlite_authority_store.test.ts \
-  tests/control_plane_ts/local_authority_provider.test.ts
+  tests/control_plane_ts/local_authority_provider.test.ts \
+  tests/control_plane_ts/sqlite_runtime_admission.test.ts \
+  tests/control_plane_ts/sqlite_capacity.test.ts
 python -m pytest -q tests/control_plane/test_sqlite_authority_cli.py
+node -e "require('node:fs').mkdirSync('.local', {recursive:true})"
 node --no-warnings --experimental-sqlite --experimental-strip-types \
-  examples/coordination/sqlite-capacity.ts
+  examples/coordination/sqlite-capacity.ts --profile rehearsal --cli \
+  --output .local/sqlite-rehearsal.json
+node --no-warnings --experimental-sqlite --experimental-strip-types \
+  examples/coordination/sqlite-capacity.ts --profile matched-64k --cli \
+  --output .local/sqlite-matched-64k.json
 ```
 
-The tests exercise real SQLite, independent writer processes, CAS competition,
-original-receipt replay, lost responses, interrupted head publication, schema
-rejection, persistent selection, native CLI read/update and planning replay after
-Markdown deletion, and archive acknowledgement against the selected store.
-The capacity command uses a disposable database with a fixed 4 KiB live
-payload, 10k/100k commits, and 100 samples per read workload. It emits measured
-latency percentiles and database bytes, then deletes only its temporary
-database. These accelerated measurements do not satisfy the separate ten-day
-soak, retention, disk-exhaustion, restore or promotion gates.
+The no-argument default intentionally replaces the former 4 KiB/100k run with
+a small `rehearsal`; full capacity now requires an explicit profile. The default
+`rehearsal` creates 100/1,000 commits and checks runner execution,
+independent invariants and cleanup; it cannot satisfy formal performance
+budgets. The explicit `matched-64k` profile creates separate 10k/100k databases,
+serially, with exactly 64 KiB native synthetic projection JSON and at most 4 KiB
+of new event/receipt JSON per commit. Each fill write is followed by three head
+reads and two indexed historical receipt reads. Both formal groups sample the
+last 1,000 commits and their corresponding reads, plus 200 scan-100 samples.
+This one-Todo storage axis isolates history growth; it is not the complete
+multi-agent/lease/capture workload.
+
+`--cli` adds 20 formal samples (three in rehearsal) for complete CLI mutation,
+status and quota, using fresh Python processes and a newly started managed
+Effect runtime for each sample. Shutdown occurs outside the timed interval in
+the isolated fixture. `--python` chooses the Python executable. These figures
+include process startup but do not drop the OS file cache. Cold Node-only load
+and warm actual-provider calls are separate. The provider's normal per-call
+connection open/close remains inside warm timing. CLI mutations happen after
+the fixed-history measurement; their extra commits are reported separately.
+
+Reports carry p50/p95/p99 and counts, parent-process RSS, application request
+JSON bytes and separate DB/WAL/SHM sizes at the target history. Resource-usage
+peak RSS is process-lifetime across both groups; sampled axis RSS is separate,
+and CLI child RSS is not measured. Application bytes, final files, SQLite
+logical writes, cumulative WAL traffic and physical device writes are different
+metrics. The unavailable write-traffic and pure busy-wait metrics remain
+`missing`; a final WAL size of zero proves no cumulative-write bound.
+
+Each axis reserves 5 GiB free space, caps its database at 16 GiB and checks a
+2,400-second fill budget. All data are generated in a new temporary directory;
+there is no flag to select an existing Goal/runtime for writes. Keep generated
+reports in ignored local storage. Failure results survive in the report and
+exit nonzero; omitted or incomplete evidence never becomes a pass. An exit
+zero with `status=incomplete` means the requested measurements ran, not that
+D2 qualified. Formal budget failures must remain visible without changing the
+workload or thresholds to obtain a green report.
+
+The real-process regressions exercise SIGKILL before and after business COMMIT,
+lost-response receipt readback, exact head/event/receipt/scan equivalence and
+SQLite `max_page_count` exhaustion. These are small disposable-database tests,
+not power-loss, operating-system ENOSPC or large-history recovery qualification.
+The source uses the shared retained-journal snapshot contract. No checkpoint,
+retention deletion, restore-incarnation change or migration format is added.
+
+### Qualification holds / 资格保留项
+
+The report's `passed` rows apply only to their named axis and sample counts.
+`failed` measurements remain failed; `missing` rows include cumulative storage
+writes, pure lock wait, steady-state RSS proof, the full domain profile, 1 MiB
+and 300k headroom, 24-hour consumer lag, large-history recovery, fenced
+backup/restore, supported upgrades/rollback, OS/runtime coverage and a real
+>=10-day soak. Those holds still block profile promotion. Accelerated volume
+never substitutes for elapsed time, and running this command starts no soak.
+
+SQLite 资格参考使用 Node 22.22.3／SQLite 3.51.3；打开前同时检查实际 WAL 修复版本
+和 statement 关闭行为。公开 Node 最低版本 22.18 继续用于默认 File 路径。显式
+SQLite 选择遇到不合格 runtime 会拒绝，不会改默认 provider 或静默回退。
+
+默认无参数命令从旧的 4 KiB/100k 改为小型 `rehearsal`，只验证工具和不变量；
+正式 64 KiB、10k/100k 对照必须显式选择
+`matched-64k`。`--cli` 分开记录完整 CLI 冷启动与 warm store，返回分位数、样本数、
+RSS 和文件大小；没有量到的累计 WAL／逻辑写入和纯锁等待保持 missing。
+应用 JSON 字节不能替代底层写入量，WAL 最终归零不能证明没有写入放大。
+
+进程中断与 SQLite 容量注入在一次性合成数据库上运行，不等于断电、真实文件系统
+耗尽、长期 consumer backlog 或完整恢复验证。首批测量允许保留 failed/missing；
+>=10 天自然时间 soak、迁移和晋升分别评审与授权。本入口不改变持久格式、Todo
+语义、默认 provider 或任何活跃 Goal。
