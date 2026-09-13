@@ -16,7 +16,7 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {capacityLedger, latency, type CapacityAxis} from "./sqlite-capacity-report.ts";
+import {capacityLedger, latency, type CapacityAxis, type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
@@ -27,8 +27,9 @@ const script = fileURLToPath(import.meta.url), repository = fileURLToPath(new UR
 const sqlite = (() => {
   try { return sqliteAuthorityRuntime(); }
   catch (error) {
+    const ledger: QualificationRow[] = [{id: "runtime_admission", status: "failed", scope: "runtime prerequisites; no qualification database opened"}];
     const report = {schema_version: "loopx_sqlite_capacity_report_v1", profile: options.profile,
-      status: "failed", full_d2_qualified: false, axes: [], ledger: [{id: "runtime_admission", status: "failed"}],
+      status: "failed", full_d2_qualified: false, axes: [], ledger,
       reason: error instanceof Error ? error.message : "SQLite runtime admission failed"};
     const json = JSON.stringify(report, null, 2) + "\n";
     if (options.output) writeFileSync(options.output, json);
@@ -51,7 +52,7 @@ const report: Record<string, unknown> = {
     cold_node: "new Node process and import plus first load; OS file cache is not dropped",
     warm: "same process, actual provider opens and closes each connection"},
   durability: {journal_mode: "WAL", synchronous: "FULL", altered_for_measurement: false},
-  budgets: {per_axis_wall_seconds: 2400, database_bytes: 16 * 1024 ** 3, minimum_free_bytes: 5 * 1024 ** 3},
+  budgets: {per_axis_fill_seconds: 2400, database_bytes: 16 * 1024 ** 3, minimum_free_bytes: 5 * 1024 ** 3},
   metric_limits: {logical_storage_writes: "missing", cumulative_wal_traffic: "missing",
     pure_busy_wait: "missing", physical_device_writes: "missing",
     rss_scope: "Node parent sampled per axis; resourceUsage peak is process-lifetime across both axes; CLI child RSS is not measured",
