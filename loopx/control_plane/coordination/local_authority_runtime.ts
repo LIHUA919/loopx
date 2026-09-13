@@ -1,7 +1,7 @@
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
-import { withFileMutationLock } from "../effect_runtime_io.ts";
-import { ShadowManagementError, requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath } from "./shadow_management.ts";
+import {withCanonicalWriter} from "./local_authority_write.ts";
+import { ShadowManagementError } from "./shadow_management.ts";
 import { isAbsolute, join } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -100,14 +100,6 @@ export { LEGACY_COORDINATION_WRITER_FENCE_SCHEMA } from "./legacy_writer_fence.t
 
 function sourceAuthorityFor(store: AuthorityStore): "sqlite_v0" | "file_v0" {
   return store instanceof SqliteAuthorityStore ? "sqlite_v0" : "file_v0";
-}
-
-async function withCanonicalWriter<T>(root: string, goalId: string, dryRun: boolean, write: () => Promise<T>): Promise<T> {
-  if (dryRun) return await write();
-  return await withFileMutationLock(shadowMaintenanceLockPath(root, goalId), async () => {
-    await requireShadowPrimaryWriteAllowed(root, goalId);
-    return await write();
-  });
 }
 
 /** Monitor observation and successors share the existing writer/fence lifetime. */

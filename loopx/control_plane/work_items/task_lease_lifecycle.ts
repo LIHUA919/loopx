@@ -1,4 +1,8 @@
 import {leaseOwnerRejection as ownerRejection} from "./task_lease_eligibility.ts";
+import {renewCanonicalTaskLease} from "./canonical_task_lease_renew.ts";
+import {taskLeaseStableValue as stableValue, taskLeaseDigest as digest,
+  taskLeaseOperationIdentity as operationIdentity,
+  taskLeaseOperationRequestDigest as operationRequestDigest} from "./task_lease_operation_identity.ts";
 import { ShadowManagementError, requireShadowPrimaryWriteAllowed } from "../coordination/shadow_management.ts";
 import { LegacyCoordinationWriteError, requireLegacyCoordinationPrimaryWriteAllowed } from "../coordination/legacy_writer_fence.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -65,7 +69,7 @@ import {
   type LeaseOutboxCapture,
   type LocalAuthorityShadowBinding,
 } from "../coordination/local_authority_shadow_outbox.ts";
-import { TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA } from "../coordination/coordination_state_contract.generated.ts";
+import { TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA, TASK_LEASE_CANONICAL_RENEW_REQUEST_SCHEMA } from "../coordination/coordination_state_contract.generated.ts";
 
 export const TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION =
   TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA;
@@ -87,6 +91,7 @@ type LifecycleStage = "validation" | "durable_writeback";
 
 interface LifecycleRequest {
   schema_version: typeof TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION;
+  canonical_renew: boolean;
   operation: TaskLeaseLifecycleOperation;
   runtime_root: string;
   goal_id: string;
@@ -367,13 +372,21 @@ function decodeOperation(value: unknown): TaskLeaseLifecycleOperation {
 
 function decodeRequest(value: unknown): LifecycleRequest {
   const input = requireJsonObject(value, "task lease lifecycle request");
-  if (input.schema_version !== TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION) {
+  const canonicalRenew = input.schema_version === TASK_LEASE_CANONICAL_RENEW_REQUEST_SCHEMA;
+  if (input.schema_version !== TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION && !canonicalRenew) {
     throw new TaskLeaseLifecycleError(
       "Task-lease lifecycle request schema mismatch",
       "schema_mismatch",
     );
   }
   const operation = decodeOperation(input.operation);
+  if (canonicalRenew && operation !== "renew") throw new TaskLeaseLifecycleError("canonical renewal schema only accepts renew", "invalid_operation");
+  if (canonicalRenew) {
+    const fields = new Set(["schema_version", "operation", "runtime_root", "goal_id", "todo_id", "owner",
+      "idempotency_key", "expected_version", "ttl_seconds", "authority", "current_time"]);
+    const unsupported = Object.keys(input).find(key => !fields.has(key));
+    if (unsupported) throw new TaskLeaseLifecycleError(`canonical renewal does not accept ${unsupported}`, "invalid_canonical_renew_request");
+  }
   let goalId: string;
   let todoId: string;
   try {
@@ -398,7 +411,11 @@ function decodeRequest(value: unknown): LifecycleRequest {
 
   let authority: AuthorityFacts | null = null;
   if (input.authority !== undefined && input.authority !== null) {
-    authority = decodeTaskLeaseAuthority(input.authority);
+    // A canonical-only request cannot fall back. Its real mode comes from the
+    // provider; stale display frontmatter is not a lease decision input.
+    authority = decodeTaskLeaseAuthority(canonicalRenew
+      ? {...requireJsonObject(input.authority, "authority"), handoff_mode: "legacy"}
+      : input.authority);
   }
   if (
     (operation === "renew" || operation === "transfer" || operation === "terminal_verify" || operation === "holder_verify") &&
@@ -453,6 +470,7 @@ function decodeRequest(value: unknown): LifecycleRequest {
         })();
   return {
     schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
+    canonical_renew: canonicalRenew,
     operation,
     runtime_root: typeof input.runtime_root === "string" ? input.runtime_root : (() => {
       throw new TaskLeaseLifecycleError("runtime_root must be a string", "invalid_runtime_root");
@@ -554,51 +572,6 @@ function effectIdFor(request: LifecycleRequest): string | null {
     todo_id: request.todo_id,
     turn_instance_id: request.idempotency_key,
   }).effect_id;
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableValue(child)]),
-  );
-}
-
-function digest(value: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(stableValue(value)), "utf8")
-    .digest("hex");
-}
-
-function operationIdentity(request: LifecycleRequest): string | null {
-  if (!request.idempotency_key) return null;
-  return digest({
-    schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
-    operation: request.operation,
-    goal_id: request.goal_id,
-    todo_id: request.todo_id,
-    owner: request.owner,
-    idempotency_key: request.idempotency_key,
-    expected_version: request.expected_version,
-  });
-}
-
-function operationRequestDigest(request: LifecycleRequest): string | null {
-  if (!request.idempotency_key) return null;
-  return digest({
-    schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION,
-    operation: request.operation,
-    goal_id: request.goal_id,
-    todo_id: request.todo_id,
-    owner: request.owner,
-    idempotency_key: request.idempotency_key,
-    expected_version: request.expected_version,
-    ttl_seconds: request.ttl_seconds,
-    new_owner: request.new_owner,
-    new_idempotency_key: request.new_idempotency_key,
-  });
 }
 
 function operationReceiptPath(request: LifecycleRequest): string | null {
@@ -2733,6 +2706,24 @@ async function fenceClose(
   }
 }
 
+function canonicalRenewEnvelope(request: LifecycleRequest, result: JsonObject): JsonObject {
+  const evidence = Object.fromEntries(["source_authority", "decision_read_from_provider", "legacy_fallback_used",
+    "provider_revision", "cursor", "current_provider_revision", "current_cursor", "handoff_mode",
+    "operation_id", "recovery", "commit_status", "receipt_status"].filter(key => result[key] !== undefined)
+    .map(key => [key, result[key]]));
+  if (result.status === "applied" || result.status === "replayed" || result.status === "recovered") {
+    const replayed = result.status !== "applied";
+    return {ok: true, schema_version: "task_lease_v0", action: "renew", status: result.status,
+      renewed: true, idempotent: replayed, lease: result.lease, original_receipt: result.original_receipt,
+      ...evidence, settlement: lifecycleSettlement(request, replayed ? "replayed" : "committed")};
+  }
+  const envelope = failureEnvelope(request, {code: String(result.reason_code ?? result.conflict_kind ?? "canonical_renew_failed"),
+    message: String(result.reason ?? "canonical renewal could not complete; inspect the result before retrying"),
+    payload: {...evidence, status: result.status}, stage: result.failure_stage === "durable_writeback" ? "durable_writeback" : "validation"});
+  delete envelope.lease_path;
+  return envelope;
+}
+
 export async function executeTaskLeaseLifecycle(
   value: unknown,
   dependencies: LifecycleDependencies = {},
@@ -2740,6 +2731,12 @@ export async function executeTaskLeaseLifecycle(
   let request: LifecycleRequest | null = null;
   try {
     request = decodeRequest(value);
+    if (request.canonical_renew) {
+      const canonical = await renewCanonicalTaskLease(request, {
+        now: () => lifecycleNow(request!, dependencies), beforeWrite: dependencies.beforeWrite,
+      });
+      return canonicalRenewEnvelope(request, canonical);
+    }
     if (request.operation === "fence_close") return await fenceClose(request, dependencies);
     if (request.operation === "terminal_verify" || request.operation === "holder_verify") {
       const fence = await fenceVerify(request, dependencies);

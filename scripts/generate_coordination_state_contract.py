@@ -108,6 +108,7 @@ DELIVERY_WORKSPACE_SNAPSHOT_PROTOCOL_KEYS = (
 TASK_LEASE_PROTOCOL_KEYS = (
     "acquire_request_schema",
     "lifecycle_request_schema",
+    "canonical_renew_request_schema",
 )
 CAPABILITY_HOOK_PROTOCOL_KEYS = (
     "registration_schema",

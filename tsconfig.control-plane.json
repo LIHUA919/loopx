@@ -111,6 +111,7 @@
     "tests/control_plane_ts/todo_completion_validation_plan.test.ts",
     "tests/control_plane_ts/todo_next_action.test.ts",
     "tests/control_plane_ts/task_lease_acquire.test.ts",
+    "tests/control_plane_ts/canonical_task_lease_renew.test.ts",
     "tests/control_plane_ts/task_lease_acquire_cli.test.ts",
     "tests/control_plane_ts/legacy_writer_fence_caller_parity_support.ts",
     "tests/control_plane_ts/legacy_writer_fence_caller_parity.test.ts",
