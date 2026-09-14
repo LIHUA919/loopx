@@ -8,6 +8,7 @@ import {fileURLToPath} from "node:url";
 import test, {type TestContext} from "node:test";
 import {executeTaskLeaseLifecycle, TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/task_lease_lifecycle.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
@@ -23,6 +24,10 @@ import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
 
 const NOW = new Date("2026-09-13T10:05:00Z");
 const CHILD = fileURLToPath(new URL("./canonical_task_lease_renew_process.ts", import.meta.url));
+function sqliteSkipReason(): string | undefined {
+  try { sqliteAuthorityRuntime(); return undefined; }
+  catch { return "requires a WAL-fixed SQLite runtime with finalized statements"; }
+}
 async function fixture(t: TestContext, provider: "file" | "sqlite") {
   const root = await mkdtemp(join(tmpdir(), "loopx-canonical-renew-"));
   t.after(() => rm(root, {recursive: true, force: true}));
@@ -65,13 +70,16 @@ test("renew identity preserves the legacy hash and binds changed TTL as changed 
 });
 
 for (const provider of ["file", "sqlite"] as const) {
-  test(`${provider} legacy wire requests remain fenced`, async t => {
+  const skip = provider === "sqlite" ? sqliteSkipReason() : undefined;
+  const providerTest = (name: string, body: (t: TestContext) => Promise<void>) =>
+    test(name, {skip}, body);
+  providerTest(`${provider} legacy wire requests remain fenced`, async t => {
     const {store, request} = await fixture(t, provider); const before = await store.loadAuthority();
     const result = await executeTaskLeaseLifecycle({...request, schema_version: TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA_VERSION}, {now: () => NOW});
     assert.equal(result.error_code, "legacy_coordination_writer_fenced");
     assert.deepEqual(await store.loadAuthority(), before);
   });
-  test(`${provider} canonical renew uses the public lifecycle entrypoint without a legacy lease file`, async t => {
+  providerTest(`${provider} canonical renew uses the public lifecycle entrypoint without a legacy lease file`, async t => {
     const {runtime, goal, store, request, lease} = await fixture(t, provider);
     const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
     assert.equal(result.ok, true, JSON.stringify(result));
@@ -83,7 +91,7 @@ for (const provider of ["file", "sqlite"] as const) {
     if (after.status === "loaded") assert.equal(after.cursor, "2");
     await assert.rejects(access(join(runtime, "goals", goal, "task-leases/todo_renew.json")));
   });
-  test(`${provider} old renewal receipt survives later renewals and expiry without extending again`, async t => {
+  providerTest(`${provider} old renewal receipt survives later renewals and expiry without extending again`, async t => {
     const {store, request, runtime, goal} = await fixture(t, provider);
     const first = await executeTaskLeaseLifecycle(request, {now: () => NOW}); assert.equal(first.ok, true);
     const second = await executeTaskLeaseLifecycle({...request, expected_version: 2}, {now: () => new Date("2026-09-13T10:06:00Z")});
@@ -98,7 +106,7 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.deepEqual(await store.loadAuthority(), current);
     await assert.rejects(access(join(runtime, "goals", goal, "task-leases/.lifecycle-operations")));
   });
-  test(`${provider} canonical facts override stale caller Todo and mode facts`, async t => {
+  providerTest(`${provider} canonical facts override stale caller Todo and mode facts`, async t => {
     const {store, request} = await fixture(t, provider);
     const stale = {...request, authority: {...request.authority, handoff_mode: "soft_claim",
       todos: [{...request.authority.todos[0]!, status: "done", claimed_by: "agent-b"}]}};
@@ -114,7 +122,7 @@ for (const provider of ["file", "sqlite"] as const) {
     ["missing version", {expected_version: null}, NOW, "version_required"],
     ["expired", {}, new Date("2026-09-13T10:10:00Z"), "lease_not_active"],
   ] as const) {
-    test(`${provider} rejects ${label} without canonical or legacy writes`, async t => {
+    providerTest(`${provider} rejects ${label} without canonical or legacy writes`, async t => {
       const {store, request, runtime, goal} = await fixture(t, provider);
       const before = await store.loadAuthority();
       const result = await executeTaskLeaseLifecycle({...request, ...changes}, {now: () => now});
@@ -124,13 +132,13 @@ for (const provider of ["file", "sqlite"] as const) {
       await assert.rejects(access(join(runtime, "goals", goal, "task-leases/.lifecycle-operations")));
     });
   }
-  test(`${provider} source revocation before commit is rejected with no write`, async t => {
+  providerTest(`${provider} source revocation before commit is rejected with no write`, async t => {
     const {store, state, request} = await fixture(t, provider); const before = await store.loadAuthority();
     const result = await executeTaskLeaseLifecycle(request, {now: () => NOW, beforeWrite: async () => {await writeFile(state, "changed source");}});
     assert.equal(result.ok, false); assert.equal(result.error_code, "authority_source_changed");
     assert.deepEqual(await store.loadAuthority(), before);
   });
-  test(`${provider} maintenance guard and canonical mode remain authoritative`, async t => {
+  providerTest(`${provider} maintenance guard and canonical mode remain authoritative`, async t => {
     const {store, request, runtime, goal, projection} = await fixture(t, provider);
     let head = await store.loadAuthority(); if (head.status !== "loaded") throw new Error("missing head");
     await store.commitAuthority({expected_provider_revision: head.provider_revision, operation_id: "mode-change",
@@ -143,7 +151,7 @@ for (const provider of ["file", "sqlite"] as const) {
     const blocked = await executeTaskLeaseLifecycle(request, {now: () => NOW});
     assert.equal(blocked.error_code, "shadow_management_state_invalid"); assert.deepEqual(await store.loadAuthority(), before);
   });
-  test(`${provider} fenced missing head never initializes a new lease`, async t => {
+  providerTest(`${provider} fenced missing head never initializes a new lease`, async t => {
     const {store, request, runtime, goal} = await fixture(t, provider);
     await rm(store.path);
     const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
@@ -152,14 +160,14 @@ for (const provider of ["file", "sqlite"] as const) {
     await assert.rejects(access(join(runtime, "goals", goal, "task-leases/todo_renew.json")));
     await assert.rejects(access(join(runtime, "goals", goal, "task-leases/.lifecycle-operations")));
   });
-  test(`${provider} invalid fence stays fail-closed`, async t => {
+  providerTest(`${provider} invalid fence stays fail-closed`, async t => {
     const {store, request, runtime, goal} = await fixture(t, provider); const before = await store.loadAuthority();
     await writeFile(legacyCoordinationWriterFencePath(runtime, goal), "{");
     const result = await executeTaskLeaseLifecycle(request, {now: () => NOW});
     assert.equal(result.ok, false); assert.equal(result.error_code, "legacy_writer_fence_read_failed");
     assert.deepEqual(await store.loadAuthority(), before);
   });
-  test(`${provider} a canonical-only request cannot downgrade after losing its fence`, async t => {
+  providerTest(`${provider} a canonical-only request cannot downgrade after losing its fence`, async t => {
     const {store, request, runtime, goal, lease} = await fixture(t, provider); const before = await store.loadAuthority();
     const legacyPath = join(runtime, "goals", goal, "task-leases/todo_renew.json");
     const legacyBytes = JSON.stringify(lease); await writeFile(legacyPath, legacyBytes);
@@ -169,7 +177,7 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.deepEqual(await store.loadAuthority(), before);
     assert.equal(await import("node:fs/promises").then(fs => fs.readFile(legacyPath, "utf8")), legacyBytes);
   });
-  test(`${provider} canonical renew rejects unsupported mutation controls`, async t => {
+  providerTest(`${provider} canonical renew rejects unsupported mutation controls`, async t => {
     const {store, request} = await fixture(t, provider); const before = await store.loadAuthority();
     for (const fields of [{dry_run: true}, {new_owner: "agent-b"}, {release_lease: true}]) {
       const result = await executeTaskLeaseLifecycle({...request, ...fields}, {now: () => NOW});
@@ -178,7 +186,7 @@ for (const provider of ["file", "sqlite"] as const) {
     const transfer = await executeTaskLeaseLifecycle({...request, operation: "transfer"}, {now: () => NOW});
     assert.equal(transfer.error_code, "invalid_operation"); assert.deepEqual(await store.loadAuthority(), before);
   });
-  test(`${provider} ambiguous response recovers the exact committed renewal`, async t => {
+  providerTest(`${provider} ambiguous response recovers the exact committed renewal`, async t => {
     const {store, request, lease} = await fixture(t, provider);
     const wrapper: AuthorityStore = {storeIdentity: () => store.storeIdentity(), loadAuthority: () => store.loadAuthority(),
       readReceipt: id => store.readReceipt(id), scanCommitted: (...args) => store.scanCommitted(...args),
@@ -189,7 +197,7 @@ for (const provider of ["file", "sqlite"] as const) {
     const head = await store.loadAuthority(); assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.equal(head.cursor, "2");
   });
   for (const boundary of ["before", "after"] as const) {
-    test(`${provider} real process interruption ${boundary} provider commit preserves renewal identity`, async t => {
+    providerTest(`${provider} real process interruption ${boundary} provider commit preserves renewal identity`, async t => {
       const {root, store, request} = await fixture(t, provider);
       const config = join(root, "child.json"); await writeFile(config, JSON.stringify({...request, now: NOW.toISOString()}));
       const before = await store.loadAuthority();
@@ -205,7 +213,7 @@ for (const provider of ["file", "sqlite"] as const) {
     });
   }
   for (const differentIntent of [false, true]) {
-    test(`${provider} real processes arbitrate ${differentIntent ? "different" : "identical"} renew intent at one version`, async t => {
+    providerTest(`${provider} real processes arbitrate ${differentIntent ? "different" : "identical"} renew intent at one version`, async t => {
       const {root, store, request} = await fixture(t, provider);
       const config = join(root, "race.json"); await writeFile(config, JSON.stringify({...request, now: NOW.toISOString()}));
       const children: ReturnType<typeof spawn>[] = []; let readyCount = 0;
