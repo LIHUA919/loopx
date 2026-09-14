@@ -117,6 +117,34 @@ def test_host_and_automation_bootstraps_share_the_v2_prompt(registry):
     assert host == automation
 
 
+def test_trae_app_bootstrap_round_trips_its_host_identity(registry):
+    from loopx.control_plane.heartbeat.bootstrap_prompt import host_bootstrap_binding
+
+    initial = cli(registry, "--bootstrap", "--trae_app")
+    assert initial["ok"] and initial["bootstrap"]
+    prompt = initial["task_body"]
+    assert prompt.startswith(
+        "LoopX managed heartbeat bootstrap v2\n每次唤醒先执行：\n"
+    )
+    command = shlex.split(prompt.split("```sh\n")[1].split("\n```", 1)[0])
+    heartbeat_index = command.index("heartbeat-prompt")
+    assert command[heartbeat_index + 2] == "--trae_app"
+    assert "--codex-app" not in command
+    assert host_bootstrap_binding(prompt)["trae_app"] is True
+    loaded = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", *command[1:]],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    body = json.loads(loaded.stdout)
+    direct = cli(registry, "--trae_app")
+    assert body["task_body"] == direct["task_body"]
+    assert body["schema_version"] == direct["schema_version"] == "heartbeat_agent_input_v1"
+    assert "--trae_app" in body["task_body"]
+
+
 def test_saved_goal_bootstrap_reloads_changed_state_and_rejects_removed_agent(registry, tmp_path):
     packet = cli(registry, "--bootstrap", "--runtime-profile", "codex_cli")
     command = shlex.split(packet["task_body"].split("```sh\n")[1].split("\n```", 1)[0])

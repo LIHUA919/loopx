@@ -57,6 +57,8 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
         command.append("--" + mode)
         if args.codex_app:
             command.append("--codex-app")
+        if getattr(args, "trae_app", False):
+            command.append("--trae_app")
     command += ["--goal-id", args.goal_id]
     for field, flag in (
         ("agent_id", "--agent-id"), ("active_state", "--active-state"),
@@ -79,13 +81,20 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
     if legacy:
         if args.codex_app:
             command.append("--codex-app")
+        if getattr(args, "trae_app", False):
+            command.append("--trae_app")
         command.append("--" + mode)
     return command
 
 
 def goal_bootstrap(args, *, registry: Path) -> str:
     """Use the heartbeat wrapper only for an App heartbeat scheduler."""
-    heartbeat = args.codex_app or getattr(args, "runtime_profile", None) == "codex_app_heartbeat"
+    heartbeat = (
+        args.codex_app
+        or getattr(args, "trae_app", False)
+        or getattr(args, "runtime_profile", None)
+        in {"codex_app_heartbeat", "trae_app"}
+    )
     command = _goal_command(args, registry=registry, legacy=not heartbeat)
     if heartbeat:
         return render_heartbeat_bootstrap(command)
@@ -102,6 +111,7 @@ def host_bootstrap_binding(prompt: str) -> dict | None:
         if command[1:3] != ["--format", "json"]:
             return None
         values = dict(cli_bin=command[0], turn_instance_id=None, codex_app=False,
+                      trae_app=False,
                       full=False, compact=False, brief=False, thin=False,
                       visible_goal_host=None, available_capabilities=[], agent_scopes=[],
                       runtime_root=None)
@@ -110,7 +120,11 @@ def host_bootstrap_binding(prompt: str) -> dict | None:
             "material_rule", "permission_rule", "runtime_profile", "visible_goal_host",
             "host_surface", "scheduler_owner", "execution_mode", "cli_bin")}
         repeated = {"--agent-scope": "agent_scopes", "--available-capability": "available_capabilities"}
-        booleans = {"--" + name.replace("_", "-"): name for name in ("codex_app", "full", "compact", "brief", "thin")}
+        booleans = {
+            "--codex-app": "codex_app",
+            "--trae_app": "trae_app",
+            **{"--" + name.replace("_", "-"): name for name in ("full", "compact", "brief", "thin")},
+        }
         index = 3
         while index < len(command):
             token = command[index]
