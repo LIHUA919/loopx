@@ -1,0 +1,802 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
+import threading
+from typing import Any
+
+import pytest
+
+from loopx.chat_action_store import ActionConflictError, ChatActionStore
+from loopx.chat_actions import ChatActionService
+from loopx.cli_commands.goal_channel import _prepare_goal_channel_operation
+from loopx.extensions.lark.goal_channel_contracts import (
+    GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
+    write_goal_channel_binding,
+)
+from loopx.extensions.lark.goal_channel_operation import (
+    build_goal_channel_operation_card,
+    deliver_goal_channel_operation_card,
+    handle_goal_channel_operation_callback,
+    recover_goal_channel_operation_results,
+    recover_goal_channel_simulation_claims,
+)
+from loopx.extensions.lark import goal_channel_operation
+from loopx.extensions.lark.goal_channel_targets import add_lark_goal_channel_target
+
+
+GOAL_ID = "goal-operation-card-fixture"
+AGENT_ID = "finance-operation-agent"
+OPERATOR_ID = "ou_operation_owner"
+CHAT_ID = "oc_operation_fixture"
+APP_ID = "cli_operation_fixture"
+TENANT_KEY = "tenant_operation_fixture"
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+
+def _fixture(
+    tmp_path: Path,
+) -> tuple[ChatActionStore, Path, Path, Path, Path]:
+    project = tmp_path / "project"
+    project.mkdir()
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text(
+        f"---\ngoal_id: {GOAL_ID}\n---\n\n## User Todo\n\n## Agent Todo\n",
+        encoding="utf-8",
+    )
+    runtime_root = tmp_path / "runtime"
+    registry_path = project / ".loopx" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps(
+            {
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": GOAL_ID,
+                        "repo": str(project),
+                        "state_file": "ACTIVE_GOAL_STATE.md",
+                        "coordination": {"registered_agents": [AGENT_ID]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    target_path = runtime_root / "goal-channel-targets.json"
+    add_lark_goal_channel_target(
+        target_path=target_path,
+        target_name="operation-route",
+        chat_id=CHAT_ID,
+        chat_name="Operation Fixture",
+        identity_mode="project_bot",
+        sender_profile="operation-bot",
+        sender_identity="bot",
+        bot_app_id=APP_ID,
+        bot_display_name="Operation Bot",
+        cli_bin="lark-cli",
+        execute=True,
+    )
+    binding_path = registry_path.parent / "goal-channel.json"
+    write_goal_channel_binding(
+        binding_path,
+        {
+            "schema_version": GOAL_CHANNEL_BINDING_SCHEMA_VERSION,
+            "bindings": {
+                GOAL_ID: {
+                    "goal_id": GOAL_ID,
+                    "provider": "lark",
+                    "enabled": True,
+                    "agent_id": AGENT_ID,
+                    "target_ref": "operation-route",
+                    "channel": {},
+                    "identity": {},
+                }
+            },
+        },
+    )
+    store = ChatActionStore(runtime_root / "chat" / "actions")
+    return store, registry_path, runtime_root, binding_path, target_path
+
+
+def _prepare(store: ChatActionStore, registry_path: Path) -> dict[str, Any]:
+    payload = {
+        "schema_version": "finance_order_intent_v0",
+        "asset": "SYNTH",
+        "side": "buy",
+        "quantity": "1.00",
+        "quantity_unit": "SYNTH",
+        "order_type": "limit",
+        "limit_price": "10.00",
+        "price_unit": "TEST",
+        "time_in_force": "GTC",
+        "reduce_only": False,
+        "maximum_fee": "0.10",
+        "fee_unit": "TEST",
+    }
+    service = ChatActionService(store=store, registry_path=registry_path)
+    return service.preview(
+        {
+            "action_kind": "operation.execute",
+            "summary": "Confirm one simulated finance order",
+            "idempotency_key": "operation-card-fixture-v1",
+            "context": {"kind": "goal", "goal_id": GOAL_ID},
+            "normalized_parameters": {
+                "schema_version": "loopx_operation_request_v0",
+                "goal_id": GOAL_ID,
+                "agent_id": AGENT_ID,
+                "domain": "finance",
+                "operation_kind": "finance.order.simulate",
+                "operation_schema": "finance_order_intent_v0",
+                "payload_ref": "finance-order:operation-card-fixture",
+                "payload": payload,
+                "payload_digest": _digest(payload),
+                "projection": {
+                    "schema_version": "loopx_operation_projection_v0",
+                    "title": "Simulated trade request",
+                    "subtitle": "Synthetic fixture · no venue call",
+                    "focus": "BUY 1.00 SYNTH @ 10.00 TEST",
+                    "fields": [
+                        {"label": "Order", "value": "Limit · GTC"},
+                        {"label": "Maximum fee", "value": "0.10 TEST"},
+                    ],
+                    "warning": (
+                        "Simulation only. This card cannot submit, sign, or transfer."
+                    ),
+                    "simulated": True,
+                },
+                "destination_account_ref": "account:simulation",
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat(),
+                "authorized_principals": [f"lark:{OPERATOR_ID}"],
+                "executor": {
+                    "extension_id": "loopx-finance-execution",
+                    "protocol": "finance_operation_executor_v0",
+                    "permission": "finance.operation.simulate",
+                    "revision": "simulator-v0",
+                },
+            },
+        }
+    )
+
+
+def _runner(calls: list[list[str]], sent_cards: dict[str, dict[str, Any]]):
+    def run(
+        args: list[str], _cwd: Path | None, _timeout: float | None
+    ) -> dict[str, Any]:
+        calls.append(args)
+        if "auth" in args and "status" in args:
+            payload = {
+                "ok": True,
+                "appId": APP_ID,
+                "identities": {
+                    "bot": {
+                        "available": True,
+                        "verified": True,
+                        "appName": "Operation Bot",
+                    }
+                },
+            }
+        elif "chats" in args and "get" in args:
+            payload = {
+                "ok": True,
+                "data": {"chat_id": CHAT_ID, "tenant_key": TENANT_KEY},
+            }
+        elif "+chat-members-list" in args:
+            if args[args.index("--member-types") + 1] == "bot":
+                payload = {"ok": True, "data": {"bots": [{"app_id": APP_ID}]}}
+            else:
+                payload = {
+                    "ok": True,
+                    "data": {
+                        "items": [
+                            {
+                                "member_id": OPERATOR_ID,
+                                "tenant_key": TENANT_KEY,
+                            }
+                        ]
+                    },
+                }
+        elif "+chat-messages-list" in args:
+            payload = {
+                "ok": True,
+                "has_more": False,
+                "messages": [
+                    {
+                        "message_id": message_id,
+                        "chat_id": CHAT_ID,
+                        "sender": {"sender_type": "app", "id": APP_ID},
+                        "deleted": False,
+                        "body": {"content": json.dumps(card)},
+                    }
+                    for message_id, card in sent_cards.items()
+                ],
+            }
+        elif "+messages-send" in args:
+            message_id = "om_operation_card_fixture"
+            sent_cards[message_id] = json.loads(args[args.index("--content") + 1])
+            payload = {"ok": True, "data": {"message_id": message_id}}
+        elif "+messages-mget" in args:
+            message_id = args[args.index("--message-ids") + 1]
+            payload = {
+                "ok": True,
+                "data": {
+                    "items": [
+                        {
+                            "message_id": message_id,
+                            "chat_id": CHAT_ID,
+                            "sender": {"sender_type": "app", "id": APP_ID},
+                            "body": {"content": json.dumps(sent_cards[message_id])},
+                        }
+                    ]
+                },
+            }
+        elif "messages" in args and "patch" in args:
+            message_id = args[args.index("--message-id") + 1]
+            update = json.loads(args[args.index("--data") + 1])
+            sent_cards[message_id] = json.loads(update["content"])
+            payload = {"ok": True, "code": 0}
+        elif any("interactive/v1/card/update" in item for item in args):
+            update = json.loads(args[args.index("--data") + 1])
+            message_id = next(iter(sent_cards))
+            sent_cards[message_id] = update["card"]
+            payload = {"ok": True, "code": 0}
+        else:  # pragma: no cover
+            raise AssertionError(args)
+        return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+    return run
+
+
+def _event(proposal: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    action = card["body"]["elements"][3]["columns"][0]["elements"][0]["behaviors"][0][
+        "value"
+    ]
+    return {
+        "type": "card.action.trigger",
+        "event_id": "evt_operation_card_fixture",
+        "timestamp": str(int(datetime.now(timezone.utc).timestamp() * 1000)),
+        "operator_id": OPERATOR_ID,
+        "message_id": proposal["operation"]["delivery"]["message_id"],
+        "chat_id": CHAT_ID,
+        "host": "im_message",
+        "token": "callback-token-fixture",
+        "action_tag": "button",
+        "action_value": json.dumps(action),
+        "action_name": "",
+        "form_value": "",
+        "card_content": json.dumps(card),
+    }
+
+
+def test_card_is_one_bounded_non_forwardable_confirmation_projection(
+    tmp_path: Path,
+) -> None:
+    store, registry, _runtime, _binding, _target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+
+    card = build_goal_channel_operation_card(proposal)
+
+    assert card["schema"] == "2.0"
+    assert card["config"]["enable_forward"] is False
+    assert len(card["body"]["elements"]) == 4
+    assert card["header"]["icon"]["token"] == "approval_colorful"
+    buttons = card["body"]["elements"][3]["columns"]
+    assert buttons[0]["elements"][0]["type"] == "primary_filled"
+    assert buttons[1]["elements"][0]["type"] == "danger"
+    assert {
+        button["elements"][0]["behaviors"][0]["value"]["decision"] for button in buttons
+    } == {"confirm", "reject"}
+
+
+def test_cli_preparation_previews_without_write_then_persists_canonical_proposal(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, _binding, _target = _fixture(tmp_path)
+    order = {
+        "schema_version": "finance_order_intent_v0",
+        "asset": "SYNTH",
+        "side": "buy",
+        "quantity": "1.00",
+        "quantity_unit": "SYNTH",
+        "order_type": "limit",
+        "limit_price": "10.00",
+        "price_unit": "TEST",
+        "time_in_force": "GTC",
+        "reduce_only": False,
+        "maximum_fee": "0.10",
+        "fee_unit": "TEST",
+    }
+    request_path = tmp_path / "operation.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_operation_request_v0",
+                "domain": "finance",
+                "operation_kind": "finance.order.simulate",
+                "operation_schema": "finance_order_intent_v0",
+                "payload_ref": "finance-order:cli-fixture",
+                "payload": order,
+                "payload_digest": _digest(order),
+                "projection": {
+                    "schema_version": "loopx_operation_projection_v0",
+                    "title": "Simulated trade request",
+                    "subtitle": "Synthetic fixture",
+                    "focus": "BUY 1 SYNTH @ 10 TEST",
+                    "fields": [{"label": "Order", "value": "Limit · GTC"}],
+                    "warning": "Simulation only.",
+                    "simulated": True,
+                },
+                "destination_account_ref": "account:simulation",
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(hours=1)
+                ).isoformat(),
+                "authorized_principals": [f"lark:{OPERATOR_ID}"],
+                "executor": {
+                    "extension_id": "loopx-finance-execution",
+                    "protocol": "finance_operation_executor_v0",
+                    "permission": "finance.operation.simulate",
+                    "revision": "simulator-v0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    preview = _prepare_goal_channel_operation(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        summary="Review one simulated order",
+        idempotency_key="cli-operation-fixture",
+        request_path=request_path,
+        execute=False,
+    )
+    assert preview["status"] == "preview_ready"
+    assert store.list() == []
+
+    applied = _prepare_goal_channel_operation(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        summary="Review one simulated order",
+        idempotency_key="cli-operation-fixture",
+        request_path=request_path,
+        execute=True,
+    )
+    assert applied["status"] == "awaiting_confirmation"
+    assert applied["details"]["durable_proposal_written"] is True
+    assert store.load(applied["receipt_id"])["operation"]["lifecycle_state"] == (
+        "awaiting_confirmation"
+    )
+
+
+def test_delivery_stops_before_provider_write_when_executor_revision_drifted(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    calls: list[list[str]] = []
+
+    with pytest.raises(ActionConflictError, match="executor revision"):
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=True,
+            runner=_runner(calls, {}),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "different-revision"
+            },
+        )
+
+    assert calls == []
+
+
+def test_operation_delivery_never_uses_an_unbound_registered_target(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    binding.unlink()
+    calls: list[list[str]] = []
+
+    with pytest.raises(ValueError, match="durable binding"):
+        deliver_goal_channel_operation_card(
+            proposal_id=proposal["proposal_id"],
+            action_store_root=store.root,
+            runtime_root=runtime,
+            binding_path=binding,
+            target_path=target,
+            execute=True,
+            runner=_runner(calls, {}),
+            executor_binding_resolver=lambda _parameters, _runtime: {
+                "revision": "simulator-v0"
+            },
+        )
+
+    assert calls == []
+
+
+def test_delivery_callback_simulation_and_replay_share_one_claim(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    proposal_id = proposal["proposal_id"]
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    runner = _runner(calls, sent_cards)
+
+    delivered = deliver_goal_channel_operation_card(
+        proposal_id=proposal_id,
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
+    )
+    assert delivered["status"] == "awaiting_confirmation"
+    assert delivered["readback_verified"] is True
+    durable = store.load(proposal_id)
+    card = sent_cards[durable["operation"]["delivery"]["message_id"]]
+    event = _event(durable, card)
+    execution_count = 0
+
+    def executor(claimed: dict[str, Any]) -> dict[str, Any]:
+        nonlocal execution_count
+        execution_count += 1
+        operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0",
+            "outcome": "simulated_filled",
+            "projection_verified": True,
+            "operation_id": operation["operation_id"],
+            "payload_digest": operation["payload_digest"],
+            "claim_id": operation["claim"]["claim_id"],
+            "executor_revision": operation["executor_revision"],
+            "summary": "Simulation completed without an external venue write.",
+            "simulation": True,
+            "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    first = handle_goal_channel_operation_callback(
+        event,
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+        executor=executor,
+    )
+    replay = handle_goal_channel_operation_callback(
+        event,
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+        executor=executor,
+    )
+
+    assert first["outcome"] == replay["outcome"] == "simulated_filled"
+    assert first["card_update_verified"] is True
+    assert first["external_write_performed"] is True
+    assert replay["external_write_performed"] is False
+    assert execution_count == 1
+    assert store.load(proposal_id)["operation"]["lifecycle_state"] == (
+        "outcome_observed"
+    )
+    assert store.load(proposal_id)["operation"]["result_delivery"]["transport"] == (
+        "callback_update"
+    )
+
+
+def test_concurrent_callback_replay_dispatches_the_claim_once(tmp_path: Path) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    proposal_id = proposal["proposal_id"]
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    runner = _runner(calls, sent_cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal_id,
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
+    )
+    durable = store.load(proposal_id)
+    assert durable is not None
+    card = sent_cards[durable["operation"]["delivery"]["message_id"]]
+    event = _event(durable, card)
+    entered = threading.Event()
+    release = threading.Event()
+    executions = 0
+    receipts: list[dict[str, Any]] = []
+    failures: list[BaseException] = []
+
+    def executor(claimed: dict[str, Any]) -> dict[str, Any]:
+        nonlocal executions
+        executions += 1
+        entered.set()
+        assert release.wait(timeout=2)
+        operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0",
+            "outcome": "simulated_filled",
+            "projection_verified": True,
+            "operation_id": operation["operation_id"],
+            "payload_digest": operation["payload_digest"],
+            "claim_id": operation["claim"]["claim_id"],
+            "executor_revision": operation["executor_revision"],
+            "summary": "Simulation completed once.",
+            "simulation": True,
+            "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def invoke() -> None:
+        try:
+            receipts.append(
+                handle_goal_channel_operation_callback(
+                    event,
+                    runtime_root=runtime,
+                    action_store_root=store.root,
+                    profile_app_id=APP_ID,
+                    cli_bin="lark-cli",
+                    profile="operation-bot",
+                    runner=runner,
+                    executor=executor,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    first = threading.Thread(target=invoke)
+    second = threading.Thread(target=invoke)
+    first.start()
+    assert entered.wait(timeout=2)
+    second.start()
+    release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert failures == []
+    assert executions == 1
+    assert len(receipts) == 2
+    assert all(receipt["outcome"] == "simulated_filled" for receipt in receipts)
+
+
+def test_callback_does_not_claim_result_delivery_without_native_readback(
+    tmp_path: Path,
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    runner = _runner(calls, sent_cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
+    )
+    durable = store.load(proposal["proposal_id"])
+    assert durable is not None
+    message_id = durable["operation"]["delivery"]["message_id"]
+    event = _event(durable, sent_cards[message_id])
+
+    def stale_update_runner(
+        args: list[str], cwd: Path | None, timeout: float | None
+    ) -> dict[str, Any]:
+        if any("interactive/v1/card/update" in item for item in args):
+            return {
+                "returncode": 0,
+                "stdout": json.dumps({"ok": True, "code": 0}),
+                "stderr": "",
+            }
+        return runner(args, cwd, timeout)
+
+    def executor(claimed: dict[str, Any]) -> dict[str, Any]:
+        operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0",
+            "outcome": "simulated_filled",
+            "projection_verified": True,
+            "operation_id": operation["operation_id"],
+            "payload_digest": operation["payload_digest"],
+            "claim_id": operation["claim"]["claim_id"],
+            "executor_revision": operation["executor_revision"],
+            "summary": "Simulation completed once.",
+            "simulation": True,
+            "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    receipt = handle_goal_channel_operation_callback(
+        event,
+        runtime_root=runtime,
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=stale_update_runner,
+        executor=executor,
+    )
+
+    assert receipt["ok"] is False
+    assert receipt["card_update_verified"] is False
+    assert receipt["external_write_performed"] is True
+    assert receipt["status"] == "result_delivery_pending"
+    assert store.load(proposal["proposal_id"])["operation"]["outcome"]["outcome"] == (
+        "simulated_filled"
+    )
+
+    recovered = recover_goal_channel_operation_results(
+        action_store_root=store.root,
+        profile_app_id=APP_ID,
+        allowed_chat_ids={CHAT_ID},
+        cli_bin="lark-cli",
+        profile="operation-bot",
+        runner=runner,
+    )
+
+    assert recovered == {"attempted": 1, "delivered": 1, "failed": 0}
+    readback = ChatActionStore(store.root).load(proposal["proposal_id"])
+    assert readback["operation"]["result_delivery"]["transport"] == "message_patch"
+
+
+def test_restart_recovers_only_claimed_non_effectful_simulation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=_runner(calls, sent_cards),
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
+    )
+    durable = store.load(proposal["proposal_id"])
+    assert durable is not None
+    operation = durable["operation"]
+    store.decide_operation(
+        proposal["proposal_id"],
+        decision="confirm",
+        confirmation={
+            "provider": "lark",
+            "event_id": "evt_restart_simulation_fixture",
+            "principal": f"lark:{OPERATOR_ID}",
+            "message_id": operation["delivery"]["message_id"],
+            "chat_id": CHAT_ID,
+            "app_id": APP_ID,
+            "surface_kind": "im_message",
+            "interaction_kind": "card_button",
+            "confirmation_digest": operation["confirmation_digest"],
+            "card_digest": operation["delivery"]["card_digest"],
+            "confirmed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    def recovered_executor(claimed: dict[str, Any], *, runtime_root: Path):
+        assert runtime_root == runtime
+        claimed_operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0",
+            "outcome": "simulated_filled",
+            "projection_verified": True,
+            "operation_id": claimed_operation["operation_id"],
+            "payload_digest": claimed_operation["payload_digest"],
+            "claim_id": claimed_operation["claim"]["claim_id"],
+            "executor_revision": claimed_operation["executor_revision"],
+            "summary": "Recovered simulation completed without an external write.",
+            "simulation": True,
+            "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    monkeypatch.setattr(
+        goal_channel_operation, "_execute_claimed_operation", recovered_executor
+    )
+
+    first = recover_goal_channel_simulation_claims(
+        action_store_root=store.root,
+        runtime_root=runtime,
+    )
+    replay = recover_goal_channel_simulation_claims(
+        action_store_root=store.root,
+        runtime_root=runtime,
+    )
+
+    assert first == {"attempted": 1, "observed": 1, "failed": 0}
+    assert replay == {"attempted": 0, "observed": 0, "failed": 0}
+    readback = ChatActionStore(store.root).load(proposal["proposal_id"])
+    assert readback is not None
+    assert readback["operation"]["lifecycle_state"] == "outcome_observed"
+    assert readback["operation"]["outcome"]["external_write_performed"] is False
+
+
+def test_forwarded_or_unauthorized_card_cannot_claim(tmp_path: Path) -> None:
+    store, registry, runtime, binding, target = _fixture(tmp_path)
+    proposal = _prepare(store, registry)
+    calls: list[list[str]] = []
+    sent_cards: dict[str, dict[str, Any]] = {}
+    runner = _runner(calls, sent_cards)
+    deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"],
+        action_store_root=store.root,
+        runtime_root=runtime,
+        binding_path=binding,
+        target_path=target,
+        execute=True,
+        runner=runner,
+        executor_binding_resolver=lambda _parameters, _runtime: {
+            "revision": "simulator-v0"
+        },
+    )
+    durable = store.load(proposal["proposal_id"])
+    card = sent_cards[durable["operation"]["delivery"]["message_id"]]
+    event = _event(durable, card)
+
+    with pytest.raises(ActionConflictError, match="delivered request"):
+        handle_goal_channel_operation_callback(
+            {**event, "message_id": "om_forwarded_fixture"},
+            runtime_root=runtime,
+            action_store_root=store.root,
+            profile_app_id=APP_ID,
+            cli_bin="lark-cli",
+            profile="operation-bot",
+            runner=runner,
+            executor=lambda _proposal: {},
+        )
+    with pytest.raises(ActionConflictError, match="not authorized"):
+        handle_goal_channel_operation_callback(
+            {**event, "operator_id": "ou_untrusted_fixture"},
+            runtime_root=runtime,
+            action_store_root=store.root,
+            profile_app_id=APP_ID,
+            cli_bin="lark-cli",
+            profile="operation-bot",
+            runner=runner,
+            executor=lambda _proposal: {},
+        )

@@ -5,6 +5,7 @@ import {join} from "node:path";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import {sqliteAuthorityRuntime} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
@@ -341,12 +342,12 @@ test("cross-agent handoff: agent-a prepares, agent-b adopts", async t => {
   }
 });
 
-function nodeVersionAtLeast(major: number, minor: number): boolean {
-  const [maj, min] = process.versions.node.split(".").map(Number);
-  return maj > major || (maj === major && min >= minor);
+function sqliteSkipReason(): string | undefined {
+  try { sqliteAuthorityRuntime(); return undefined; }
+  catch { return "requires a WAL-fixed SQLite runtime with finalized statements"; }
 }
 
-test("cross-agent handoff works with SQLite authority", {skip: !nodeVersionAtLeast(22, 18) ? "requires Node 22.18+" : undefined}, async t => {
+test("cross-agent handoff works with SQLite authority", {skip: sqliteSkipReason()}, async t => {
   const root = await mkdtemp(join(tmpdir(), "loopx-continuation-sqlite-"));
   t.after(() => rm(root, {recursive: true, force: true}));
   // Set up SQLite authority

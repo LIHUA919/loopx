@@ -20,6 +20,7 @@ export function compileActionReviewPlan(proposal: TypedActionProposal): ActionRe
   if ((lifecycle && proposal.gate != null) || proposal.status === "gated") return held("gated", "authority_gate");
   if ((lifecycle && proposal.stale != null) || proposal.status === "stale") return held("refresh", "stale_proposal");
   if (proposal.status === "applied") return proposal.receipt?.projection_verified === true
+    && (proposal.action_kind !== "operation.execute" || proposal.operation?.result_delivery != null)
     ? held("completed", "readback_verified") : held("repair", "readback_unverified");
   if (proposal.status === "applying") return held("pending", "apply_pending");
   if (proposal.status === "failed" || proposal.error != null) return held("repair", "apply_failed");

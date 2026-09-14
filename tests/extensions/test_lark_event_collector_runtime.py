@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
+import time
 
+import pytest
+
+from loopx.extensions.lark import event_collector_runtime
+from loopx.extensions.lark.event_collector import plan_lark_event_collector
 from loopx.extensions.lark.event_collector_runtime import (
     _run_json_with_status,
     enrich_lark_event_reply_context,
     lark_event_requires_reply_context_lookup,
+    run_lark_event_collector,
 )
 
 
@@ -105,3 +112,139 @@ def test_reply_context_hydration_preserves_provider_sender_type() -> None:
 
     assert enriched["sender_type"] == "app"
     assert enriched["sender_id"] == "cli_fixture_bot"
+
+
+def _operation_callback_project(tmp_path: Path) -> tuple[Path, Path]:
+    project = tmp_path / "project"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    config_root = project / ".loopx" / "config" / "lark"
+    config_root.mkdir(parents=True)
+    (config_root / "inbox.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_inbox_config_v0",
+                "enabled": True,
+                "inbox_dir": ".loopx/inbox/operation",
+                "capture_scope": "configured_chat_all",
+                "reply": {
+                    "enabled": True,
+                    "sender_profile": "operation-bot",
+                    "sender_identity": "bot",
+                    "bot_display_name": "Operation Bot",
+                    "chat_id": "oc_operation_fixture",
+                    "placement_policy": "source_context",
+                    "editorial_style": "bullet_points_preferred",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    collector = config_root / "collector.json"
+    collector.write_text(
+        json.dumps(
+            {
+                "schema_version": "lark_event_collector_config_v1",
+                "enabled": True,
+                "service_name": "loopx-operation-fixture",
+                "event_key": "im.message.receive_v1",
+                "identity": "bot",
+                "supervisor": "systemd",
+                "consume_timeout": "30m",
+                "lark_cli_bin": "lark-cli",
+                "operation_callbacks": {"enabled": True},
+                "routes": [
+                    {
+                        "route_key": "operation",
+                        "chat_id": "oc_operation_fixture",
+                        "event_inbox_config": ".loopx/config/lark/inbox.json",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return project, collector
+
+
+def test_operation_callback_plan_requires_pinned_runtime(tmp_path: Path) -> None:
+    project, collector = _operation_callback_project(tmp_path)
+
+    plan = plan_lark_event_collector(project=project, config_path=collector)
+
+    assert plan["ok"] is False
+    assert plan["status"] == "pinned_runtime_required"
+    assert plan["operation_callbacks_enabled"] is True
+    assert plan["operation_callback_console_configuration_preflighted"] is False
+
+
+def test_collector_runs_independent_operation_callback_consumer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, collector = _operation_callback_project(tmp_path)
+    runtime_root = tmp_path / "runtime"
+    cli = tmp_path / "lark-cli-fixture"
+    cli.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "import time\n"
+        "event_key = sys.argv[sys.argv.index('consume') + 1]\n"
+        "if event_key == 'card.action.trigger':\n"
+        "    print(json.dumps({'type': event_key, 'chat_id': 'oc_operation_fixture'}), flush=True)\n"
+        "    print(json.dumps({'type': event_key, 'chat_id': 'oc_operation_fixture'}), flush=True)\n"
+        "else:\n"
+        "    time.sleep(0.2)\n",
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+    captured: list[dict[str, object]] = []
+
+    def handle(payload: dict[str, object], **kwargs: object) -> dict[str, object]:
+        captured.append({"payload": payload, **kwargs})
+        return {
+            "ok": len(captured) > 1,
+            "schema_version": "lark_operation_callback_receipt_v0",
+        }
+
+    monkeypatch.setattr(
+        event_collector_runtime,
+        "handle_goal_channel_operation_callback",
+        handle,
+    )
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert "whoami" in argv
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=0,
+            stdout=json.dumps({"appId": "cli_operation_fixture"}),
+            stderr="",
+        )
+
+    result = run_lark_event_collector(
+        project=project,
+        config_path=collector,
+        lark_cli_executable=str(cli),
+        runtime_root=runtime_root,
+        runner=runner,
+    )
+
+    deadline = time.monotonic() + 1
+    while not captured and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert result["operation_callback_listener_started"] is True
+    assert result["operation_callback_received_count"] == 2
+    assert result["operation_callback_verified_count"] == 1
+    assert captured[0]["runtime_root"] == runtime_root.resolve()
+    assert captured[0]["action_store_root"] == runtime_root / "chat" / "actions"
+    status = json.loads(
+        (
+            project / ".loopx/runtime/lark-collector/operation-callback-status.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["callback_delivery_verified"] is True
+    assert status["failed_callback_count"] == 1
+    assert status["listener_active"] is False

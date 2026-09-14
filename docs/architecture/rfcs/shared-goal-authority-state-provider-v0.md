@@ -1222,12 +1222,15 @@ not completion of lane L. Its head pointer is bounded and
 operation/cursor lookups are indexed, but it retains full historical projections
 and counts a covering index for continuity. That count grows with history;
 current/accessed-row digests are checked, not every historical payload per read.
-The published fixed-4-KiB microbenchmark lacks the 64-KiB matched profile, p99,
-RSS, logical-WAL-write, recovery and elapsed-soak evidence required above. It
-must not be reported as meeting the <=2 history-growth ratio or the ten-day
-target. Node 22.18 is the public minimum and current SQLite qualification runtime;
-preserve the Node 24 primary lane and Node 26 non-blocking forward probe until
-the supported profile changes explicitly.
+The qualification entrypoint now separates a small rehearsal from an explicit
+64-KiB 10k/100k storage axis, with p99/counts, cold CLI, RSS and a
+passed/failed/missing ledger. Unavailable logical/WAL traffic, full-domain,
+large-history recovery and elapsed-soak evidence remain holds; runner completion
+cannot claim the <=2 growth budget or ten-day qualification. See the
+[SQLite qualification commands](../../reference/sqlite-authority-store.md#reproduce-validation).
+The public minimum remains Node 22.18 for File; SQLite additionally requires
+synchronous finalization and the WAL-reset fix, with Node 22.22.3/SQLite 3.51.3
+as the reference. Node 24 stays primary and Node 26 stays a non-blocking probe.
 
 **Migration decision points.** Before the first existing-Goal cutover, freeze
 one exact source lineage/revision under the authority writer fence, import a

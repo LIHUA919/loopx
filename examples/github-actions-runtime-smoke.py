@@ -22,8 +22,8 @@ PRIMARY_NODE_VERSION = "24"
 MINIMUM_NODE_VERSION = "22.18.0"
 MINIMUM_NODE_ACTION_VERSION = MINIMUM_NODE_VERSION
 FORWARD_NODE_VERSION = "26"
-# SQLite conformance is qualified on the public minimum runtime.
-SQLITE_NODE_VERSION = MINIMUM_NODE_ACTION_VERSION
+# SQLite needs both synchronous statement finalization and the WAL-reset fix.
+SQLITE_NODE_VERSION = "22.22.3"
 
 
 def declared_major(reference: str) -> str:

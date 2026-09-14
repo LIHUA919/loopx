@@ -99,9 +99,12 @@ export function MachineConfigurationSettings() {
   const capabilities = useMemo(() => orderCapabilitiesForPresentation(
     inspection?.capability_catalog.capabilities ?? [], locale,
   ), [inspection, locale]);
+  const invalidNamespace = inspection?.invalid_namespaces[0];
   const selectedRaw = capabilities.find(
     (capability) => capability.capability_id === selectedCapabilityId,
-  ) ?? capabilities.find((capability) => canEditCapability(capability, "machine")) ?? capabilities[0];
+  ) ?? (invalidNamespace ? capabilities.find(
+    (capability) => capability.machine_namespace === invalidNamespace,
+  ) : undefined) ?? capabilities.find((capability) => canEditCapability(capability, "machine")) ?? capabilities[0];
   const selected = selectedRaw ? localizeCapability(selectedRaw, locale) : undefined;
   const selectedCurrent = currentConfiguration(inspection, selected);
   const configured = Boolean(selected?.machine_namespace && selectedCurrent);
@@ -290,6 +293,13 @@ export function MachineConfigurationSettings() {
         <p>{t("machine.liveDefaultDescription")}</p>
       </details>
 
+      {inspection?.status === "invalid" ? (
+        <section className="personal-machine-error" data-testid="machine-invalid-repair" role="alert">
+          <strong>{t("machine.invalidStoredConfiguration")}</strong>
+          <p>{t("machine.invalidStoredConfigurationDescription")}</p>
+        </section>
+      ) : null}
+
       <div className="personal-capability-layout">
         <CapabilityCatalogNavigation capabilities={capabilities} locale={locale} onSelect={setSelectedCapabilityId} scope="machine" selectedCapabilityId={selected.capability_id} t={t} />
 
@@ -323,6 +333,15 @@ export function MachineConfigurationSettings() {
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
               <div><strong>{t("machine.replanCadenceActivation")}</strong><p>{t("machine.replanCadenceActivationDescription")}</p></div>
+            </section>
+          ) : null}
+
+          {selected.capability_id === "pull_request_review" ? (
+            <section className="personal-capability-behavior-note">
+              <ShieldCheck aria-hidden size={18} />
+              <div><strong>{locale === "zh-CN" ? "只改变队列排序" : "Queue ordering only"}</strong><p>{locale === "zh-CN"
+                ? "默认先审阅其他开发者的 PR；选择 owner-first 才会优先当前已认证审阅者自己的 PR。此配置不会发布 review、写 Todo、push 或 merge。"
+                : "The default reviews other developers' PRs first; choose owner-first only when the authenticated reviewer's own PRs should lead. This setting never posts a review, writes Todos, pushes, or merges."}</p></div>
             </section>
           ) : null}
 

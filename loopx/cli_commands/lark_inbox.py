@@ -765,6 +765,7 @@ def handle_lark_inbox_command(
                 project=args.project,
                 config_path=args.config,
                 lark_cli_executable=args.lark_cli_executable,
+                runtime_root=runtime_root_arg,
                 node_executable=args.node_executable,
             )
         else:

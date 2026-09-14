@@ -4,8 +4,10 @@ import json
 import re
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,12 @@ from .event_inbox import (
     _event_attention_kind,
     ingest_lark_event_inbox,
 )
+from .goal_channel_operation import (
+    handle_goal_channel_operation_callback,
+    recover_goal_channel_operation_results,
+    recover_goal_channel_simulation_claims,
+)
+from .private_json import write_private_json_atomic
 
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -332,6 +340,137 @@ def _consume_argv(
     ]
 
 
+def _operation_callback_consume_argv(
+    config: Mapping[str, Any], command_prefix: Sequence[str]
+) -> list[str]:
+    chat_ids = [str(route["chat_id"]) for route in config["routes"]]
+    chat_filter = " or ".join(
+        f".chat_id == {json.dumps(chat_id, ensure_ascii=False)}" for chat_id in chat_ids
+    )
+    return [
+        *command_prefix,
+        "--profile",
+        str(config["profile"]),
+        "event",
+        "consume",
+        "card.action.trigger",
+        "--as",
+        str(config["identity"]),
+        "--timeout",
+        str(config["consume_timeout"]),
+        "--jq",
+        f"select({chat_filter})",
+        "--quiet",
+    ]
+
+
+def _operation_callback_status_path(project: str | Path) -> Path:
+    return (
+        Path(project).expanduser().resolve()
+        / ".loopx"
+        / "runtime"
+        / "lark-collector"
+        / "operation-callback-status.json"
+    )
+
+
+def _read_operation_callback_status(project: str | Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(
+            _operation_callback_status_path(project).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _write_operation_callback_status(
+    project: str | Path,
+    *,
+    listener_active: bool,
+    callback_delivery_verified: bool | None = None,
+    failure_kind: str | None = None,
+    consumer_returncode: int | None = None,
+    recovered_result_count_delta: int = 0,
+    result_delivery_failure_count_delta: int = 0,
+    recovered_simulation_count_delta: int = 0,
+    simulation_recovery_failure_count_delta: int = 0,
+) -> dict[str, Any]:
+    prior = _read_operation_callback_status(project)
+    now = datetime.now(timezone.utc).isoformat()
+    verified_count = int(prior.get("verified_callback_count") or 0)
+    failure_count = int(prior.get("failed_callback_count") or 0)
+    recovered_result_count = int(prior.get("recovered_result_count") or 0)
+    result_delivery_failure_count = int(prior.get("result_delivery_failure_count") or 0)
+    recovered_simulation_count = int(prior.get("recovered_simulation_count") or 0)
+    simulation_recovery_failure_count = int(
+        prior.get("simulation_recovery_failure_count") or 0
+    )
+    if callback_delivery_verified is True:
+        verified_count += 1
+    if failure_kind:
+        failure_count += 1
+    payload = {
+        "schema_version": "lark_operation_callback_listener_status_v0",
+        "listener_active": listener_active,
+        "callback_delivery_verified": bool(
+            prior.get("callback_delivery_verified") is True
+            or callback_delivery_verified is True
+        ),
+        "verified_callback_count": verified_count,
+        "failed_callback_count": failure_count,
+        "recovered_result_count": (
+            recovered_result_count + recovered_result_count_delta
+        ),
+        "result_delivery_failure_count": (
+            result_delivery_failure_count + result_delivery_failure_count_delta
+        ),
+        "recovered_simulation_count": (
+            recovered_simulation_count + recovered_simulation_count_delta
+        ),
+        "simulation_recovery_failure_count": (
+            simulation_recovery_failure_count + simulation_recovery_failure_count_delta
+        ),
+        "last_verified_callback_at": (
+            now
+            if callback_delivery_verified is True
+            else prior.get("last_verified_callback_at")
+        ),
+        "last_failure_kind": failure_kind or prior.get("last_failure_kind"),
+        "consumer_returncode": consumer_returncode,
+        "updated_at": now,
+        "private_content_returned": False,
+    }
+    write_private_json_atomic(_operation_callback_status_path(project), payload)
+    return payload
+
+
+def _operation_transport_runner(
+    runner: CommandRunner,
+) -> Callable[[list[str], Path | None, float | None], Mapping[str, Any]]:
+    def run(
+        argv: list[str], cwd: Path | None, timeout: float | None
+    ) -> Mapping[str, Any]:
+        try:
+            result = runner(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return {"returncode": 1, "stdout": "", "stderr": ""}
+        return {
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    return run
+
+
 def lark_event_requires_reply_context_lookup(
     event: Mapping[str, Any], *, bot_display_name: str
 ) -> bool:
@@ -445,6 +584,7 @@ def run_lark_event_collector(
     project: str | Path,
     config_path: str | Path,
     lark_cli_executable: str,
+    runtime_root: str | Path | None = None,
     node_executable: str | None = None,
     runner: CommandRunner = subprocess.run,
 ) -> dict[str, Any]:
@@ -457,18 +597,167 @@ def run_lark_event_collector(
         if node_executable
         else _executable_prefix(lark_cli_executable)
     )
+    callbacks_enabled = config["operation_callbacks"]["enabled"] is True
+    if callbacks_enabled and runtime_root is None:
+        raise ValueError(
+            "operation callback collection requires the pinned runtime root"
+        )
     routes_by_chat = {str(route["chat_id"]): route for route in config["routes"]}
+    resolved_runtime_root = (
+        Path(str(runtime_root)).expanduser().resolve()
+        if runtime_root is not None
+        else None
+    )
     process = subprocess.Popen(
         _consume_argv(config, command_prefix),
         stdout=subprocess.PIPE,
         text=True,
         bufsize=1,
     )
+    callback_process: subprocess.Popen[str] | None = None
+    callback_thread: threading.Thread | None = None
+    result_recovery_thread: threading.Thread | None = None
+    result_recovery_stop = threading.Event()
+    callback_stats = {
+        "received": 0,
+        "verified": 0,
+        "failed": 0,
+    }
+    result_recovery_stats = {"attempted": 0, "delivered": 0, "failed": 0}
+    simulation_recovery_stats = {"attempted": 0, "observed": 0, "failed": 0}
+    profile_app_id: str | None = None
+    profile_identity_checked = False
+    if callbacks_enabled:
+        profile_app_id = _profile_app_id(
+            runner=runner,
+            command_prefix=command_prefix,
+            profile=str(config["profile"]),
+        )
+        profile_identity_checked = True
+        callback_process = subprocess.Popen(
+            _operation_callback_consume_argv(config, command_prefix),
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        _write_operation_callback_status(
+            config["project"],
+            listener_active=True,
+        )
+
+        def consume_operation_callbacks() -> None:
+            assert callback_process is not None
+            assert callback_process.stdout is not None
+            transport_runner = _operation_transport_runner(runner)
+            for line in callback_process.stdout:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                callback_stats["received"] += 1
+                try:
+                    if profile_app_id is None:
+                        raise ValueError(
+                            "collector Bot application identity is unverified"
+                        )
+                    receipt = handle_goal_channel_operation_callback(
+                        payload,
+                        runtime_root=resolved_runtime_root,
+                        action_store_root=resolved_runtime_root / "chat" / "actions",
+                        profile_app_id=profile_app_id,
+                        cli_bin=lark_cli_executable,
+                        profile=str(config["profile"]),
+                        runner=transport_runner,
+                    )
+                    if receipt.get("ok") is not True:
+                        raise RuntimeError(
+                            "operation callback result delivery was not verified"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    callback_stats["failed"] += 1
+                    _write_operation_callback_status(
+                        config["project"],
+                        listener_active=True,
+                        failure_kind=type(exc).__name__,
+                    )
+                    continue
+                callback_stats["verified"] += 1
+                _write_operation_callback_status(
+                    config["project"],
+                    listener_active=True,
+                    callback_delivery_verified=True,
+                )
+
+        callback_thread = threading.Thread(
+            target=consume_operation_callbacks,
+            name="loopx-lark-operation-callbacks",
+            daemon=True,
+        )
+        callback_thread.start()
+
+        def recover_operation_results() -> None:
+            assert resolved_runtime_root is not None
+            while not result_recovery_stop.is_set():
+                try:
+                    simulation_result = recover_goal_channel_simulation_claims(
+                        action_store_root=resolved_runtime_root / "chat" / "actions",
+                        runtime_root=resolved_runtime_root,
+                    )
+                except Exception:  # noqa: BLE001
+                    simulation_result = {"attempted": 1, "observed": 0, "failed": 1}
+                try:
+                    result = recover_goal_channel_operation_results(
+                        action_store_root=resolved_runtime_root / "chat" / "actions",
+                        profile_app_id=str(profile_app_id or ""),
+                        allowed_chat_ids=set(routes_by_chat),
+                        cli_bin=lark_cli_executable,
+                        profile=str(config["profile"]),
+                        runner=_operation_transport_runner(runner),
+                    )
+                except Exception:  # noqa: BLE001
+                    result = {"attempted": 1, "delivered": 0, "failed": 1}
+                for key in simulation_recovery_stats:
+                    simulation_recovery_stats[key] += int(
+                        simulation_result.get(key) or 0
+                    )
+                for key in result_recovery_stats:
+                    result_recovery_stats[key] += int(result.get(key) or 0)
+                if (
+                    result.get("delivered")
+                    or result.get("failed")
+                    or simulation_result.get("observed")
+                    or simulation_result.get("failed")
+                ):
+                    _write_operation_callback_status(
+                        config["project"],
+                        listener_active=True,
+                        recovered_result_count_delta=int(result.get("delivered") or 0),
+                        result_delivery_failure_count_delta=int(
+                            result.get("failed") or 0
+                        ),
+                        recovered_simulation_count_delta=int(
+                            simulation_result.get("observed") or 0
+                        ),
+                        simulation_recovery_failure_count_delta=int(
+                            simulation_result.get("failed") or 0
+                        ),
+                    )
+                result_recovery_stop.wait(3)
+
+        result_recovery_thread = threading.Thread(
+            target=recover_operation_results,
+            name="loopx-lark-operation-result-recovery",
+            daemon=True,
+        )
+        result_recovery_thread.start()
     previous_handlers: dict[signal.Signals, Any] = {}
 
     def forward_signal(signum: int, _: object) -> None:
-        if process.poll() is None:
-            process.send_signal(signum)
+        for child in (process, callback_process):
+            if child is not None and child.poll() is None:
+                child.send_signal(signum)
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.signal(signum, forward_signal)
@@ -477,8 +766,6 @@ def run_lark_event_collector(
     reply_to_bot_count = 0
     self_message_skipped_count = 0
     routed_chat_ids: set[str] = set()
-    profile_app_id: str | None = None
-    profile_identity_checked = False
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -570,23 +857,47 @@ def run_lark_event_collector(
             reply_to_bot_count += int(enriched.get("reply_to_bot") is True)
         returncode = process.wait()
     finally:
-        if process.poll() is None:
-            process.terminate()
+        result_recovery_stop.set()
+        for child in (process, callback_process):
+            if child is None or child.poll() is not None:
+                continue
+            child.terminate()
             try:
-                process.wait(timeout=10)
+                child.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                child.kill()
+                child.wait()
+        if callback_thread is not None:
+            callback_thread.join(timeout=10)
+        if result_recovery_thread is not None:
+            result_recovery_thread.join(timeout=10)
+        if callbacks_enabled:
+            _write_operation_callback_status(
+                config["project"],
+                listener_active=False,
+                consumer_returncode=(
+                    callback_process.returncode
+                    if callback_process is not None
+                    else None
+                ),
+            )
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-    return {
-        "ok": returncode == 0,
+    callback_returncode = (
+        callback_process.returncode if callback_process is not None else 0
+    )
+    result = {
+        "ok": returncode == 0 and callback_returncode == 0,
         "schema_version": (
             "lark_event_collector_run_v1"
             if config["schema_version"] == "lark_event_collector_config_v1"
             else "lark_event_collector_run_v0"
         ),
-        "status": "completed" if returncode == 0 else "consumer_failed",
+        "status": (
+            "completed"
+            if returncode == 0 and callback_returncode == 0
+            else "consumer_failed"
+        ),
         "captured_count": captured_count,
         "route_count": len(config["routes"]),
         "routed_route_count": len(routed_chat_ids),
@@ -607,3 +918,33 @@ def run_lark_event_collector(
         "local_paths_returned": False,
         "private_content_returned": False,
     }
+    if callbacks_enabled:
+        result.update(
+            {
+                "operation_callback_listener_started": True,
+                "operation_callback_received_count": callback_stats["received"],
+                "operation_callback_verified_count": callback_stats["verified"],
+                "operation_callback_failure_count": callback_stats["failed"],
+                "operation_callback_consumer_succeeded": callback_returncode == 0,
+                "operation_callback_console_configuration_preflighted": False,
+                "operation_result_recovery_attempt_count": result_recovery_stats[
+                    "attempted"
+                ],
+                "operation_result_recovery_verified_count": result_recovery_stats[
+                    "delivered"
+                ],
+                "operation_result_recovery_failure_count": result_recovery_stats[
+                    "failed"
+                ],
+                "operation_simulation_recovery_attempt_count": simulation_recovery_stats[
+                    "attempted"
+                ],
+                "operation_simulation_recovery_observed_count": simulation_recovery_stats[
+                    "observed"
+                ],
+                "operation_simulation_recovery_failure_count": simulation_recovery_stats[
+                    "failed"
+                ],
+            }
+        )
+    return result

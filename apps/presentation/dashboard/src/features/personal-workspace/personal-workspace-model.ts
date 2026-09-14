@@ -21,6 +21,8 @@ export type WorkspaceHomeLane =
 
 export type WorkspaceAgentTodo = {
   resumeWhen?: string | null;
+  resumeReady?: boolean | null;
+  resumeReceiptId?: string | null;
   claimedBy?: string | null;
   dependencies?: string[];
   done: boolean;
@@ -213,7 +215,8 @@ export type WorkspaceActionPreview = {
     | "monitor.create"
     | "monitor.update"
     | "gate.resolve"
-    | "run.correct";
+    | "run.correct"
+    | "operation.execute";
   agentLabel?: string;
   fields: Array<{ key: string; label: string; value: string }>;
   goalId?: string;

@@ -7,9 +7,162 @@ import {
 } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+function operationProposal({ id, title, lifecycleState, status, resultDelivery = null }) {
+  const outcomeObserved = lifecycleState === "outcome_observed";
+  return {
+    schema_version: "loopx_chat_action_proposal_v1",
+    proposal_id: id,
+    action_kind: "operation.execute",
+    summary: title,
+    normalized_parameters: {
+      goal_id: "product-release",
+      payload: { private_fixture_marker: "must-not-render" },
+      authorized_principals: ["lark:ou_private_fixture"],
+      projection: {
+        schema_version: "loopx_operation_projection_v0",
+        title,
+        subtitle: "Synthetic finance simulator",
+        focus: "BUY 1 SYNTH @ 10 TEST",
+        fields: [
+          { label: "Order", value: "Limit · GTC" },
+          { label: "Maximum fee", value: "0.10 TEST" },
+        ],
+        warning: "Simulation only. No venue, signer, wallet, or transfer authority.",
+        simulated: true,
+      },
+    },
+    context: { kind: "goal", goal_id: "product-release" },
+    expected_state_fingerprint: "fixture-operation-r1",
+    permission_classification: "protected",
+    validation_evidence: ["synthetic operation fixture"],
+    available_transitions: [],
+    status,
+    receipt: outcomeObserved ? { projection_verified: true, receipt_id: `${id}-outcome` } : null,
+    stale: null,
+    gate: status === "gated" ? {
+      kind: "human_confirmation_required",
+      summary: "Confirm the exact request in the bound Feishu group.",
+      next_action: "Use the original non-forwardable group card.",
+    } : null,
+    operation: {
+      schema_version: "loopx_operation_envelope_v0",
+      lifecycle_state: lifecycleState,
+      operation_id: id,
+      confirmation_digest: "a".repeat(64),
+      payload_digest: "b".repeat(64),
+      projection_digest: "c".repeat(64),
+      expires_at: "2026-09-15T10:00:00Z",
+      delivery: { provider: "lark", message_id: `${id}-message` },
+      confirmation: outcomeObserved ? { provider: "lark" } : null,
+      claim: outcomeObserved ? { claim_id: `${id}-claim` } : null,
+      outcome: outcomeObserved ? {
+        schema_version: "loopx_operation_outcome_v0",
+        outcome: "simulated_filled",
+        projection_verified: true,
+        simulation: true,
+        external_write_performed: false,
+      } : null,
+      result_delivery: resultDelivery,
+    },
+    created_at: "2026-09-14T01:00:00Z",
+    updated_at: "2026-09-14T01:00:01Z",
+  };
+}
+
 export const typedActionsScenario = {
   id: "typed-actions",
   async run({ browser, collectCoverage, url }) {
+    const operationUi = await openWorkspacePage(browser, url, {
+      apiOptions: {
+        initialActionProposals: [
+          operationProposal({
+            id: "operation-awaiting-confirmation",
+            title: "Simulated order awaiting group confirmation",
+            lifecycleState: "awaiting_confirmation",
+            status: "gated",
+          }),
+          operationProposal({
+            id: "operation-result-pending",
+            title: "Simulation result awaiting card readback",
+            lifecycleState: "outcome_observed",
+            status: "applied",
+          }),
+          operationProposal({
+            id: "operation-result-verified",
+            title: "Verified simulated order result",
+            lifecycleState: "outcome_observed",
+            status: "applied",
+            resultDelivery: {
+              provider: "lark",
+              message_id: "operation-result-verified-message",
+              transport: "callback_update",
+            },
+          }),
+        ],
+      },
+    });
+    try {
+      const { page } = operationUi;
+      await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
+      await page.locator(".personal-goal-tabs button", { hasText: "Chat" }).click();
+
+      const pendingResult = page.locator(".personal-proposal-row", {
+        hasText: "Simulation result awaiting card readback",
+      });
+      try {
+        await pendingResult.waitFor({ state: "visible" });
+      } catch (error) {
+        throw new Error(`${error.message}; errors=${operationUi.errors.join(" | ")}; proposals=${await page.locator(".personal-proposal-row").allInnerTexts()}; body=${(await page.locator("body").innerText()).slice(0, 2000)}`);
+      }
+      if (!(await pendingResult.innerText()).includes("结果卡回传待恢复")) {
+        throw new Error("Pending result did not disclose unverified card delivery");
+      }
+      await pendingResult.click();
+      const pendingDrawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      await pendingDrawer.getByText("等待回传并核验原群卡片", { exact: true }).waitFor({ state: "visible" });
+      const pendingText = await pendingDrawer.innerText();
+      for (const privateValue of ["must-not-render", "ou_private_fixture"]) {
+        if (pendingText.includes(privateValue)) throw new Error(`Operation projection leaked ${privateValue}`);
+      }
+      if (await pendingDrawer.getByRole("button", { name: /重新生成|确认并应用|拒绝/ }).count()) {
+        throw new Error("Pending group operation exposed a local mutation control");
+      }
+      await page.screenshot({ path: resolve(outputDir, "operation-result-pending.png"), fullPage: false, animations: "disabled" });
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+
+      const verifiedResult = page.locator(".personal-proposal-row", {
+        hasText: "Verified simulated order result",
+      });
+      await verifiedResult.waitFor({ state: "visible" });
+      if (!(await verifiedResult.innerText()).includes("结果已核验")) {
+        throw new Error("Verified result lost its exact delivery status");
+      }
+      await verifiedResult.click();
+      const verifiedDrawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      await verifiedDrawer.getByText("已在原群卡片完成回读核验", { exact: true }).waitFor({ state: "visible" });
+      await page.screenshot({ path: resolve(outputDir, "operation-result-verified.png"), fullPage: false, animations: "disabled" });
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+
+      const gatedSummary = page.locator(".personal-gated-summary");
+      await gatedSummary.locator("summary").click();
+      const awaiting = gatedSummary.locator(".personal-proposal-row", {
+        hasText: "Simulated order awaiting group confirmation",
+      });
+      await awaiting.waitFor({ state: "visible" });
+      if (!(await awaiting.innerText()).includes("前往飞书群确认")) {
+        throw new Error("Awaiting operation did not route confirmation to Feishu");
+      }
+      await awaiting.click();
+      const awaitingDrawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      await awaitingDrawer.getByText("前往飞书群确认", { exact: true }).waitFor({ state: "visible" });
+      if (await awaitingDrawer.getByRole("button", { name: /确认并应用|拒绝|稍后处理|重新生成/ }).count()) {
+        throw new Error("Awaiting group operation exposed a local decision control");
+      }
+      await page.screenshot({ path: resolve(outputDir, "operation-awaiting-group-confirmation.png"), fullPage: false, animations: "disabled" });
+    } finally {
+      await operationUi.close();
+    }
+
     // Real Goal button -> typed preview -> compiler -> drawer/apply, with only
     // the service boundary controlled. No test computes the plan under review.
     for (const width of [1512, 390]) {
@@ -600,9 +753,16 @@ export const typedActionsScenario = {
         if (await card.getByText("待执行", { exact: true }).count()) throw new Error("Deferred task was labeled queued");
         await card.getByText(title, { exact: true }).click();
         const drawer = page.getByRole("dialog", { name: "Todo 详情" });
-        await drawer.getByText("等待恢复条件满足后重新评估", { exact: true }).waitFor();
+        await drawer.getByText(
+          conditionExpected ? "恢复条件已满足，等待生命周期重新规划" : "等待恢复条件满足后重新评估",
+          { exact: true },
+        ).waitFor();
         const condition = drawer.locator("dl > div", { has: page.getByText("恢复条件", { exact: true }) });
-        await condition.getByText(conditionExpected ? "todo_done:todo-progress-full" : "未设置", { exact: true }).waitFor();
+        await condition.getByText(conditionExpected ? "resume_at:2026-09-14T01:30:00Z" : "未设置", { exact: true }).waitFor();
+        if (conditionExpected) {
+          await drawer.getByText("可恢复", { exact: true }).waitFor();
+          await drawer.getByText("resume_at_browser_smoke_receipt", { exact: true }).waitFor();
+        }
         if (await drawer.getByText("待执行", { exact: true }).count()) throw new Error("Deferred drawer was labeled ready");
         await page.screenshot({ path: resolve(outputDir, `deferred-task-${conditionExpected ? "condition" : "missing"}.png`), fullPage: false, animations: "disabled" });
         await drawer.getByRole("button", { name: /关闭详情/ }).click();
@@ -869,9 +1029,14 @@ export const typedActionsScenario = {
         throw new Error("Initial machine selection must follow the visible catalog order, not the API source order");
       }
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable machine settings must not show internal editor-contract notices");
-      if (await machineCatalog.getByRole("button").count() !== goalCapabilityCatalog().length) {
-        throw new Error("Machine settings hid Goal-only capabilities from the shared catalog");
+      if (await machineCatalog.getByRole("button").count() !== goalCapabilityCatalog().length + 1) {
+        throw new Error("Machine settings did not combine machine-only and Goal capabilities in the shared catalog");
       }
+      await machineCatalog.getByRole("button", { name: /^管家 Runtime/ }).click();
+      await page.getByLabel(/^运行模式/u).waitFor({ state: "visible" });
+      await page.locator(".personal-capability-help > summary").click();
+      await page.getByText(/受保护操作仍单独校验/u).waitFor({ state: "visible" });
+      await page.screenshot({ path: resolve(outputDir, "manager-runtime-machine-profile.png"), fullPage: false, animations: "disabled" });
       const requestsBeforeReadOnly = api.machineConfigurationRequests.length;
       await machineCatalog.getByRole("button", { name: /^自适应子 Agent 容量/ }).click();
       await page.getByText(/此能力目前仅支持 Goal 级配置/u).waitFor({ state: "visible" });
@@ -968,6 +1133,44 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "machine-capability-mobile-zh-cn.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize(settingsViewport);
       await page.waitForTimeout(200);
+      await page.getByRole("button", { name: /Lark/ }).click();
+
+      api.machineInspectionStatus = "invalid";
+      api.invalidMachineNamespaces = ["manager_runtime"];
+      await page.getByRole("button", { name: /机器配置/ }).click();
+      const invalidRepair = page.getByTestId("machine-invalid-repair");
+      await invalidRepair.waitFor({ state: "visible" });
+      await page.getByRole("heading", { level: 2, name: "管家 Runtime", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      const managerRepairPreview = api.machineConfigurationRequests.findLast(
+        (item) => item.phase === "preview" && item.namespace === "manager_runtime",
+      );
+      if (managerRepairPreview?.namespace_configuration?.runtime_profile !== "restricted") {
+        throw new Error(`Invalid Manager runtime did not use its safe catalog replacement: ${JSON.stringify(managerRepairPreview)}`);
+      }
+      await page.getByRole("button", { name: "应用已审阅预览", exact: true }).click();
+      await invalidRepair.waitFor({ state: "detached" });
+      const managerRepairApply = api.machineConfigurationRequests.findLast(
+        (item) => item.phase === "apply" && item.namespace === "manager_runtime",
+      );
+      if (managerRepairApply?.expected_plan_revision !== "sha256:machine-plan") {
+        throw new Error("Invalid Manager runtime repair lost its reviewed plan revision");
+      }
+
+      await page.getByRole("button", { name: /Lark/ }).click();
+      api.machineInspectionStatus = "invalid";
+      api.invalidMachineNamespaces = ["periodic_report"];
+      await page.getByRole("button", { name: /机器配置/ }).click();
+      await invalidRepair.waitFor({ state: "visible" });
+      await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      const periodicRepairPreview = api.machineConfigurationRequests.findLast(
+        (item) => item.phase === "preview" && item.namespace === "periodic_report",
+      );
+      if (!periodicRepairPreview) throw new Error("Invalid sibling namespace did not open the Periodic reports repair path");
+      await page.getByRole("button", { name: "应用已审阅预览", exact: true }).click();
+      await invalidRepair.waitFor({ state: "detached" });
+      await page.screenshot({ path: resolve(outputDir, "machine-invalid-namespace-repaired.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("button", { name: /Lark/ }).click();
 
       await page.getByRole("button", { name: /连接 Lark App/ }).click();

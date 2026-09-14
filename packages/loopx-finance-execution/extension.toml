@@ -1,0 +1,16 @@
+schema_version = "loopx_extension_manifest_v0"
+id = "loopx-finance-execution"
+version = "0.1.0"
+requires_loopx_api = ">=1,<2"
+permissions = ["finance.operation.simulate"]
+
+[runtime]
+protocol = "finance_operation_executor_v0"
+entrypoint = "loopx-finance-execution"
+doctor_args = ["--doctor"]
+required_permissions = ["finance.operation.simulate"]
+timeout_seconds = 30
+
+[[implements]]
+capability_id = "human-confirmed-operation-executor"
+protocol = "finance_operation_executor_v0"

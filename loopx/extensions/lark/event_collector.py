@@ -36,6 +36,7 @@ SUPPORTED_EVENT_KEY = "im.message.receive_v1"
 MAX_ROUTE_COUNT = 50
 TURN_START_SYNC_MAX_LOOKBACK_SECONDS = 7 * 24 * 60 * 60
 TURN_START_SYNC_MAX_OVERLAP_SECONDS = 5 * 60
+OPERATION_CALLBACK_EVENT_KEY = "card.action.trigger"
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -130,6 +131,20 @@ def load_lark_event_collector_config(
     )
     turn_start_sync_overlap = raw_turn_start_sync.get("overlap_seconds", 5)
     turn_start_sync_page_size = raw_turn_start_sync.get("page_size", 50)
+    raw_operation_callbacks = payload.get("operation_callbacks")
+    if raw_operation_callbacks is not None and not isinstance(
+        raw_operation_callbacks, Mapping
+    ):
+        raise TypeError("collector operation_callbacks must be an object")
+    raw_operation_callbacks = (
+        raw_operation_callbacks if isinstance(raw_operation_callbacks, Mapping) else {}
+    )
+    unknown_operation_callback_fields = set(raw_operation_callbacks) - {"enabled"}
+    if unknown_operation_callback_fields:
+        raise ValueError("collector operation_callbacks contains unsupported fields")
+    operation_callbacks_enabled = raw_operation_callbacks.get("enabled") is True
+    if operation_callbacks_enabled and schema_version == CONFIG_SCHEMA_VERSION_V0:
+        raise ValueError("collector operation_callbacks requires config v1")
     for label, value, lower, upper in (
         (
             "initial_lookback_seconds",
@@ -307,6 +322,10 @@ def load_lark_event_collector_config(
             "overlap_seconds": turn_start_sync_overlap,
             "page_size": turn_start_sync_page_size,
         },
+        "operation_callbacks": {
+            "enabled": operation_callbacks_enabled,
+            "event_key": OPERATION_CALLBACK_EVENT_KEY,
+        },
         "routes": routes,
     }
 
@@ -421,6 +440,9 @@ def _plan(
     runtime_root: str | Path | None = None,
 ) -> tuple[dict[str, Any], list[str], bytes]:
     executable = shutil.which(str(config["lark_cli_bin"]))
+    operation_runtime_missing = bool(
+        config["operation_callbacks"]["enabled"] and runtime_root is None
+    )
     argv = _collector_argv(
         config,
         executable or str(config["lark_cli_bin"]),
@@ -429,10 +451,16 @@ def _plan(
     service_payload = _service_payload(config, argv)
     return (
         {
-            "ok": True,
+            "ok": not operation_runtime_missing,
             "schema_version": PLAN_SCHEMA_VERSION,
             "enabled": config["enabled"],
-            "status": "install_ready" if executable else "dependency_missing",
+            "status": (
+                "pinned_runtime_required"
+                if operation_runtime_missing
+                else "install_ready"
+                if executable
+                else "dependency_missing"
+            ),
             "service_name": config["service_name"],
             "supervisor": config["supervisor"],
             "event_key": config["event_key"],
@@ -446,9 +474,18 @@ def _plan(
             ),
             "route_count": len(config["routes"]),
             "multi_chat_routing": len(config["routes"]) > 1,
+            "operation_callbacks_enabled": config["operation_callbacks"]["enabled"],
+            "operation_callback_event_key": (
+                config["operation_callbacks"]["event_key"]
+                if config["operation_callbacks"]["enabled"]
+                else None
+            ),
+            "operation_callback_console_configuration_preflighted": False,
             "lark_cli_available": executable is not None,
             "install_hint": (
-                None
+                "Pass the pinned LoopX runtime root for operation callbacks."
+                if operation_runtime_missing
+                else None
                 if executable
                 else "Install and configure lark-cli, then rerun the collector plan."
             ),
@@ -498,6 +535,8 @@ def install_lark_event_collector(
     plan, _, _ = _plan(config, runtime_root=runtime_root)
     if not config["enabled"]:
         raise ValueError("cannot install a disabled lark collector")
+    if plan["ok"] is not True:
+        return {**plan, "schema_version": INSTALL_SCHEMA_VERSION, "execute": execute}
     if not plan["lark_cli_available"]:
         return {**plan, "schema_version": INSTALL_SCHEMA_VERSION, "execute": execute}
     executable = shutil.which(str(config["lark_cli_bin"]))
@@ -615,6 +654,23 @@ def inspect_lark_event_collector(
         config["supervisor"] != "launchd" or "state = running" in observed.stdout
     )
     installed = service_path.is_file()
+    callback_status_path = (
+        Path(config["project"])
+        / ".loopx"
+        / "runtime"
+        / "lark-collector"
+        / "operation-callback-status.json"
+    )
+    callback_status: Mapping[str, Any] = {}
+    try:
+        raw_callback_status = json.loads(
+            callback_status_path.read_text(encoding="utf-8")
+        )
+        if isinstance(raw_callback_status, Mapping):
+            callback_status = raw_callback_status
+    except (OSError, json.JSONDecodeError):
+        pass
+    callbacks_enabled = config["operation_callbacks"]["enabled"] is True
     healthy = bool(
         config["enabled"]
         and plan["lark_cli_available"]
@@ -646,6 +702,23 @@ def inspect_lark_event_collector(
         "all_routes_real_event_evidence_present": (
             routes_with_event_evidence == len(config["routes"])
         ),
+        "operation_callbacks_enabled": callbacks_enabled,
+        "operation_callback_listener_active": bool(
+            callbacks_enabled
+            and active
+            and callback_status.get("listener_active") is True
+        ),
+        "operation_callback_delivery_verified": bool(
+            callbacks_enabled
+            and callback_status.get("callback_delivery_verified") is True
+        ),
+        "operation_callback_verified_count": int(
+            callback_status.get("verified_callback_count") or 0
+        ),
+        "operation_callback_last_evidence_at": callback_status.get(
+            "last_verified_callback_at"
+        ),
+        "operation_callback_console_configuration_preflighted": False,
         "thread_complete": all(
             route["inbox"]["thread_complete"] for route in config["routes"]
         ),

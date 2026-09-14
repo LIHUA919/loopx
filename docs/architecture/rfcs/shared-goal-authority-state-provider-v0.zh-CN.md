@@ -961,10 +961,14 @@ fencing/export 演练与 maintainer review 都通过才可晋升。发布紧凑�
 仍需 profile 资格化与晋级，不代表 lane L 完成。
 其 head pointer 有界，operation/cursor 查询有索引，但保留完整历史 projection，连续性
 校验还会统计覆盖索引，因此该成本随历史增长。它验证当前及访问到的 row digest，
-不是每次读取都审计全部历史 payload。已发布的固定 4 KiB 微基准尚缺上述 64 KiB 匹配
-profile、p99、RSS、逻辑 WAL 写入、恢复及自然时间 soak 证据，不能宣称满足 <=2 的历史
-增长比值或十天目标。Node 22.18 是公开最低版本，也是当前 SQLite 资格化 runtime；支持
-profile 明确变化前，继续保留 Node 24 主 runtime 与 Node 26 非阻塞 forward probe。
+不是每次读取都审计全部历史 payload。资格入口现在区分小型 rehearsal 与显式
+64 KiB 10k/100k 存储轴，记录 p99/样本数、cold CLI、RSS 和 passed/failed/missing
+账本。逻辑/WAL 流量、完整领域负载、大历史恢复和自然时间 soak 的缺口仍阻止晋升，
+工具跑完不等于通过 <=2 增长预算或十天资格。参见
+[SQLite 验证命令](../../reference/sqlite-authority-store.md#reproduce-validation)。
+公开 Node 最低版本 22.18 继续用于 File；SQLite 另需同步 finalization 与 WAL-reset
+修复，参考组合为 Node 22.22.3／SQLite 3.51.3。Node 24 主 runtime 与 Node 26
+非阻塞 forward probe 保持原合同。
 
 **迁移决策点。** 首次迁移已有 Goal 前，先在 authority writer fence 下冻结精确的源
 lineage/revision，导入完整权威快照与保留证明，并独立比较原始 receipt 字段、operation/

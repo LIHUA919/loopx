@@ -241,18 +241,36 @@ independently idempotent messages and each one must pass exact readback. Before
 each write, the provider scans the complete Goal Channel history from the frozen
 generation time and reuses an exact card, chat, and Bot-sender match. An incomplete
 history read fails closed; the provider's stable one-hour idempotency key covers
-the remaining concurrent-send race. The command does not accept a chat, profile,
-App identity, or sender override. Instead,
-the Lark extension resolves the current Goal's local-private Goal Channel
-binding and requires `mode=project_bot`, Bot sender identity, a non-default
-profile, exact Bot App id and display name, and an enabled Lark channel.
+the remaining concurrent-send race. That provider key is versioned and bound to
+the final announcement kind, title, body, and footer, so a renderer change after
+an interrupted send cannot return an older, semantically different card under
+the new retry. The command does not accept a chat, profile, App identity, or
+sender override. Its route authority has two explicit, non-interchangeable
+forms. When the Goal has a durable Goal Channel binding, that binding's
+`target_ref` must match the effective periodic-report subscription. When no
+Goal Channel binding exists, an enabled effective `periodic_report`
+subscription with an explicit `route_ref` is the independent standing
+authority, and the named target registry entry supplies the project-Bot route.
+This unbound path constructs only an adapter-local resolved route; it neither
+creates a durable Goal Channel binding nor authorizes `operation.execute` or
+another Goal Channel producer. Both forms require `mode=project_bot`, Bot
+sender identity, a non-default profile, exact Bot App id and display name, and
+an enabled Lark channel.
 Before sending, it live-verifies that the bound profile authenticates as the
 same Bot App and can reach the same chat. After sending, it reads back the
 exact interactive card from that chat and requires the provider-native message
 sender to be an `app` whose id equals the bound Bot App id. Revalidating the
 profile alone is not sender proof.
-Missing bindings, local-user mode, identity drift, or incomplete readback fail
-closed; no environment-default or user-identity fallback exists.
+Missing route authority, local-user mode, identity drift, or incomplete
+readback fail closed; no environment-default or user-identity fallback exists.
+
+路由授权只有两种显式且不可混用的来源：若 Goal 已存在持久化 Goal Channel
+binding，其 `target_ref` 必须与当前生效的周期报告订阅一致；若不存在 binding，
+则必须由已启用且显式配置 `route_ref` 的 `periodic_report` 订阅提供独立的持续授权，
+并从具名 target registry 解析 project Bot 路由。后一条路径只生成适配器内存中的
+resolved route，不会写入 Goal Channel binding，也不能授权 `operation.execute` 或
+其他 Goal Channel producer。缺少上述任一授权、使用本地用户身份、身份漂移或
+读回不完整时都必须在写入前关闭失败；环境变量默认路由和用户身份都不能兜底。
 
 The governed pending-intent consumer persists the normalized generation bundle
 and writes one runnable, agent-owned delivery successor. The current effective

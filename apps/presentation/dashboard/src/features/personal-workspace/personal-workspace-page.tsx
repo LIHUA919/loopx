@@ -17,6 +17,7 @@ import {
   transitionTypedAction,
   type GoalRepositoryContext,
   type LarkGoalConnection,
+  type ManagerRuntimeSessionReadback,
   type TypedActionProposal,
 } from "../../data/chat";
 
@@ -484,6 +485,46 @@ function proposalFields(parameters: Record<string, unknown>, t: WorkspaceTransla
     }));
 }
 
+function operationProposalFields(proposal: TypedActionProposal, t: WorkspaceTranslate) {
+  const projection = proposal.normalized_parameters.projection;
+  const safeProjection = projection && typeof projection === "object"
+    ? projection as Record<string, unknown>
+    : {};
+  const projectedFields = Array.isArray(safeProjection.fields)
+    ? safeProjection.fields.flatMap((field, index) => {
+      if (!field || typeof field !== "object") return [];
+      const item = field as Record<string, unknown>;
+      if (typeof item.label !== "string" || typeof item.value !== "string") return [];
+      return [{ key: `projection:${index}`, label: item.label, value: item.value }];
+    }).slice(0, 8)
+    : [];
+  return [
+    {
+      key: "operation_state",
+      label: t("proposal.field.operationState"),
+      value: proposal.operation?.lifecycle_state ?? proposal.status,
+    },
+    ...(proposal.operation?.lifecycle_state === "outcome_observed" ? [{
+      key: "result_delivery",
+      label: t("proposal.field.resultDelivery"),
+      value: proposal.operation.result_delivery
+        ? t("proposal.resultDelivery.verified")
+        : t("proposal.resultDelivery.pending"),
+    }] : []),
+    ...projectedFields,
+    ...(typeof safeProjection.warning === "string" ? [{
+      key: "warning",
+      label: t("proposal.field.confirmationBoundary"),
+      value: safeProjection.warning,
+    }] : []),
+    ...(proposal.operation?.expires_at ? [{
+      key: "expires_at",
+      label: t("proposal.field.expiresAt"),
+      value: proposal.operation.expires_at,
+    }] : []),
+  ].slice(0, 10);
+}
+
 type GoalLifecycleOperation = "stop" | "resume" | "delete";
 
 type GoalLifecycleProjection = {
@@ -512,7 +553,14 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
   const target = typeof proposal.normalized_parameters.target === "string"
     ? proposal.normalized_parameters.target
     : "";
-  const localizedSummary = proposal.action_kind === "goal.create"
+  const operationProjection = proposal.normalized_parameters.projection;
+  const operationTitle = operationProjection && typeof operationProjection === "object"
+    && typeof (operationProjection as Record<string, unknown>).title === "string"
+    ? String((operationProjection as Record<string, unknown>).title)
+    : proposal.summary;
+  const localizedSummary = proposal.action_kind === "operation.execute"
+    ? operationTitle
+    : proposal.action_kind === "goal.create"
     ? t("proposal.summary.goalCreate", { title })
     : proposal.action_kind === "heartbeat.bind"
       ? t("proposal.summary.heartbeat")
@@ -528,9 +576,13 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
   return {
     actionKind: proposal.action_kind,
     reviewPlan,
-    fields: proposalFields(proposal.normalized_parameters, t),
+    fields: proposal.action_kind === "operation.execute"
+      ? operationProposalFields(proposal, t)
+      : proposalFields(proposal.normalized_parameters, t),
     goalId: typeof proposal.normalized_parameters.goal_id === "string" ? proposal.normalized_parameters.goal_id : undefined,
-    impact: proposal.action_kind === "goal.create"
+    impact: proposal.action_kind === "operation.execute"
+      ? t("proposal.impact.operation")
+      : proposal.action_kind === "goal.create"
       ? t("proposal.impact.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.impact.lifecycleStop")
@@ -548,7 +600,13 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       nextAction: typeof proposal.gate.next_action === "string" ? proposal.gate.next_action : undefined,
       summary: String(proposal.gate.summary ?? t("proposal.gate.default")),
     } : undefined,
-    primaryLabel: proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
+    primaryLabel: proposal.action_kind === "operation.execute"
+      ? proposal.operation?.lifecycle_state === "outcome_observed"
+        ? proposal.operation.result_delivery
+          ? t("proposal.primary.operationResultVerified")
+          : t("proposal.primary.operationResultPending")
+        : t("proposal.primary.operationGroup")
+      : proposal.action_kind === "goal.create" ? t("proposal.primary.goalCreate")
       : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "stop"
         ? t("proposal.primary.lifecycleStop")
         : proposal.action_kind === "goal.lifecycle" && lifecycleOperation === "delete"
@@ -558,7 +616,11 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposal.action_kind === "todo.create" && proposal.normalized_parameters.start_execution === true
         ? t("proposal.primary.todoStart")
         : t("proposal.primary.apply"),
-    status: proposal.status === "applied" && reviewPlan.interaction !== "completed" ? "error" : proposalStatus(proposal.status),
+    status: proposal.status === "applied"
+      && proposal.action_kind !== "operation.execute"
+      && reviewPlan.interaction !== "completed"
+      ? "error"
+      : proposalStatus(proposal.status),
     title: localizedSummary,
   };
 }
@@ -689,6 +751,7 @@ export function PersonalWorkspacePage({
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
+  managerRuntime,
   model,
   readOnly = false,
   selectedAgentId: controlledAgentId,
@@ -698,6 +761,7 @@ export function PersonalWorkspacePage({
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
+  managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
   ownerLabel?: string;
   readOnly?: boolean;
@@ -997,7 +1061,8 @@ export function PersonalWorkspacePage({
       .then((stored) => {
         if (cancelled) return;
         const restored = Object.fromEntries(stored
-          .filter((proposal) => ["ready", "gated", "deferred", "applying"].includes(proposal.status))
+          .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
+            || (proposal.action_kind === "operation.execute" && proposal.status === "applied"))
           .map((proposal) => {
             const projected = workspaceProposal(proposal, t);
             return [projected.previewId, projected];
@@ -1763,6 +1828,7 @@ export function PersonalWorkspacePage({
           <ChannelHeader
             agents={agents}
             managerChatOpen={managerChatOpen}
+            managerRuntime={managerRuntime}
             mobileNavigationOpen={mobileSidebarOpen}
             onOpenGoalCapabilities={selectedGoal ? () => setSelection({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenGoalDetail={selectedGoal && !selectedGoal.loadState ? () => setSelection({ item: selectedGoal, kind: "goal" }) : undefined}

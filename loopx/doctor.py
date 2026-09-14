@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import Enum
 from importlib.metadata import PackageNotFoundError, distribution
 import json
 import os
 import re
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, doctor_git
 from .command_invocation import resolve_command_path
 from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
@@ -79,14 +77,6 @@ REQUIRED_INSTALLED_SKILL_PHRASES = {
         "Repair at the lowest durable layer",
     ),
 }
-
-
-class GitRevisionRelation(str, Enum):
-    SAME = "same"
-    INSTALLED_AHEAD = "installed_ahead"
-    INSTALLED_BEHIND = "installed_behind"
-    DIVERGED = "diverged"
-    UNKNOWN = "unknown"
 
 
 def _powershell_literal(value: str | Path) -> str:
@@ -256,187 +246,6 @@ def short_revision(value: Any, *, length: int = 12) -> str | None:
     return text[:length] if len(text) > length else text
 
 
-def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
-    if root is None:
-        return {
-            "root": None,
-            "git_commit": None,
-            "git_ref": None,
-            "git_dirty": None,
-        }
-    try:
-        source_root = root.expanduser().resolve()
-    except OSError:
-        source_root = root.expanduser()
-    if not source_root.exists():
-        return {
-            "root": str(source_root),
-            "git_commit": None,
-            "git_ref": None,
-            "git_dirty": None,
-        }
-
-    def _run(args: list[str]) -> str | None:
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(source_root), *args],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            return None
-        if result.returncode != 0:
-            return None
-        return result.stdout.strip() or None
-
-    commit = _run(["rev-parse", "HEAD"])
-    branch = _run(["symbolic-ref", "--quiet", "--short", "HEAD"])
-    tag = _run(["describe", "--tags", "--exact-match"])
-    status = _run(["status", "--porcelain"])
-    dirty = None if commit is None and branch is None and tag is None and status is None else bool(status)
-    return {
-        "root": str(source_root),
-        "git_commit": commit,
-        "git_ref": branch or tag,
-        "git_dirty": dirty,
-    }
-
-
-def git_revision_relation(
-    root: Path | None,
-    *,
-    installed_commit: Any,
-    comparison_commit: Any,
-) -> GitRevisionRelation:
-    """Classify installed vs comparison revisions in one Git object graph."""
-    if not isinstance(installed_commit, str) or not installed_commit.strip():
-        return GitRevisionRelation.UNKNOWN
-    if not isinstance(comparison_commit, str) or not comparison_commit.strip():
-        return GitRevisionRelation.UNKNOWN
-    installed_commit = installed_commit.strip()
-    comparison_commit = comparison_commit.strip()
-    if installed_commit == comparison_commit:
-        return GitRevisionRelation.SAME
-    if root is None:
-        return GitRevisionRelation.UNKNOWN
-
-    try:
-        source_root = root.expanduser().resolve()
-    except OSError:
-        source_root = root.expanduser()
-    if not source_root.exists():
-        return GitRevisionRelation.UNKNOWN
-
-    def _is_ancestor(ancestor: str, descendant: str) -> bool | None:
-        try:
-            result = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(source_root),
-                    "merge-base",
-                    "--is-ancestor",
-                    ancestor,
-                    descendant,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            return None
-        if result.returncode == 0:
-            return True
-        if result.returncode == 1:
-            return False
-        return None
-
-    comparison_is_ancestor = _is_ancestor(comparison_commit, installed_commit)
-    installed_is_ancestor = _is_ancestor(installed_commit, comparison_commit)
-    if comparison_is_ancestor is None or installed_is_ancestor is None:
-        return GitRevisionRelation.UNKNOWN
-    if comparison_is_ancestor:
-        return GitRevisionRelation.INSTALLED_AHEAD
-    if installed_is_ancestor:
-        return GitRevisionRelation.INSTALLED_BEHIND
-    return GitRevisionRelation.DIVERGED
-
-
-def _github_repository_from_remote_url(value: Any) -> str | None:
-    text = str(value or "").strip().removesuffix(".git")
-    match = re.search(r"github\.com(?::|/)([^/\s]+/[^/\s]+)$", text, flags=re.IGNORECASE)
-    return match.group(1).lower() if match else None
-
-
-def trusted_release_ref_for_root(
-    root: Path | None,
-    *,
-    repository: Any,
-    ref: Any,
-) -> dict[str, Any] | None:
-    """Resolve the manifest repository's fetched ref without trusting canary HEAD."""
-    expected_repository = _github_repository_from_remote_url(repository) or (
-        str(repository or "").strip().removesuffix(".git").lower()
-    )
-    expected_ref = str(ref or "").strip().removeprefix("refs/heads/")
-    if root is None or not expected_repository or not expected_ref:
-        return None
-    try:
-        source_root = root.expanduser().resolve()
-    except OSError:
-        source_root = root.expanduser()
-    if not source_root.exists():
-        return None
-
-    try:
-        remotes = subprocess.run(
-            ["git", "-C", str(source_root), "remote"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    if remotes.returncode != 0:
-        return None
-
-    for remote in remotes.stdout.splitlines():
-        remote = remote.strip()
-        if not remote:
-            continue
-        try:
-            remote_url = subprocess.run(
-                ["git", "-C", str(source_root), "remote", "get-url", remote],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            continue
-        if (
-            remote_url.returncode != 0
-            or _github_repository_from_remote_url(remote_url.stdout) != expected_repository
-        ):
-            continue
-        trusted_ref = f"refs/remotes/{remote}/{expected_ref}"
-        resolved = subprocess.run(
-            ["git", "-C", str(source_root), "rev-parse", "--verify", f"{trusted_ref}^{{commit}}"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        commit = resolved.stdout.strip() if resolved.returncode == 0 else ""
-        if commit:
-            return {
-                "label": f"{expected_repository}@{expected_ref}",
-                "root": str(source_root),
-                "git_commit": commit,
-                "git_ref": f"{remote}/{expected_ref}",
-            }
-    return None
-
-
 def build_install_freshness(
     *,
     command_path: Path | None,
@@ -571,7 +380,7 @@ def build_install_freshness(
     )
     source_commit_is_behind = (
         manifest_source_matches_freshness_source is False
-        and freshness_revision_relation == GitRevisionRelation.INSTALLED_BEHIND
+        and freshness_revision_relation == doctor_git.GitRevisionRelation.INSTALLED_BEHIND
     )
 
     if (
@@ -650,7 +459,7 @@ def build_install_freshness(
         "manifest_source_matches_comparison": manifest_source_matches_comparison,
         "manifest_source_comparison_relation": (
             comparison_revision_relation.value
-            if isinstance(comparison_revision_relation, GitRevisionRelation)
+            if isinstance(comparison_revision_relation, doctor_git.GitRevisionRelation)
             else comparison_revision_relation
         ),
         "freshness_source_label": freshness_source_label if trusted else None,
@@ -661,7 +470,7 @@ def build_install_freshness(
         "manifest_source_matches_freshness_source": manifest_source_matches_freshness_source,
         "manifest_source_freshness_relation": (
             freshness_revision_relation.value
-            if isinstance(freshness_revision_relation, GitRevisionRelation)
+            if isinstance(freshness_revision_relation, doctor_git.GitRevisionRelation)
             else freshness_revision_relation
         ),
         "manifest_archive_sha256": manifest_source.get("archive_sha256"),
@@ -936,7 +745,9 @@ def collect_doctor(
     release_manifest = load_release_manifest(release_root)
     comparison_source = None
     if canary_realpath and command_realpath and canary_realpath != command_realpath:
-        comparison_source = git_metadata_for_root(command_release_root(canary_realpath))
+        comparison_source = doctor_git.git_metadata_for_root(
+            command_release_root(canary_realpath)
+        )
         comparison_source["label"] = "loopx-canary"
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
     local_bin = user_local_bin()
@@ -971,12 +782,12 @@ def collect_doctor(
     )
     if comparison_source:
         comparison_root = comparison_source.get("root")
-        comparison_source["revision_relation"] = git_revision_relation(
+        comparison_source["revision_relation"] = doctor_git.git_revision_relation(
             Path(str(comparison_root)) if comparison_root else None,
             installed_commit=release_manifest_source.get("git_commit"),
             comparison_commit=comparison_source.get("git_commit"),
         )
-    freshness_source = trusted_release_ref_for_root(
+    freshness_source = doctor_git.trusted_release_ref_for_root(
         Path(str(comparison_source.get("root")))
         if comparison_source and comparison_source.get("root")
         else None,
@@ -984,7 +795,7 @@ def collect_doctor(
         ref=release_manifest_source.get("ref"),
     )
     if freshness_source:
-        freshness_source["revision_relation"] = git_revision_relation(
+        freshness_source["revision_relation"] = doctor_git.git_revision_relation(
             Path(str(freshness_source.get("root"))),
             installed_commit=release_manifest_source.get("git_commit"),
             comparison_commit=freshness_source.get("git_commit"),

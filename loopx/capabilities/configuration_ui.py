@@ -113,6 +113,24 @@ def capability_configuration_editor(
                 ),
             ],
         },
+        "manager_runtime": {
+            "supported_scopes": ["machine"],
+            "writable_scopes": ["machine"],
+            "fields": [
+                _field(
+                    "runtime_profile",
+                    "Runtime profile",
+                    "select",
+                    options=["restricted", "trusted_owner"],
+                    required=True,
+                    description=(
+                        "Restricted uses only the scoped LoopX read model. Trusted owner "
+                        "enables normal host tools under this persistent machine grant; "
+                        "protected operations keep their own authority checks."
+                    ),
+                ),
+            ],
+        },
         "multi_subagent": {
             "supported_scopes": ["goal"],
             "writable_scopes": ["goal"],
@@ -182,6 +200,23 @@ def capability_configuration_editor(
                 _field("enabled", "Enabled", "boolean"),
                 _field("safe_fix", "Allow one bounded safe-fix pass", "boolean"),
                 _field("strict_receipt", "Require an exact-diff receipt", "boolean"),
+            ],
+        },
+        "pull_request_review": {
+            "supported_scopes": ["machine"],
+            "writable_scopes": ["machine"],
+            "fields": [
+                _field(
+                    "review_priority",
+                    "Review priority",
+                    "select",
+                    options=("other-developers-first", "owner-first"),
+                    required=True,
+                    description=(
+                        "Default ranks actionable PRs whose author differs from the "
+                        "authenticated reviewer before the reviewer's own PRs."
+                    ),
+                ),
             ],
         },
         "local_authority_shadow": {
@@ -339,6 +374,8 @@ def _machine_catalog_entry(
         entry["machine_current"] = deepcopy(namespace["current"])
     if isinstance(namespace.get("configuration_template"), Mapping):
         entry["default"] = deepcopy(namespace["configuration_template"])
+    if isinstance(namespace.get("documentation"), Mapping):
+        entry["documentation"] = deepcopy(namespace["documentation"])
     return capability_id, entry
 
 
