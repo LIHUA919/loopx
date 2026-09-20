@@ -1280,11 +1280,19 @@ budget, one checkpoint history read and 1,048,576 retained projection bytes plus
 This is still not completion of lane L. File and NoKV continue to retain and
 decode their complete journal on every load, so bounded recovery is a property
 of the embedded candidate rather than cross-provider parity; the SQLite profile
-also still retains receipts and events without pruning. Unavailable logical/WAL
-traffic and the <=15x cumulative write-growth budget, 1 MiB and 300k headroom,
-full-domain workload, large-history recovery, fenced backup/restore, supported
-upgrade/rollback, OS/runtime coverage and the >=10-day elapsed soak remain
-holds, and runner completion cannot claim them. See the
+also still retains receipts and events without pruning. The split
+storage-traffic measurements landed with the matched-capacity entrypoint
+(#4224 batch 1): the formal 64 KiB 10k/100k profile on the reference runtime
+(Node 22.22.3/SQLite 3.51.3, declared local host) measures logical writes at
+70,326 vs 70,324 bytes per commit, WAL traffic at 22,611 vs 22,623 bytes per
+commit (exact frame counts over pinned-read-mark windows), and an app-observed
+lock-wait p95 of 244 ms under a 200 ms held write lock — cumulative growth
+ratios of 10.00x and 10.01x against the <=15x budget, with whole-run WAL
+totals, pure busy-handler time and physical device writes still unmeasured.
+Remaining holds: 1 MiB and 300k headroom, full-domain workload,
+large-history recovery, fenced backup/restore, supported upgrade/rollback,
+OS/runtime coverage and the >=10-day elapsed soak; runner completion cannot
+claim them. See the
 [SQLite qualification commands](../../reference/sqlite-authority-store.md#reproduce-validation).
 The public minimum remains Node 22.18 for File; SQLite additionally requires
 synchronous finalization and the WAL-reset fix, with Node 22.22.3/SQLite 3.51.3
