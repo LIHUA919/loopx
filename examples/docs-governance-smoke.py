@@ -14,6 +14,8 @@ DOCS = REPO_ROOT / "docs"
 ROOT_DOCS = {
     "README.md",
     "architecture.md",
+    "community.md",
+    "community.zh-CN.md",
     "heartbeat-automation-prompt.md",
     "index.md",
     "integration.md",
@@ -79,12 +81,17 @@ MOVED_PATHS = {
 
 # docs/index.md .md targets that stay outside mkdocs nav on purpose.
 # Prefer fixing mkdocs.yaml nav for public hosted entry points instead.
-DOCS_INDEX_NAV_ALLOWLIST: dict[str, str] = {}
+DOCS_INDEX_NAV_ALLOWLIST: dict[str, str] = {
+    "community.md": "hosted community entry linked below the first screen; top-nav promotion remains owner-reviewed",
+    "community.zh-CN.md": "zh locale sibling for the hosted community entry",
+}
 
 # docs/README.md catalog .md targets that stay outside mkdocs top nav on purpose.
 DOCS_CATALOG_NAV_ALLOWLIST = {
     "architecture/README.md": "architecture tree index; RFCs linked from Reference nav",
     "archive/README.md": "excluded from hosted site via exclude_docs",
+    "community.md": "community entry linked from the hosted index below the first screen",
+    "community.zh-CN.md": "zh locale sibling for the community entry",
     "community/open-strategy-reviews.md": "community process; catalog-only entry",
     "community/open-strategy-reviews.zh-CN.md": "zh locale sibling for community reviews",
     "development/contributor-tasks.md": "contributor board; not a hosted docs primary page",
@@ -203,6 +210,10 @@ def check_rfc_language_mirrors() -> None:
 
 
 LEDGER_ENTRY_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
+# The appendix that points at the ledger directory is whichever one an RFC has
+# free: an RFC whose Appendix A carries other content adopts a later letter
+# rather than renumbering history and forcing every open branch to re-resolve it.
+LEDGER_APPENDIX_HEADING = re.compile(r"^## Appendix [A-Z]: Execution ledger", re.MULTILINE)
 
 
 def check_rfc_ledger_entries() -> None:
@@ -219,19 +230,21 @@ def check_rfc_ledger_entries() -> None:
         return
     assert (ledger / "README.md").exists(), "ledger README missing"
     assert (ledger / "README.zh-CN.md").exists(), "ledger README missing its Chinese mirror"
-    # Six RFCs carry an execution-ledger appendix, so entries are shared and
+    # Several RFCs carry an execution-ledger appendix, so entries are shared and
     # must say which one they belong to. The RFC slug is a directory, and the
     # directory has to name a real RFC: an entry cannot claim an RFC that does
     # not exist, and the per-RFC listing stays the index.
     scopes = sorted(path for path in ledger.iterdir() if path.is_dir())
     assert scopes, "ledger has no per-RFC directories"
     for scope in scopes:
-        appendix_a = DOCS / "architecture" / "rfcs" / f"{scope.name}.md"
-        assert appendix_a.is_file(), (
+        rfc_document = DOCS / "architecture" / "rfcs" / f"{scope.name}.md"
+        assert rfc_document.is_file(), (
             f"ledger directory {scope.name}/ does not name an RFC: "
-            f"{appendix_a.relative_to(DOCS.parent)} does not exist"
+            f"{rfc_document.relative_to(DOCS.parent)} does not exist"
         )
-        assert "Appendix A: Execution ledger" in appendix_a.read_text(encoding="utf-8"), (
+        assert LEDGER_APPENDIX_HEADING.search(
+            rfc_document.read_text(encoding="utf-8")
+        ), (
             f"{scope.name} has a ledger directory but no execution-ledger appendix"
         )
         for entry in sorted(scope.glob("*.md")):

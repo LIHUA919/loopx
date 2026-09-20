@@ -73,6 +73,18 @@ Minimizing attention does not mean minimizing information or removing human
 judgment. It means maximizing the decision value of each interruption and each
 visible screen:
 
+Each visible element must earn its place through **high-value information,
+essential interaction, or expressive visual presentation** (at least one).
+Evaluate the whole viewport, not isolated components. The canonical development
+and PR evidence workflow is [Earn The User's Attention](../../development/design.md#earn-the-users-attention).
+The bounded workspace application spans Goal conversations, manager home,
+overview, Tasks, outputs and Settings: one-step execution inspection; populated
+home lanes and change-only digests; compact progress and usage; short conversation
+receipts above the unchanged Kanban; output provenance in the existing drawer;
+and configuration consequences kept visible beside the existing preview/apply
+flow. Failures and uncertainty remain prominent. This presentation slice does
+not claim the shared interaction compiler or cross-channel projection is implemented.
+
 - routine, reversible, verified work should stay quiet or complete directly;
 - material progress should be legible without demanding a decision;
 - actual human judgment should arrive as one bounded decision frame;
@@ -660,6 +672,18 @@ canonical facts, authority, evidence status, or whether an effect committed.
 
 Adaptive policies must be inspectable and resettable. Their outputs carry
 reason codes and preserve a deterministic fallback.
+
+### 8.7 Live team workspace
+
+[Live Team Workspace v0](live-team-workspace-v0.md) specifies the S5/R2 research
+journey: a command surface and spatial studio share typed facts with the list,
+semantic zoom and historical replay. Purposeful motion is a product objective;
+registration, execution, return, independent acceptance and requester adoption
+remain distinct. Preserve source/revision lineage and uncertainty; never infer
+activity from decorative motion or confidence from agreement counts. This is a
+Draft presentation slice, not a shipped team stream or new scheduling authority.
+Its L1–L3 plan and V1–V7 acceptance extend this RFC's Stage 3 presentation journey;
+they do not close cross-channel or governed settlement acceptance here.
 
 ## 9. Coverage across the long-horizon lifecycle
 

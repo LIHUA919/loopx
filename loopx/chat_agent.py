@@ -564,6 +564,8 @@ class CodexChatAgentSession:
                 raise session._runtime_error(
                     "Codex did not apply the requested manager reasoning effort."
                 )
+            session.model = thread_result.get("model") or model
+            session.reasoning_effort = thread_result.get("reasoningEffort") or reasoning_effort
             session.thread_id = _extract_id(thread_result, "thread", "threadId")
             if not session.thread_id:
                 raise session._runtime_error(
@@ -926,11 +928,13 @@ class CodexChatAgentSession:
             event_turn_id = _event_turn_id(message)
             if event_thread_id and event_thread_id != self.thread_id:
                 continue
+            # A restored native Goal can leave historical turn notifications.
+            # turn/start already returned the exact turn owned by this send.
+            if event_turn_id and turn_id and event_turn_id != turn_id:
+                continue
             if message.get("method") == "turn/started" and event_turn_id:
                 turn_id = event_turn_id
                 self.current_turn_id = turn_id
-            if event_turn_id and turn_id and event_turn_id != turn_id:
-                continue
             method = str(message.get("method") or "")
             params = message.get("params")
             if on_event:

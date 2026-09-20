@@ -5,10 +5,6 @@ from collections.abc import Callable
 
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 from ..todos import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
-from ..todo_suggestion_prompt import (
-    ALLOWED_TODO_SUGGESTION_SOURCES,
-    ALLOWED_TODO_SUGGESTION_TRIGGERS,
-)
 from .todo_argument_validation import (
     register_todo_linkage_arguments,
     register_todo_successor_creation_arguments,
@@ -40,9 +36,7 @@ def register_todo_command(
             "complete",
             "supersede",
             "archive-completed",
-            "suggest",
             "plan",
-            "capture-followups",
             "project-markdown",
         ],
         default=None,
@@ -50,20 +44,12 @@ def register_todo_command(
             "Use add to append a checkbox todo, claim to soft-claim by registered "
             "agent id, list to read projected todos, update/complete/supersede to transition by todo_id, or "
             "archive-completed to move older completed todos into Completed Work Archive. "
-            "Use suggest to generate an agent-facing candidate todo analysis prompt without writing state. "
-            "Use plan with --text and --agent-id for the existing Goal's model planning checkpoint; the caller owns subsequent execution. "
-            "Use capture-followups to record a capped public-safe unclaimed follow-up batch."
+            "Use plan with --text and --agent-id for the existing Goal's model planning checkpoint; the caller owns subsequent execution."
         ),
     )
     todo_parser.add_argument("--goal-id", required=True, help="Goal id whose active state should receive the todo.")
     todo_parser.add_argument("--role", choices=["user", "agent"], help="Todo owner. Required for add; optional todo_id search scope for lifecycle commands. Defaults to agent for archive-completed.")
     todo_parser.add_argument("--text", help="Todo text. Required for add; keep it short and public-safe enough for local status.")
-    todo_parser.add_argument(
-        "--follow-up",
-        dest="followups",
-        action="append",
-        help="For capture-followups, append one public-safe agent follow-up todo. Repeat up to the requested batch.",
-    )
     todo_parser.add_argument("--todo-id", help="Structured todo id from status/quota, such as todo_ab12cd34ef56.")
     todo_parser.add_argument(
         "--update-operation-id",
@@ -438,25 +424,17 @@ def register_todo_command(
             "claim/update/complete/supersede, attribute the "
             "lifecycle actor; registered multi-agent goals require it unless an "
             "exact linked user_gate decision_scope supplies the typed owner/controller "
-            "override. For list/suggest, select the project agent lane. Agent todo "
+            "override. For list, select the project agent lane. Agent todo "
             "add intentionally does not accept this option; use --claimed-by to "
             "assign execution, or omit both options to leave the todo unclaimed."
         ),
-    )
-    todo_parser.add_argument(
-        "--from",
-        dest="suggestion_sources",
-        choices=ALLOWED_TODO_SUGGESTION_SOURCES,
-        action="append",
-        help="For todo suggest, include a source lane for agent analysis. Repeat for multiple lanes.",
     )
     todo_parser.add_argument(
         "--limit",
         dest="todo_limit",
         type=int,
         help=(
-            "For todo suggest, maximum candidate count; values above 5 are "
-            "clamped to 5. For todo list, explicit per-section cold-path cap: "
+            "For todo list, explicit per-section cold-path cap: "
             "keep the top N todos of each role section after filtering; must "
             "be an integer >= 1, and the payload discloses the truncation via "
             "explicit_limit."
@@ -471,12 +449,6 @@ def register_todo_command(
             "detail lanes; returns at most two items per role, and --limit can "
             "lower but not expand that bound."
         ),
-    )
-    todo_parser.add_argument(
-        "--trigger",
-        dest="suggestion_trigger",
-        choices=ALLOWED_TODO_SUGGESTION_TRIGGERS,
-        help="For todo suggest, why this candidate queue is being requested.",
     )
     todo_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")
     todo_parser.add_argument("--state-file", help="Active goal state path. Defaults to the registry goal state_file.")

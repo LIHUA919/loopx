@@ -25,11 +25,6 @@ from ..registry import registry_goals
 from ..control_plane.work_items.semantic_replan_writeback import (
     qualify_replan_writeback,
 )
-from ..todo_followups import capture_followup_todos
-from ..todo_suggestion_prompt import (
-    build_todo_suggestion_prompt_packet,
-    render_todo_suggestion_prompt_markdown,
-)
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
     render_task_planning_packet,
@@ -48,12 +43,10 @@ from .todo_argument_validation import (
     validate_shared_todo_options,
     validate_todo_add_options,
     validate_todo_archive_completed_options,
-    validate_todo_capture_followups_options,
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_list_options,
     validate_todo_project_markdown_options,
-    validate_todo_suggest_options,
     validate_todo_plan_options,
     validate_todo_supersede_options,
     validate_todo_update_options,
@@ -202,9 +195,6 @@ def handle_todo_command(
     renderer = (
         render_task_planning_packet
         if args.todo_command == "plan"
-        else
-        render_todo_suggestion_prompt_markdown
-        if args.todo_command == "suggest"
         else render_todo_markdown
     )
     try:
@@ -574,37 +564,6 @@ def handle_todo_command(
                 max_active_done=args.max_active_done,
                 **_todo_path_args(args),
                 dry_run=not bool(args.execute),
-            )
-        elif args.todo_command == "suggest":
-            validate_todo_suggest_options(args)
-            payload = build_todo_suggestion_prompt_packet(
-                goal_id=args.goal_id,
-                project=Path(args.project).expanduser() if args.project else None,
-                agent_id=args.agent_id,
-                sources=args.suggestion_sources,
-                limit=args.todo_limit,
-                trigger=args.suggestion_trigger,
-            )
-            payload["dry_run"] = True
-        elif args.todo_command == "capture-followups":
-            validate_todo_capture_followups_options(args)
-            followups = list(args.followups or [])
-            if args.text:
-                followups.append(args.text)
-            payload = capture_followup_todos(
-                registry_path=registry_path,
-                runtime_root_arg=runtime_root_arg,
-                goal_id=args.goal_id,
-                followups=followups,
-                evidence=args.evidence or "",
-                task_class=args.task_class,
-                action_kind=args.action_kind,
-                required_write_scopes=args.required_write_scopes,
-                required_capabilities=args.required_capabilities,
-                target_capabilities=args.target_capabilities,
-                required_decision_scopes=args.required_decision_scopes,
-                **_todo_path_args(args),
-                dry_run=bool(args.dry_run),
             )
         else:
             raise ValueError("unsupported todo command")

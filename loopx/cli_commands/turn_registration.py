@@ -9,6 +9,7 @@ from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     resolve_default_turn_host,
 )
+from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
 from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
@@ -209,6 +210,15 @@ def register_turn_commands(
     )
     run_once.add_argument("--codex-model")
     run_once.add_argument(
+        "--codex-reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        help=(
+            "Reasoning effort for the independent Codex CLI Turn. This is an "
+            "operator-bound independent Agent profile, not the native child-agent "
+            "model preference."
+        ),
+    )
+    run_once.add_argument(
         "--codex-sandbox",
         choices=["read-only", "workspace-write", "danger-full-access"],
         default="read-only",
@@ -237,7 +247,14 @@ def register_turn_commands(
             "managed execution profile (LOOPX_TURN_REASONING_EFFORT)."
         ),
     )
-    run_once.add_argument("--dsh-max-tokens", type=int)
+    run_once.add_argument(
+        "--dsh-max-tokens",
+        type=int,
+        help=(
+            "Per-model-request output-token cap; defaults to LoopX's bounded "
+            "managed-host value. This is not a whole-Turn or tool-call budget."
+        ),
+    )
     run_once.add_argument(
         "--dsh-home",
         help=(

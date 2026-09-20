@@ -1678,14 +1678,14 @@ CLI runner、observation-lock 窗口、候选回读）、只读 TypeScript 探�
   PostgreSQL 集成测试文件，要求至少九个 pass、零 fail、零 skip。
 - Stage 2C 观察基础：七个 `s2c1.*` 行移植本地 shadow CLI E2E 与迁移断言，并钉住单一
   lineage 保证。
-  configure 往返先预览、再开启、回读、最后关闭 observer；每个 writer family
-  （handoff-mode、todo add/update/complete/supersede/capture-followups/
+  configure 往返先预览、再开启、回读、最后关闭 observer；每个保留的 writer family
+  （handoff-mode、todo add/update/complete/supersede/
   archive-completed、task-lease acquire/renew/transfer）都以
   `primary_writeback_preserved`、`provider_to_local_writes=false`、
   `candidate_read_for_decision=false` 完成 capture，而幂等 re-acquire 不产生
   observation；default-off goal 保持隔离；候选失败不推翻主写；POSIX SIGKILL
   落在崩溃间隙时只丢失该次 observation；`--runtime-root` 与 `common_runtime_root`
-  不同时，todo add、task-lease acquire、todo update、follow-up 捕获与带 lease 的
+  不同时，两次 todo add、task-lease acquire、todo update 与带 lease 的
   complete 仍落入同一个 store identity，registry root 既不产生候选 lineage 也不
   产生 lease 状态；`migrate-state` 在不携带 legacy 字节的前提下建立新 lineage。
 - Stage 2C parity 后半段：十个 `s2c2.*` 行只通过公开 CLI 驱动一个显式开启
@@ -1699,7 +1699,7 @@ CLI runner、observation-lock 窗口、候选回读）、只读 TypeScript 探�
   条目、把 capture 置于 `bootstrap_required`、重新 bootstrap 出新 lineage 并可重放；
   三轮交错 writer（add、note update 及其无变化重复、显式 exclusion 设置与清除及其
   无变化重复、acquire、renew、transfer、带 lease 的 complete 与 supersede 及其
-  fence close、capture-followups）让每次有界 qualification 都保持 matched，且
+  fence close，以及第二次 add）让每次有界 qualification 都保持 matched，且
   `sustained_parity_verdict=not_evaluated`；
   直接改主文件会报告 `shadow_projection_drift`，其后的写入以
   `source_partition_continuity_unproved` 挂起，只有 rollback 加重新 bootstrap 才能恢复；
@@ -2223,6 +2223,14 @@ CLI / Agent / Dashboard → 唯一 TS Todo 事务 owner → canonical authority
 供数；cutover 后，所选 canonical provider 向单向投影供数。不增加第三种 TS-Markdown
 backend、实时双向同步或按命令拆开的权威；晋升后不支持的命令 fail closed，不能回退旧 writer。
 
+2026-09-19 命令退役检查点删除了无人消费的
+`coordination.local_authority.mutate` 与 Todo compatibility-edit 执行包装，同时保留
+实际领域事务仍复用的 `prepareCoordinationProjectionCommit` 与共享 reducer；另行删除
+无关的公开产品命令 `todo capture-followups`。后一个命令的退役不删除、不削弱、也不
+重命名本 RFC 的 runtime shadow-capture 机制。独立 prompt 命令 `todo suggest` 也退役；
+候选分析复用当前 Agent 与既有 Todo 读取/写入路径，不新增 discovery 包装或 provider
+promotion 前置条件。两个公开命令的退役都不删除已保存的 Todo 或 authority 历史。
+
 #### 重构主线总览
 
 Monitor 状态 owner 现位于 TS，并与 authoring scope、external-wait 校验及字段更新
@@ -2340,6 +2348,8 @@ Scoped fallback 的选择与门禁关系也已复用同一 TS decision owner，�
 
 **D1 — 资格化永久投影交付，可与 T1/T2 重叠推进。**
 
+摘要与 work-lane 计数已独立于展示上限，并在 Agent 筛选后保留来源不完整状态；canonical 列表的 acceptance 限制与 status 一致。这只闭合 L5 的一个读取消费者，不代表永久投影新鲜度或 D1–D3 完成。见[计数语义](../../reference/todo-work-counts.md)。
+
 Goal Channel 所有权观察先读取完整 provider revision，再限制展示；不修复 Markdown、不复活旧本地 lease，明确披露失败与截断。这是共用 TS 解释规则的 T3 读链路闭合，不完成 D1/D2 或 D3 切换，见 [coordination observation](../../reference/coordination-observation.md)。
 
 D1 的文档归属切片把读取、编辑与投影放到同一可见区域／Todo 行解码边界，修复
@@ -2436,7 +2446,7 @@ canonical renew 候选，#4328 是 SQLite D2 首批测量／恢复候选；它�
 | A／L1：Monitor 配置（本切片） | 现有 `todo update` 配置进入 TS planner／CAS／receipt，删除 Python 重复 intent 字段表；区分配置与观察 hash、时间、代数。 | 普通 CLI/API、清除／省略、active lease proof、no-op／replay、展示失败恢复、完整 fixture 和真实 provider。不宣称完成委托 Chat 或 leased polling。 |
 | A／L2：公共 mutation admission 闭合 | 用户 completion update 已共用 TS 编辑／terminal 事务与 Chat 审阅后恢复；继续盘点剩余 effect-owned 决策、委托 owner 动作和 Monitor lifecycle 的 CLI／Turn／Chat caller。见[调用合同](../../reference/canonical-todo-completion-update.md)。 | 复用已合并 T1 owner，不开通通用 raw patch；验证权限拒绝和 caller 响应，删除替代的 Python admission，列全未支持命令。 |
 | A／L3：canonical lease 生命周期 | 独立 acquire/接管、原子 claim 的 lease 准入及维护复用 TS facts/decision/materializer 与同一 provider opening fence。显式联合交接由源持有者授权，一次提交 Todo 归属与新租约 generation；canonical 请求类型不再携带 legacy 持锁字段。Acquire 成功必须校验当前执行 proof；canonical 完成可恢复缺失展示。 | 已覆盖完整 head scope 冲突、归档/失效 holder、创建 CAS 原样重试、旧执行、进程中断、真实 CLI 与四臂演练。[操作及剩余 caller](../../reference/canonical-lease-renew.md)。跨外部 effect 的 executor 持锁 fence 仍为明确工作；保留 D1–D3/default hold。 |
-| B／L4：leased Monitor poll 与 settlement | 当前 execution proof 贯穿 CLI intent、观察／generation／独立 successor CAS 和历史业务回执；业务写入前冻结 quota 准入，租约结束后仍按原决策恢复结算。 | 既有 L3 lease lifecycle、真实 File／SQLite／PostgreSQL、混合 fixture、业务与 quota 间真实进程退出、并发 renewal 和 unchanged poll；见[操作与快照演练](../../reference/protocols/quota-monitor-observation-receipt-v0.md)。不操作 lease lifecycle、不消耗 quota，不把两个 authority 假装成同一事务。Event caller、更广 L2 准入及 D1–D3/default 仍开放。 |
+| B／L4：leased Monitor poll 与 settlement | 当前 execution proof 贯穿 CLI intent、观察／generation／独立 successor CAS 和历史业务回执；业务写入前冻结 quota 准入，租约结束后仍按原决策恢复结算。 | 既有 L3 lease lifecycle、真实 File／SQLite／PostgreSQL、混合 fixture、业务与 quota 间真实进程退出、并发 renewal 和 unchanged poll；见[操作与快照演练](../../reference/protocols/quota-monitor-observation-receipt-v0.md)。不操作 lease lifecycle、不消耗 quota，不把两个 authority 假装成同一事务。保留的分组 Monitor 观察／再激活 caller 现使用 Todo update v4 与共享 Monitor planner，无变化重试也能恢复显示。保留 lease 的再激活、更广 L2 准入及 D1–D3/default 仍开放。 |
 | B／L5：consumer 与展示闭合 | 核对 #4316，审计 Turn／quota／Dashboard／Chat 的来源，复用 projection outbox 完成 D1 新鲜度和恢复。 | 验证 CLI、Lark／Chat、打包 frontend 的受影响交互；缺失／陈旧展示、权威空状态、pending 投影及超过 UI 上限的数据。逐个删除晋升后的 legacy fallback。 |
 | A–C／L6：本地持久化资格 | 延续 contributor 认领的 #4224／#4328，在选定 SQLite profile 上补齐第 7.2 节 ledger，复用 File／NoKV 对照。 | capacity、真实进程／crash／restore／upgrade、历史 receipt／scan、consumer lag、支持的 runtime／OS，以及另行授权的 >=10 天合成 soak。缺项继续 hold。 |
 | A–C／L7：capture 连续性 | 核对已合入的 #4315 归档／lease membership 修复，完成对应 ladder row／mutant 与持续 mixed-writer／event-source 矩阵；不重复实现已关闭缺陷。 | 真实 CLI／File capture、保留历史、半完成 drain 不合格、crash／replay，以及归档／rebootstrap 后再申请 lease。不能借 T4 跳过迁移窗口证明。 |
@@ -2468,3 +2478,16 @@ adapter，也不依赖 PostgreSQL service 部署。
 | C. Canonical transaction capture | 资格化 #3870 已合入实现 | transaction-bound outbox 已指向唯一 `coordination.runtime_shadow` lineage，并保留完整带版本的 Todo/lease record；继续完成 sustained mixed-writer parity、explicit-clear/omission 与 event-only Todo recovery 证据。 | 可与 P 并行；但 C 与选定 provider profile 都完成后，才能进入 parity 或 promotion 集成。 |
 | I. Binding 与资格集成 | C 与选定 profile 的资格化完成后 | 绑定一个精确 provider lineage、field manifest、source revision、digest 与 cursor；资格化显式 v0 import、排序/归档/consumer parity 与 recovery/capacity；缺字段时不得查询 legacy state 补齐。 | 长程本地集成需要 L，不等待 P；PostgreSQL 仅在自己的 P hold 全通过后汇合。 |
 | F. Promotion 与清理 | I 完成且 maintainer 显式批准后 | 完成 provider-first CLI routing、持锁 promotion orchestrator、兼容投影 outbox、晋升后 fenced export/rollback；随后删除重复 reference aggregate，并翻转经评审的 stage/hold 声明。 | 每个 profile 必须通过 C、I 与自身 provider 资格化；长程本地晋升还需 L，PostgreSQL 还需 P。 |
+
+## 附录 D：执行账本
+
+本 RFC 的交付记录是 [`ledger/shared-goal-authority-state-provider-v0/`](ledger/shared-goal-authority-state-provider-v0/) 下的文件，
+一次改动一条带日期的条目，命名与镜像配对遵循
+[账本约定](ledger/README.zh-CN.md)。一条条目写清这次改动测到了什么、改了什么、以及没有确立什么。
+
+新记录写在这里，而不再写进附录 C 的那些带日期小节。附录 C 里已有的内容原样保留：它们是没人再编辑的只追加历史，
+把它们改写成文件只会产生一次很大的机械 diff，逼那些在途分支重做一遍合并——而这正是本改动想帮的对象，且什么都没能修好。
+理由是量出来的，不是猜的，见
+[`2026-09-19-shared-goal-authority-entries-get-a-ledger.zh-CN.md`](ledger/shared-goal-authority-state-provider-v0/2026-09-19-shared-goal-authority-entries-get-a-ledger.zh-CN.md)。
+
+`examples/docs-governance-smoke.py` 校验条目的命名、每条旁边的中文镜像，以及账本目录所指向的这份附录确实存在。

@@ -1,4 +1,6 @@
-import {selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {projectTodoSummaryLanes, projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
+import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
 import {previewTeamPlan, planTeamTransaction, teamTransactionIdentity} from "./work_items/team_plan.ts";
 import {commitLocalTeamPlan} from "./work_items/team_plan_authority.ts";
@@ -108,6 +110,7 @@ import {
 } from "./turn_driver/delivery_continuity.ts";
 import { reduceTurnSettlementTransaction } from "./turn_driver/settlement.ts";
 import { evaluateHostTodoCompletion } from "./turn_driver/host_todo_completion.ts";
+import { projectReplanSemantics } from "./work_items/replan_semantics.ts";
 import {
   projectReplanSettlementContract,
   projectTodoLifecycleSettlementReentry,
@@ -146,10 +149,8 @@ import {
   claimLocalCoordinationTodo,
   continueLocalTodo,
   createLocalCoordinationTodo,
-  editLocalCoordinationTodo,
   updateLocalCoordinationTodo,
   pollLocalCoordinationMonitor,
-  mutateLocalCoordinationAuthority,
   listLocalCoordinationTodos,
   promoteLocalCoordinationAuthority,
   readLocalCoordinationTodo,
@@ -408,6 +409,8 @@ export function createEffectRuntimeHandlers(
     ["todo.field_update.plan", planTodoFieldUpdate],
     ["todo.public_update.plan", planPublicTodoUpdate],
     ["todo.standing_decision.project", evaluateStandingDecisionProjection],
+    ["todo.summary_lanes.project", projectTodoSummaryLanes],
+    ["todo.work_counts.project", projectLegacyTodoWorkCounts],
     ["todo.decision_scope.evaluate", evaluateDecisionScope],
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
@@ -516,8 +519,6 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.todo_terminal", terminalLifecycleLocalCoordinationTodo],
     ["coordination.local_authority.todo_archive", archiveLocalCoordinationTodos],
     ["coordination.local_authority.todo_archive_ack", acknowledgeLocalCoordinationTodoArchive],
-    ["coordination.local_authority.todo_compatibility_edit", editLocalCoordinationTodo],
-    ["coordination.local_authority.mutate", mutateLocalCoordinationAuthority],
     ["coordination.local_authority.todo_read", readLocalCoordinationTodo],
     ["coordination.ownership_observation", projectOwnershipObservation],
     ["coordination.local_authority.ownership_observation", observeLocalCoordinationOwnership],
@@ -632,8 +633,14 @@ export function createEffectRuntimeHandlers(
       evaluatePostWritebackHookTransaction,
     ],
     ["collaboration.delegation.binding", selectDelegationBinding],
+    ["collaboration.delegation.preflight", delegationPreflight],
+    ["collaboration.delegation.turn_plan", delegationTurnPlanDecision],
+    ["collaboration.delegation.inventory_query", delegationInventoryQuery],
+    ["collaboration.delegation.inventory_item", delegationInventoryItem],
+    ["collaboration.chat_mode", planChatMode],
     ["collaboration.conversation.scope", resolveConversationScope],
     ["collaboration.delegation.observe", transitionDelegationObservation],
+    ["collaboration.delegation.adoption", recordDelegationAdoption],
     [
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
@@ -733,6 +740,7 @@ export function createEffectRuntimeHandlers(
     ["turn.settlement.reduce", reduceTurnSettlementTransaction],
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
+    ["work_item.replan_semantics.project", projectReplanSemantics],
     [
       "work_item.replan_settlement.reentry",
       projectTodoLifecycleSettlementReentry,

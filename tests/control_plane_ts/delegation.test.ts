@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 
 const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", workspace: "/fixture",
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
@@ -29,4 +29,88 @@ test("message receipt and model return do not imply accepted work", () => {
   assert.throws(() => transitionDelegationObservation({from: "rejected", to: "running"}), /transition/);
   assert.deepEqual(transitionDelegationObservation({from: "turn_returned", to: "accepted",
     canonical_done: true, acceptance_ready: true, artifacts_current: true}), {status: "accepted"});
+});
+
+test("inventory paging is bounded and never interprets a missing result as accepted", () => {
+  assert.deepEqual(delegationInventoryQuery({}), {limit: 20, cursor: null});
+  for (const limit of [0, 51, true, "2"]) assert.throws(() => delegationInventoryQuery({limit}));
+  assert.throws(() => delegationInventoryQuery({cursor: "../other"}));
+  const record = {record_id: "a".repeat(64), operation_id: "review-1"};
+  const observation = {operation_id: "review-1", request_id: "request", agent_id: "reviewer",
+    todo_id: "todo_review", status: "accepted", worker_active: false, recovery_required: false,
+    artifacts: [{ref: "output.json", sha256: "b".repeat(64), text: "private body"}]};
+  const accepted = delegationInventoryItem({record, observation});
+  assert.equal(accepted.status, "accepted");
+  assert.equal(JSON.stringify(accepted).includes("private body"), false);
+  assert.throws(() => delegationInventoryItem({record, observation: {...observation, artifacts: []}}));
+  assert.throws(() => delegationInventoryItem({record, observation: {...observation, status: "done"}}));
+  assert.throws(() => delegationInventoryItem({record, observation: {...observation, operation_id: "other"}}));
+  const unavailable = delegationInventoryItem({record, observation: null});
+  assert.equal(unavailable.status, "unavailable");
+  assert.equal(unavailable.recovery_required, null);
+  assert.equal(unavailable.artifacts, undefined);
+});
+
+test("preflight separates task admission, acceptance binding and runtime availability", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const preview = {dry_run: true, status: "preview", effects,
+    route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: "todo_review"},
+    managed_executor: {executor: "dsh", available: true, unavailable_reason: null, execution_profile: "explicit-profile"}};
+  const params = {binding, preview, validation_files_current: true, acceptance: {todo_id: "todo_review", state: "ready"}};
+  assert.equal(delegationPreflight(params).state, "launchable");
+  for (const [available, expected] of [[null, "runtime_unverified"], [false, "runtime_unavailable"]] as const) {
+    assert.equal(delegationPreflight({...params, preview: {...preview,
+      managed_executor: {...preview.managed_executor, available}}}).state, expected);
+  }
+  assert.equal(delegationPreflight({...params, acceptance: null}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, acceptance: {...params.acceptance, state: "stale"}}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
+    selected_todo_id: "other"}}}).state, "turn_blocked");
+  assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
+    would_invoke_host: false}}}).state, "turn_blocked");
+  assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
+});
+
+test("requester adoption needs accepted downstream use, not reading, revision or prose", () => {
+  const artifact = {ref: "result.json", sha256: "a".repeat(64)};
+  const source = {operation_id: "source", status: "accepted", artifacts: [artifact]};
+  const consumer = {operation_id: "consumer", request_id: "request", agent_id: "reviewer",
+    todo_id: "task", status: "accepted", artifacts: [{...artifact, sha256: "b".repeat(64)}]};
+  const input = {ref: "input.json", sha256: artifact.sha256,
+    delegation: {operation_id: "source", ref: artifact.ref, relation: "uses"}};
+  const params = {source, consumer, inputs: [input], inputs_current: true};
+  assert.equal(recordDelegationAdoption(params).consumer_operation_id, "consumer");
+  for (const patch of [{inputs_current: false}, {inputs: []}, {consumer: {...consumer, status: "running"}},
+    {source: {...source, status: "rejected"}}, {consumer: {...consumer, operation_id: "source"}},
+    {inputs: [{...input, sha256: "c".repeat(64)}]},
+    {inputs: [{...input, delegation: {...input.delegation, relation: "revises"}}]}]) {
+    assert.throws(() => recordDelegationAdoption({...params, ...patch}));
+  }
+});
+
+test("preflight reports unavailable canonical authority without pretending to inspect a Turn", () => {
+  const result = delegationPreflight({binding, authority: {ready: false,
+    reason: "Goal acceptance requires an existing canonical authority"}, preview: null,
+  acceptance: null, validation_files_current: false});
+  assert.equal(result.state, "authority_unavailable");
+  assert.equal(result.authority_ready, false);
+  assert.equal(result.turn_eligible, false);
+  assert.equal(result.executor, null);
+  assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
+  assert.match(String(result.authority_reason), /canonical authority/);
+  assert.throws(() => delegationPreflight({binding, authority: {ready: false, reason: "missing"},
+    preview: {}, acceptance: null, validation_files_current: false}));
+});
+
+test("Turn plan decision preserves a rejection and validates a successful transaction", () => {
+  const rejected = delegationTurnPlanDecision({plan: {ok: false,
+    error: "Requested Turn Todo is not accepted by canonical authority"}});
+  assert.deepEqual(rejected, {
+    schema_version: "loopx_delegation_turn_plan_decision_v0", state: "rejected",
+    turn_key: null, reason: "Requested Turn Todo is not accepted by canonical authority",
+  });
+  const turnKey = `sha256:${"a".repeat(64)}`;
+  assert.equal(delegationTurnPlanDecision({plan: {ok: true,
+    transaction: {turn_key: turnKey}}}).turn_key, turnKey);
+  assert.throws(() => delegationTurnPlanDecision({plan: {ok: true, transaction: {}}}));
 });

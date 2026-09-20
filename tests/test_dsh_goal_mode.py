@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx import dsh_goal_mode
+from loopx.cli_commands import turn_dsh_host
 from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
@@ -194,6 +195,78 @@ def test_dsh_host_passes_lineage_session_id_to_the_runner(
 
     assert session_ids[0] != session_ids[1]
     assert session_ids[0] == session_ids[2]
+
+
+def test_dsh_host_forwards_the_resolved_credential_to_the_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def run_fake_dsh_turn(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return '{"result_kind":"wait"}'
+
+    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", run_fake_dsh_turn)
+    credential = {
+        "DEEPSEEK_API_KEY": "fixture-machine-key",
+        "DEEPSEEK_BASE_URL": "https://provider.invalid",
+    }
+    config = turn_host_adapter.DshHostConfig(
+        workspace=tmp_path,
+        env=credential,
+    )
+
+    turn_host_adapter.run_dsh_host(_signed_request(), config=config)
+
+    assert calls[0]["env"] == credential
+    assert calls[0]["env"] is not credential
+
+
+@pytest.mark.parametrize(
+    "resolved,expected",
+    [
+        ({"DEEPSEEK_API_KEY": "fixture-machine-key"},
+         {"DEEPSEEK_API_KEY": "fixture-machine-key"}),
+        ({"DEEPSEEK_API_KEY": "fixture-env-key",
+          "DEEPSEEK_BASE_URL": "https://provider.invalid",
+          "UNRELATED_SERVICE_SECRET": "must-not-travel"},
+         {"DEEPSEEK_API_KEY": "fixture-env-key",
+          "DEEPSEEK_BASE_URL": "https://provider.invalid"}),
+        ({"UNRELATED_SERVICE_SECRET": "must-not-travel"}, {}),
+    ],
+)
+def test_turn_runner_projects_only_the_resolved_operator_provider_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    resolved: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    captured: list[turn_host_adapter.DshHostConfig] = []
+
+    def capture(_request: object, *, config: turn_host_adapter.DshHostConfig) -> dict:
+        captured.append(config)
+        return {"ok": True}
+
+    monkeypatch.setattr(turn_dsh_host, "run_dsh_host", capture)
+    args = SimpleNamespace(
+        dsh_provider=None,
+        dsh_model=None,
+        dsh_reasoning_effort=None,
+        dsh_max_tokens=16_384,
+        dsh_home=None,
+        dsh_cordis=None,
+        dsh_runtime_bin=None,
+        timeout_seconds=60,
+        dsh_runner=None,
+    )
+    runner = turn_dsh_host.build_dsh_host_runner(
+        args,
+        workspace=tmp_path,
+        environ=resolved,
+    )
+
+    assert runner({}) == {"ok": True}
+    assert dict(captured[0].env or {}) == expected
 
 
 def test_dsh_goal_mode_is_a_first_class_subpackage() -> None:
@@ -702,6 +775,129 @@ def test_terminal_error_reason_extraction() -> None:
     )
     normalized = turn_host_adapter.normalize_runner_outcome(sdk_result)
     assert normalized["finish_reason"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("final_response", "expected"),
+    [("", "no_final"), ("  ", "no_final"), ('{"result_kind":', "partial")],
+)
+def test_terminal_output_budget_state_rejects_every_max_token_fragment(
+    final_response: str,
+    expected: str,
+) -> None:
+    assert (
+        turn_host_adapter.terminal_output_budget_state(
+            {
+                "final_response": final_response,
+                "finish_reason": "max-tokens",
+                "events": [],
+            }
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("final_response", "expected_reason"),
+    [
+        ("", "dsh_output_budget_exhausted_no_final"),
+        ('{"result_kind":"validated_progress"}', "dsh_output_budget_exhausted_partial"),
+    ],
+)
+def test_run_dsh_host_maps_max_tokens_to_non_retryable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    final_response: str,
+    expected_reason: str,
+) -> None:
+    monkeypatch.setattr(
+        turn_host_adapter,
+        "run_dsh_turn",
+        lambda **_kwargs: {
+            "final_response": final_response,
+            "finish_reason": "max-tokens",
+            "events": [
+                {
+                    "type": "turn/end",
+                    "data": {"reason": {"kind": "max-tokens"}},
+                }
+            ],
+        },
+    )
+    config = turn_host_adapter.DshHostConfig(workspace=tmp_path)
+
+    with pytest.raises(BuiltInHostError) as excinfo:
+        turn_host_adapter.run_dsh_host(_signed_request(), config=config)
+
+    assert excinfo.value.reason == expected_reason
+    assert excinfo.value.failure_kind == "output_budget_exhausted"
+    assert build_host_failure_record(excinfo.value.failure_kind, attempt=1) == {
+        "schema_version": "loopx_turn_host_failure_v0",
+        "kind": "output_budget_exhausted",
+        "attempt": 1,
+        "retryable": False,
+    }
+
+
+def test_generic_adapter_returns_typed_iteration_failure_on_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        turn_host_adapter,
+        "run_dsh_turn",
+        lambda **_kwargs: {
+            "final_response": "",
+            "finish_reason": "max-tokens",
+            "events": [],
+        },
+    )
+    config = turn_host_adapter.DshHostConfig(workspace=tmp_path)
+    request = _signed_request()
+
+    result = turn_host_adapter._execute_turn_host_request(
+        request,
+        turn_host_adapter.extract_turn_authority(request),
+        config=config,
+        terminal_errors_as_host_failure=False,
+    )
+
+    assert result["result_kind"] == "iteration_failed"
+    assert result["classification"] == "dsh_output_budget_exhausted_no_final"
+    assert "blindly rerun" in result["next_action"]
+
+
+def test_dsh_host_config_has_a_bounded_product_default(tmp_path: Path) -> None:
+    config = turn_host_adapter.DshHostConfig(workspace=tmp_path)
+
+    assert config.max_tokens == 16_384
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True])
+def test_dsh_host_rejects_invalid_output_token_limit_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    invalid: object,
+) -> None:
+    invoked = False
+
+    def runner(**_kwargs: object) -> dict[str, object]:
+        nonlocal invoked
+        invoked = True
+        return {"final_response": "", "finish_reason": "completed", "events": []}
+
+    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
+    config = turn_host_adapter.DshHostConfig(
+        workspace=tmp_path,
+        max_tokens=invalid,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BuiltInHostError) as excinfo:
+        turn_host_adapter.run_dsh_host(_signed_request(), config=config)
+
+    assert excinfo.value.reason == "dsh_output_token_limit_rejected"
+    assert excinfo.value.failure_kind == "contract_rejected"
+    assert invoked is False
 
 
 @pytest.mark.parametrize(

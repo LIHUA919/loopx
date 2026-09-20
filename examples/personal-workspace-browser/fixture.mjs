@@ -363,6 +363,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
   const sessions = runtime.sessions;
   const messages = runtime.messages;
   const turnMessages = runtime.turnMessages;
+  const loopxModes = runtime.loopxModes ??= new Map();
   for (const proposal of initialActionProposals) {
     actionProposals.set(proposal.proposal_id, structuredClone(proposal));
   }
@@ -441,6 +442,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
     get goalSubagentConfigurations() { return runtime.goalSubagentConfigurations; },
   };
@@ -1356,12 +1358,23 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         execute: apply,
         written: apply && changed,
         changed,
+        goal_configuration_changed: changed,
         goal_id: body.goal_id,
         changed_fields: changed ? ["orchestration"] : [],
         before: { orchestration: before },
         after: { orchestration: after },
         preview_id: previewId,
         feature_summary: { multi_subagent: body.enabled ? "enabled" : "off" },
+        codex_host_capacity: {
+          alignment_requested: Boolean(body.align_codex_host_capacity),
+          configured_children: null,
+          counts_main_thread: false,
+          new_session_required: Boolean(apply && body.enabled && body.align_codex_host_capacity),
+          required_children: body.enabled ? body.max_children : 0,
+          status: body.enabled ? "implicit_default_unknown" : "not_required",
+          write_required: Boolean(body.enabled && body.align_codex_host_capacity),
+          written: Boolean(apply && body.enabled && body.align_codex_host_capacity),
+        },
         global_sync: {
           required: changed,
           executed: apply && changed,
@@ -1424,6 +1437,99 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       sessions.set(session_id, session);
       messages.set(session_id, messages.get(session_id) ?? []);
       await route.fulfill({ contentType: "application/json", json: { ok: true, agent_id: body.agent_id, goal_id: body.goal_id, resumed: body.mode === "resume_latest", session_id, session }, status: 201 });
+      return;
+    }
+    const loopxMode = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/loopx$/);
+    if (loopxMode) {
+      const sessionId = decodeURIComponent(loopxMode[1]);
+      const session = sessions.get(sessionId);
+      if (!session) {
+        await route.fulfill({ contentType: "application/json", json: { ok: false, error: "session not found" }, status: 404 });
+        return;
+      }
+      const current = loopxModes.get(sessionId) ?? {
+        ok: true,
+        session_id: sessionId,
+        enabled: false,
+        active_turn_id: null,
+        conversation_busy: false,
+        settings: { execution_config: ".loopx/config/delegations.json" },
+        native: { status: "absent" },
+        registered_agents: ["lead"],
+        paused: false,
+        recovery_required: false,
+        members: [],
+        deliveries: [],
+        ingress: [],
+      };
+      if (request.method() === "GET") {
+        await route.fulfill({ contentType: "application/json", json: current, status: 200 });
+        return;
+      }
+      const body = request.postDataJSON();
+      state.loopxModeRequests.push({ sessionId, ...body });
+      if (body.operation === "pause") {
+        const paused = {...current, active_turn_id: null, paused: true, native: {...current.native, status: "paused"}};
+        loopxModes.set(sessionId, paused);
+        await route.fulfill({json: paused});
+        return;
+      }
+      if (body.operation === "read") {
+        if (body.operation_id === "accepted-synthesis") {
+          await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-synthesis",
+            agent_id: "synthesizer", todo_id: "todo_synthesis", status: "accepted", worker_active: false,
+            recovery_required: false, artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64), text: '{"accepted_cash_flow":75}'}],
+            dependencies: [{operation_id: "accepted-analysis", ref: "report.json", sha256: "d".repeat(64),
+              input_ref: "accepted-input.json", relation: "uses", state: current.fixtureAdoptionState ?? "current"}]}});
+        } else if (body.operation_id !== "accepted-analysis") {
+          await route.fulfill({status: 409, json: {ok: false, error: "delegation artifact unavailable"}});
+        } else {
+          await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-analysis",
+            agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted", worker_active: false,
+            recovery_required: false,
+            ...(current.fixtureAdoptionState ? {adoptions: [{requester_agent_id: "lead", consumer_operation_id: "accepted-synthesis",
+              consumer_request_id: "request-synthesis", consumer_agent_id: "synthesizer", consumer_todo_id: "todo_synthesis",
+              source_artifacts: [{ref: "report.json", sha256: "d".repeat(64)}],
+              consumer_artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64)}], state: current.fixtureAdoptionState}]} : {}),
+            artifacts: [{ref: "report.json", sha256: "d".repeat(64),
+              text: '{"cash_flow":75,"note":"<script>window.artifactExecuted=true</script>"}'}]}});
+        }
+        return;
+      }
+      if (body.operation === "message") {
+        current.ingress.push({client_ingress_id: body.operation_id, mode: "loopx_inbox", status: "pending"});
+        await route.fulfill({json: {ok: true, status: "pending", delivery_mode: "inbox"}});
+        return;
+      }
+      if (body.operation === "operations") {
+        const items = body.cursor ? [{record_id: "c".repeat(64), operation_id: "needs-recovery",
+          agent_id: "cloud-reviewer", todo_id: "todo_review", status: "running", worker_active: false, recovery_required: true}]
+          : [{record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst",
+            todo_id: "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
+            artifacts: [{ref: "report.json", sha256: "d".repeat(64)}]},
+          {record_id: "b".repeat(64), operation_id: "stale-output", status: "unavailable", recovery_required: null}];
+        await route.fulfill({json: {items, has_more: !body.cursor, next_cursor: body.cursor ? null : "b".repeat(64), page_readback_complete: Boolean(body.cursor)}});
+        return;
+      }
+      if (body.operation === "inspect") {
+        await route.fulfill({json: {state: "runtime_unverified", turn_eligible: true, acceptance_ready: true,
+          turn_route: "ready_for_host", executor: {host: "generic-cli", available: null, reason: null, profile: null}}});
+        return;
+      }
+      if (body.operation !== "configure") {
+        await route.fulfill({ contentType: "application/json", json: { ok: false, error: "unsupported fixture operation" }, status: 400 });
+        return;
+      }
+      const configured = {
+        ...current,
+        settings: {
+          ...body.settings,
+          execution_config: current.settings.execution_config,
+        },
+        members: [{id: "analysis", agent_id: "local-analyst", todo_id: "todo_analysis"}],
+      };
+      loopxModes.set(sessionId, configured);
+      await route.fulfill({ contentType: "application/json", json: configured, status: 200 });
       return;
     }
     const snapshot = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)$/);

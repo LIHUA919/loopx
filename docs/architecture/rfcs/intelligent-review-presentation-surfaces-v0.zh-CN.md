@@ -53,6 +53,15 @@ LoopX 优化的是一个联合目标：
 
 最小化 attention 不等于最小化信息，也不等于删除人的判断。它意味着最大化每次打扰、每块可见界面的决策价值：
 
+每个可见元素至少满足 **高价值信息、非常必要的交互、富有表现力的视觉呈现** 之一。
+按整个视口评估，不能只看单个组件。开发及 PR 证据流程以
+[Earn The User's Attention](../../development/design.md#earn-the-users-attention) 为准。
+有界落地覆盖 Goal 对话、管家首页、概览、任务、成果与设置：一步打开执行详情；
+首页按有内容的分组分配空间，摘要只展示新增运行结果；紧凑呈现进展与用量；
+看板保留原结构，上方只留简短对话回执；成果来源在原详情中查看；配置影响仍与
+原有预览／应用流程一起直接呈现。失败与不确定性保持可见。此展示切片不代表
+共享 interaction compiler 或跨渠道 projection 已完成。
+
 - 日常、可逆、可验证的工作应安静进行或直接完成；
 - 重要进展应清晰可见，但不应伪装成需要决策；
 - 真正需要人判断时，应投影成一个有边界的 decision frame；
@@ -541,6 +550,15 @@ type PresentationArtifactPlan = {
 系统可以通过有界 signals 感知 form 是否 under-disclosing 或 over-disclosing，例如用户立即打开 detail、重复 clarification、decision reversal、layout validation failure，或者 renderer 报告 overlap。它们可以影响未来 form recommendation 或 density，但不能改变 canonical facts、authority、evidence status 或 effect 是否 committed。
 
 Adaptive policy 必须 inspectable、resettable，其输出携带 reason codes，并始终保留 deterministic fallback。
+
+### 8.7 团队实时工作区
+
+[团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) 描述 S5/R2 投研旅程：
+指挥台与空间工作室同列表、语义缩放和历史回放共用 typed 事实。有目的的动态
+是产品目标；注册、执行、返回、独立验收与请求方采用保持分离。保留来源 / 版本
+谱系和不确定性，不能由装饰动态推断活动或由共识人数推断置信度。这是 Draft
+展示切片，不是已交付的团队流，也不新增调度权限。其 L1–L3 计划与 V1–V7 验收
+展开本 RFC Stage 3 的展示旅程，不关闭本文跨渠道或受治理 settlement 验收。
 
 ## 9. 覆盖长程工作的完整生命周期
 

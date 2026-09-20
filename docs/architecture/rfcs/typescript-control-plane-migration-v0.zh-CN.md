@@ -257,6 +257,14 @@ receipt 过期。
 
 ### 交付语义：先修正规则，再迁移
 
+Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
+vision path／terminal 一致性校验与对应 refresh 输入投影共用同一 owner。
+Python 保留 progress 归一化／新颖性与持久化适配，不再重复义务匹配规则。
+这是有界规则收敛，不是 settlement writer 或存储迁移。先刻画既有接受语义，
+再修正所有 vision trigger 的可执行写入投影，并验证真实绑定 CLI 闭环、回读及
+资格范围错配反例。Checkpoint 恢复与 in-flight 规则仍由既有边界负责，
+不新增 capability、provider 或设置。
+
 交付历史边界将 `classification`、`health_check` 与 `recommended_action` 视为
 叙述文本。它们不能生成或解除 follow-through obligation，不能证明 outcome，也
 不能判定交付规模。例如，`unblocked after dependency update` 不构成 blocker
@@ -566,8 +574,14 @@ Quota preflight 将原始准入决策冻结到版本化 pending receipt；即使
 显式 lease proof。业务与 quota 仍是分别可恢复的事务，canonical 成功独立于 Markdown
 delivery pending；这不代表全部 T2 命令或整 Goal promotion 已完成。
 
-- 继续闭合 `monitor_poll_writeback.py` 保留的 event caller，复用 monitor
-  generation、独立 successor 和 settlement owner，组成一笔事务，不建第二套引擎。
+- 保留的 issue-fix 分组 Monitor caller 现通过既有 Todo update 事务（request v4）
+  传递观察意图；观察、显式无 lease 再激活、终结标记清理、generation 和 receipt
+  一次提交。Legacy 与 canonical update 共用字段／Monitor planner，不新增 RPC、
+  raw patch 权限或轮询引擎。完成后的新观察即使 hash 相同也推进新一代；历史重放
+  不会重开当前任务。无变化的分组也能恢复显示，包括带优先级前缀的 native 文本。
+  见[观察更新与再激活](../../reference/protocols/quota-monitor-observation-receipt-v0.md#observation-updates-and-reactivation)。
+  保留 execution lease／hard-lease 模式的再激活、其他 lifecycle caller、旧持久化／
+  capture 和整 Goal 资格仍是独立边界。
 - 保持 unchanged poll/reschedule、generation fence、material-change successor
   去重和可归属 settlement。Monitor 不是 delivery 执行任务；独立 advancement Todo
   不能被 monitor 自身替代。
@@ -576,6 +590,13 @@ delivery pending；这不代表全部 T2 命令或整 Goal promotion 已完成�
   不形成交付。必要命令 effect 尚不支持时暂停整 Goal promotion，不能回退 Markdown 写入。
 
 **T3 — 闭合剩余 structured consumer，删除各自旧读路径。**
+
+Todo 摘要 lane 与裁剪前工作计数现共用 `todos/summary_lanes.ts`，删除 Python 的
+lane 分类和隐藏任务推断循环。quota 在作用域筛选后重新计数，不完整来源状态贯穿
+压缩与重复投影；公开 canonical Todo 列表保留同版本 acceptance 限制。见
+[计数语义](../../reference/todo-work-counts.md)。本切片闭合摘要到 work-lane 的计数
+消费者，不代表所有 T3 来源或 D1 展示交付完成；旧格式解码、renderer 及其他摘要策略仍保留。
+
 
 Goal Channel 所有权观察现从完整 canonical Todo／lease revision 读取，并与 legacy adapter 共用 TS 批量规则；删除展示层的时间／代数／冲突判断和晋升后的本地文件读路径。空值、不可用与截断分别披露，见 [coordination observation](../../reference/coordination-observation.md)。这只闭合所有权观察 reader，不宣称其余面板或整 Goal 晋升完成。
 
@@ -757,6 +778,15 @@ T3/D1 reader，未完成全部 Todo writer、retention/compaction 或 promotion�
 
 **T4 — durable cutover 后兑现完整 writer 删除。**
 
+- 2026-09-19 命令审计退役两条已经 typed、但没有实际消费者的执行面：
+  `coordination.local_authority.todo_compatibility_edit` 与
+  `coordination.local_authority.mutate`。claim、lease、update、archive、monitor
+  和 team-plan 事务仍复用 projection reduction 与 commit preparation，因此这些
+  公共内核保留。同一审计直接退役无实际调用的公开批量命令
+  `todo capture-followups`，不再为它继续迁移；普通 `todo add` 仍可用，但不宣称保留
+  已退役命令的批量原子性、去重或 replay 合同。独立 prompt 命令 `todo suggest`
+  也直接退役；候选分析由当前 Agent 结合既有 Todo 读取和写入路径完成，不增加改名命令
+  或包装协议。见[发现与兼容边界](../../reference/protocols/long-horizon-agent-state-protocol-v0.md#candidate-discovery-and-command-retirement)。
 - 前提是 T1–T3 和 shared RFC 的 [D1–D3](shared-goal-authority-state-provider-v0.zh-CN.md#持久化执行卡)，包括 owner 批准及明确的 legacy 迁移窗口。
   搜索剩余 import 和公开路由后，删除旧 Markdown 业务 writer、capture-only adapter、
   重复 reference aggregate。

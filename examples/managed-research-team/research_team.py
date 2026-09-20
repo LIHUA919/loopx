@@ -85,14 +85,15 @@ def prepare(root: Path, provider: str = "file", topology: str = "cloud-led") -> 
     for actor, revision in pairs:
         identity = todo_id(actor, revision)
         text = (
-            "Use the research_team MCP tools. Read the assignment with read_assignment. Organize the registered "
+            "Use the research_team MCP tools or the same delegation CLI from an existing local session. "
+            "Read the assignment with read_assignment, or inspect the synthetic team/input files. Organize the registered "
             "members with list_execution_bindings/start_delegation/wait_delegation to analyze their authorized revisions. "
             "Use stable operation ids and collaboration_brief_v0 (purpose, context, constraints, inputs, acceptance, return_requirement). "
             "Complete local-analyst before requesting cloud-reviewer, who must adopt its exact artifact. "
             "Cloud-analyst is responsible for delegating its local-reviewer prerequisite through the same tools. "
             "You can start independent branches concurrently. A running operation is not failure; wait for its original result. "
-            "Read all final artifacts with read_accepted_evidence. Decide questions and order yourself. Review their "
-            "accepted results, resolve differences, then write_report with all four evidence hashes. "
+            "Read all final artifacts with read_accepted_evidence or canonical CLI readback. Decide questions and order yourself. Review their "
+            "accepted results, resolve differences, then write_report or lead/report.json with all four evidence hashes. "
             "Only return validated_progress after write_report confirms independent checks."
             if actor == "lead" else
             "Read TASK.md and DELEGATION.json, or use read_input/write_output. Read context and assess_request before working. "
@@ -148,14 +149,26 @@ def accepted_entry(worker: str, revision: str, output: dict) -> dict:
             "evidence": output, "artifact_sha256": sha256(encoded(output)).hexdigest()}
 
 
+def prepare_execution(root: Path, model: str, environment_id: str, dsh_model: str,
+                      topology: str = "local-led") -> dict:
+    """Prepare a fresh operator fixture without starting a replacement lead."""
+    prepare(root, topology=topology)
+    write(root / "settings.json", {"dsh_model": dsh_model, "ark_model": model, "environment_id": environment_id})
+    config = configure_delegations(root)
+    return {"goal_id": GOAL, "agent_id": "lead", "registry": str(root / "registry.json"),
+            "runtime_root": str(root / "runtime"), "execution_config": str(config),
+            "workspace": str(root / "lead"), "execution_started": False,
+            "next_action": "Use delegation list/start/read/wait from the existing Agent session. "
+                           "Supply LOOPX_RESEARCH_DEMO_ROOT and the configured credentials when starting work. "
+                           "Independent task acceptance remains bound; prepare does not complete any task."}
+
+
 def launch(root: Path, model: str, environment_id: str, dsh_model: str, topology: str = "local-led") -> dict:
     if importlib.util.find_spec("deepseek_harness") is None:
         raise ValueError("install_loopx_deepseek_harness_extra_in_this_interpreter")
     if not os.environ.get("ARK_API_KEY") or not os.environ.get("DEEPSEEK_API_KEY"):
         raise ValueError("ARK_API_KEY_and_DEEPSEEK_API_KEY_required")
-    prepare(root, topology=topology)
-    write(root / "settings.json", {"dsh_model": dsh_model, "ark_model": model, "environment_id": environment_id})
-    configure_delegations(root)
+    prepare_execution(root, model, environment_id, dsh_model, topology)
     os.environ["LOOPX_RESEARCH_DEMO_ROOT"] = str(root)
     result = turn(root, "lead", "report", root / "lead", [sys.executable, str(HERE / "research_team.py"), "validate-report", str(root)],
                   host_arguments(root, "lead", "report", host="dsh" if topology == "local-led" else "ark"), 1200)
@@ -172,7 +185,7 @@ def launch(root: Path, model: str, environment_id: str, dsh_model: str, topology
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=["run", "validate-worker", "validate-report"])
+    p.add_argument("command", choices=["prepare", "prepare-chat", "run", "validate-worker", "validate-report"])
     p.add_argument("root", type=Path)
     p.add_argument("--revision", choices=REVISIONS)
     p.add_argument("--model", default=os.environ.get("ARK_MODEL_ID"))
@@ -180,9 +193,27 @@ def main() -> None:
     p.add_argument("--dsh-model", default="deepseek-v4-flash")
     p.add_argument("--topology", choices=["local-led", "cloud-led"], default="local-led")
     args = p.parse_args()
-    if args.command == "run":
+    if args.command in {"prepare", "prepare-chat", "run"}:
         if not args.model or not args.environment_id:
             p.error("explicit model and existing environment required")
+        if args.command == "prepare":
+            print(json.dumps(prepare_execution(args.root.resolve(), args.model, args.environment_id,
+                                               args.dsh_model, args.topology)))
+            return
+        if args.command == "prepare-chat":
+            root = args.root.resolve()
+            prepare_execution(root, args.model, args.environment_id, args.dsh_model, args.topology)
+            target = root / "project" / ".loopx" / "config" / "delegations.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / "delegation-config.json", target)
+            with (root / "project" / "ACTIVE_GOAL_STATE.md").open("a") as stream:
+                stream.write("\n## Objective\n\nOrganize the authorized members with loopx_collaboration. "
+                             "Local-analyst must finish before cloud-reviewer adopts its exact evidence; "
+                             "cloud-analyst delegates local-reviewer itself. Wait for independently accepted results. "
+                             "Return the corrected cash-flow comparison, source and period caveats, and exact dependency "
+                             "hashes in this conversation. The canonical report task and whole Goal remain for owner review.\n")
+            print("Prepared Goal Chat team. Select lead and .loopx/config/delegations.json in LoopX mode settings.")
+            return
         result = launch(args.root.resolve(), args.model, args.environment_id, args.dsh_model, args.topology)
         print(json.dumps(result))
         if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":

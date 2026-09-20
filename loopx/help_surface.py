@@ -244,6 +244,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Qualify one exact final diff against an enabled project policy and receipt contract.",
             },
             {
+                "command": "loopx goal-acceptance",
+                "purpose": "Configure, inspect or verify a versioned Goal acceptance basis.",
+            },
+            {
                 "command": "loopx integration-branch --help",
                 "purpose": "Detect reviewed source-branch drift and rebuild one local integration branch.",
             },
@@ -335,6 +339,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "codex-cli-visible-local-driver-pilot",
         "codex-cli-visible-session-proof",
         "configure-goal",
+        "delegation",
         "content-ops",
         "decision-context",
         "dash",

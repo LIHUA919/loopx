@@ -186,17 +186,39 @@ def handle_turn_command(
         # whether that host can launch here, so a caller never has to infer it
         # from the host id. The explicit runner hook is the one launchability
         # fact only this command layer knows.
+        operator_environ = operator_provider_environ(runtime_root)
         payload["managed_executor"] = managed_executor_binding(
             args.host,
             # The credential a managed Turn authenticates with is this
             # machine's resolved pair, not whatever the invoking shell happens
             # to export: the readback above the launch and the launch itself
             # have to name the same credential.
-            environ=operator_provider_environ(runtime_root),
+            environ=operator_environ,
             dsh_runner_configured=bool(getattr(args, "dsh_runner", None)),
-            provider=getattr(args, "dsh_provider", None),
-            model=getattr(args, "dsh_model", None),
-            reasoning_effort=getattr(args, "dsh_reasoning_effort", None),
+            provider=(
+                getattr(args, "dsh_provider", None)
+                if args.host == "dsh"
+                else None
+            ),
+            model=(
+                getattr(args, "dsh_model", None)
+                if args.host == "dsh"
+                else getattr(args, "codex_model", None)
+                if args.host == "codex-cli"
+                else None
+            ),
+            reasoning_effort=(
+                getattr(args, "dsh_reasoning_effort", None)
+                if args.host == "dsh"
+                else getattr(args, "codex_reasoning_effort", None)
+                if args.host == "codex-cli"
+                else None
+            ),
+            max_tokens=(
+                getattr(args, "dsh_max_tokens", None)
+                if args.host == "dsh"
+                else None
+            ),
         )
         if (
             args.turn_command == "run-once"
@@ -972,6 +994,7 @@ def handle_turn_command(
                         codex_bin=args.codex_bin,
                         sandbox=args.codex_sandbox,
                         model=args.codex_model,
+                        reasoning_effort=args.codex_reasoning_effort,
                         timeout_seconds=max(1.0, args.timeout_seconds - 5.0),
                     )
 
@@ -987,6 +1010,7 @@ def handle_turn_command(
                 host_runner = build_dsh_host_runner(
                     args,
                     workspace=project,
+                    environ=operator_environ,
                 )
 
             def post_settlement_reward_memory(

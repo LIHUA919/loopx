@@ -24,6 +24,7 @@ ACTION_PORTFOLIO_SCHEMA_VERSION_V2 = "quota_action_portfolio_v2"
 PLANNING_HORIZON_SCHEMA_VERSION_V0 = "quota_planning_horizon_v0"
 GUIDED_TODO_DELTA_SCHEMA_VERSION_V0 = "loopx_guided_todo_delta_v0"
 PLANNING_INVENTORY_DETAIL_SCHEMA_VERSION_V0 = "todo_planning_inventory_detail_v0"
+TODO_WORK_COUNTS_SCHEMA_VERSION_V0 = "todo_work_counts_v0"
 
 Metric = Literal["chars", "utf8_bytes", "lines", "compact_payload_chars"]
 
@@ -150,6 +151,16 @@ _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
     "utf8_bytes": 1_280,
     "lines": 36,
     "compact_payload_chars": 1_024,
+}
+
+# Source-complete Todo counts add one compact scope/completeness envelope to
+# the existing Todo, status, and quota projections. The allowance is bound to
+# the none-to-v0 schema transition; v0-to-v0 changes use the ordinary budgets.
+_TODO_WORK_COUNTS_V0_MIGRATION_GROWTH_ALLOWANCE: dict[Metric, int] = {
+    "chars": 320,
+    "utf8_bytes": 320,
+    "lines": 10,
+    "compact_payload_chars": 192,
 }
 
 # Explicit runtime-root command routing repeats one bounded command prefix per
@@ -412,6 +423,16 @@ def _planning_inventory_detail_schema_migration(
     return None
 
 
+def _todo_work_counts_schema_migration(
+    base: dict[str, Any], candidate: dict[str, Any]
+) -> str | None:
+    base_versions = tuple(base.get("todo_work_counts_schema_versions") or [])
+    candidate_versions = tuple(candidate.get("todo_work_counts_schema_versions") or [])
+    if base_versions == () and candidate_versions == (TODO_WORK_COUNTS_SCHEMA_VERSION_V0,):
+        return f"none -> {TODO_WORK_COUNTS_SCHEMA_VERSION_V0}"
+    return None
+
+
 @dataclass(frozen=True)
 class _SchemaMigrationState:
     signature_changed: bool
@@ -424,11 +445,14 @@ class _SchemaMigrationState:
     inventory_detail_schema_migration: str | None
     guided_todo_delta_schema_changed: bool
     guided_todo_delta_schema_migration: str | None
+    todo_work_counts_schema_changed: bool
+    todo_work_counts_schema_migration: str | None
     portfolio_growth_migration: bool
     horizon_growth_migration: bool
     agent_context_growth_migration: bool
     inventory_detail_growth_migration: bool
     guided_todo_delta_growth_migration: bool
+    todo_work_counts_growth_migration: bool
 
 
 def _schema_migration_state(
@@ -479,6 +503,14 @@ def _schema_migration_state(
         if guided_todo_delta_schema_changed
         else None
     )
+    todo_work_counts_schema_changed = tuple(
+        base.get("todo_work_counts_schema_versions") or []
+    ) != tuple(candidate.get("todo_work_counts_schema_versions") or [])
+    todo_work_counts_schema_migration = (
+        _todo_work_counts_schema_migration(base, candidate)
+        if todo_work_counts_schema_changed
+        else None
+    )
     return _SchemaMigrationState(
         signature_changed=signature_changed,
         signature_migration=signature_migration,
@@ -490,6 +522,8 @@ def _schema_migration_state(
         inventory_detail_schema_migration=inventory_detail_schema_migration,
         guided_todo_delta_schema_changed=guided_todo_delta_schema_changed,
         guided_todo_delta_schema_migration=guided_todo_delta_schema_migration,
+        todo_work_counts_schema_changed=todo_work_counts_schema_changed,
+        todo_work_counts_schema_migration=todo_work_counts_schema_migration,
         portfolio_growth_migration=bool(
             output_format == "json"
             and (
@@ -525,7 +559,32 @@ def _schema_migration_state(
         guided_todo_delta_growth_migration=bool(
             output_format == "json" and guided_todo_delta_schema_migration
         ),
+        todo_work_counts_growth_migration=bool(
+            output_format == "json" and todo_work_counts_schema_migration
+        ),
     )
+
+
+def _schema_migration_growth_allowance(
+    migration: _SchemaMigrationState,
+    metric: Metric,
+) -> int:
+    allowances: list[int] = []
+    if migration.portfolio_growth_migration:
+        allowances.append(_ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.horizon_growth_migration:
+        allowances.append(_PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.agent_context_growth_migration:
+        allowances.append(_AGENT_CONTEXT_V4_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.inventory_detail_growth_migration:
+        allowances.append(
+            _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[metric]
+        )
+    if migration.guided_todo_delta_growth_migration:
+        allowances.append(_GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    if migration.todo_work_counts_growth_migration:
+        allowances.append(_TODO_WORK_COUNTS_V0_MIGRATION_GROWTH_ALLOWANCE[metric])
+    return max(allowances, default=0)
 
 
 def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
@@ -591,6 +650,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                 candidate,
                 metric,
             ),
+            _schema_migration_growth_allowance(migration, metric),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK
@@ -624,30 +684,6 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
                     "lines": 5,
                     "compact_payload_chars": 512,
                 }[metric],
-            )
-        if migration.portfolio_growth_migration:
-            allowance = max(
-                allowance,
-                _ACTION_PORTFOLIO_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if migration.horizon_growth_migration:
-            allowance = max(
-                allowance,
-                _PLANNING_HORIZON_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if migration.agent_context_growth_migration:
-            allowance = max(
-                allowance, _AGENT_CONTEXT_V4_MIGRATION_GROWTH_ALLOWANCE[metric]
-            )
-        if migration.inventory_detail_growth_migration:
-            allowance = max(
-                allowance,
-                _PLANNING_INVENTORY_DETAIL_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
-            )
-        if migration.guided_todo_delta_growth_migration:
-            allowance = max(
-                allowance,
-                _GUIDED_TODO_DELTA_V0_MIGRATION_GROWTH_ALLOWANCE[metric],
             )
         if runtime_root_route_allowances:
             allowance = max(
@@ -728,6 +764,14 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             review_signals.append(
                 "guided todo delta schema migrated: "
                 f"{migration.guided_todo_delta_schema_migration}"
+            )
+    if migration.todo_work_counts_schema_changed:
+        if migration.todo_work_counts_schema_migration is None:
+            failures.append("Todo work-count schema coverage changed")
+        else:
+            review_signals.append(
+                "Todo work-count schema migrated: "
+                f"{migration.todo_work_counts_schema_migration}"
             )
 
     return {

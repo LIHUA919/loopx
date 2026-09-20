@@ -320,6 +320,17 @@ not wait for a PostgreSQL service and never expires receipts at day ten.
 
 ### Delivery semantics: correctness before migration
 
+The replan obligation outcome policy now lives in
+`work_items/replan_semantics.ts`: required-outcome selection, vision-path and
+terminal consistency matching, and the matching refresh input projection share
+one owner. Python retains progress normalization/novelty and persistence adapters,
+but no longer duplicates obligation-to-outcome matching. This is a bounded rule
+convergence, not a settlement-writer or store migration. Existing outcome
+characterization precedes the move; the intentional correction is executable
+authoring for all vision triggers, with real bound CLI closeout/readback and
+negative qualification-scope cases. Checkpoint recovery and in-flight rules
+remain in their existing owners; no new capability, provider or setting is added.
+
 The delivery-history boundary now treats `classification`, `health_check`, and
 `recommended_action` as narrative. They cannot create or discharge a
 follow-through obligation, prove an outcome, or classify delivery scale.
@@ -723,9 +734,17 @@ Quota and business authority remain separate recoverable transactions. Canonical
 commit success is independent of pending Markdown delivery. This does not finish
 all T2 commands or authorize whole-Goal promotion.
 
-- Finish the retained event callers of `monitor_poll_writeback.py`.
-  Reuse existing monitor generation, independent-successor and settlement
-  owners. Compose one transaction rather than adding a second monitor engine.
+- The retained issue-fix grouped Monitor caller now sends observation intent
+  through the existing Todo update transaction (request v4). Observation,
+  explicit lease-free reactivation, terminal-marker cleanup, generation and
+  receipt commit together. Legacy and canonical updates reuse the same field
+  and Monitor planners; no new RPC, raw patch authority or polling engine is
+  added. A fresh post-completion observation advances the cycle even with an
+  equal result hash; historical replay never reopens current work. Display
+  retry also runs for unchanged groups, including priority-prefixed native text.
+  See [observation updates](../../reference/protocols/quota-monitor-observation-receipt-v0.md#observation-updates-and-reactivation).
+  Retained execution leases/hard-lease reactivation, other lifecycle callers,
+  legacy persistence/capture and whole-Goal qualification remain separate.
 - Preserve unchanged polling/reschedule behavior, generation fences,
   material-change successor deduplication and accountable settlement.
   A monitor remains non-executable delivery context; its independent
@@ -737,6 +756,15 @@ all T2 commands or authorize whole-Goal promotion.
   never fall back to a Markdown business write.
 
 **T3 — close remaining structured consumers, then remove their old reads.**
+
+Todo summary lanes and pre-limit work counts now share `todos/summary_lanes.ts`.
+Python's lane classification and hidden-work inference loops are removed; quota
+recomputes counts after scope selection and carries incomplete source knowledge
+through compaction/reprojection. Public canonical Todo lists retain the same
+revision's acceptance guard. See [count semantics](../../reference/todo-work-counts.md).
+This closes the summary-to-work-lane count consumer, not every T3 source or D1
+projection delivery; legacy codecs/renderers and other summary policies remain.
+
 
 Goal Channel ownership observation now reads a complete canonical Todo/lease revision and shares one TS batch policy with the legacy adapter. It retires display-layer lease time/generation/conflict decisions and local-file reads after promotion. Empty, unavailable and truncated observations remain distinct; see [coordination observation](../../reference/coordination-observation.md). This closes the Goal Channel ownership reader, not other channel panels or whole-Goal promotion.
 
@@ -975,6 +1003,18 @@ readers but does not finish Todo writers, retention/compaction or promotion.
 
 **T4 — collect full-writer retirement after durability cutover.**
 
+- The 2026-09-19 command audit retires two already-typed but unconsumed
+  execution surfaces: `coordination.local_authority.todo_compatibility_edit`
+  and `coordination.local_authority.mutate`. Shared projection reduction and
+  commit preparation remain because live claim, lease, update, archive,
+  monitor, and team-plan transactions use them. The same audit retires the
+  unused public `todo capture-followups` batch command instead of migrating it;
+  ordinary `todo add` remains available but is not claimed to preserve the
+  retired command's atomic batch, deduplication, or replay contract. The
+  standalone `todo suggest` prompt command is also retired. Candidate analysis
+  stays with the current agent and existing Todo read/authoring paths; it does
+  not need a renamed command or a new wrapper protocol. See the
+  [discovery and compatibility boundary](../../reference/protocols/long-horizon-agent-state-protocol-v0.md#candidate-discovery-and-command-retirement).
 - Depends on T1–T3 and the shared RFC's [D1–D3](shared-goal-authority-state-provider-v0.md#durability-execution-cards), including owner approval
   and the explicit legacy migration window. Search remaining imports and
   public command routes before deleting old Markdown business writers,

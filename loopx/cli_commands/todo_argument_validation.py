@@ -8,7 +8,6 @@ from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 TODO_OPTION_FIELDS = (
     ("--role", "role"),
     ("--text", "text"),
-    ("--follow-up", "followups"),
     ("--todo-id", "todo_id"),
     ("--claim-operation-id", "claim_operation_id"),
     ("--update-operation-id", "update_operation_id"),
@@ -74,17 +73,15 @@ TODO_OPTION_FIELDS = (
     ("--next-excluded-agent", "next_excluded_agents"),
     ("--self-merged", "self_merged"),
     ("--agent-id", "agent_id"),
-    ("--from", "suggestion_sources"),
     ("--limit", "todo_limit"),
     ("--thin", "todo_thin"),
-    ("--trigger", "suggestion_trigger"),
     ("--state-file", "state_file"),
     ("--execute", "execute"),
     ("--provider-revision", "provider_revision"),
 )
 
 _TODO_UPDATE_MUTABLE_FIELDS = (
-    "text", "followups", "status", "note", "evidence", "reason", "task_class",
+    "text", "status", "note", "evidence", "reason", "task_class",
     "action_kind", "task_domain", "task_repository", "continuation_policy", "required_write_scopes",
     "required_capabilities", "target_capabilities", "capability_gap_status",
     "explore_result_node_refs", "clear_explore_result_node_refs", "decision_scope",
@@ -99,10 +96,6 @@ _TODO_UPDATE_UNSUPPORTED_FIELDS = (
     (
         "decision_outcome",
         "todo update does not accept --decision-outcome; use todo complete",
-    ),
-    (
-        "followups",
-        "todo update does not support --follow-up; use `todo capture-followups`",
     ),
     ("next_claimed_by", "todo update does not support --next-claimed-by"),
     (
@@ -123,7 +116,6 @@ _TODO_UPDATE_UNSUPPORTED_FIELDS = (
 
 _TODO_ADD_INITIAL_RULES = (
     ("decision_outcome", True, "does not accept --decision-outcome; record it on completion"),
-    ("followups", True, "does not support --follow-up; use `todo capture-followups`"),
     ("role", False, "requires --role"),
     ("text", False, "requires --text"),
     ("clear_claim", True, "accepts --claimed-by but not --clear-claim"),
@@ -413,8 +405,6 @@ def validate_todo_complete_options(args: argparse.Namespace) -> None:
         raise ValueError("--successor-todo-id links existing work and cannot be combined with --next-agent-todo or --next-user-todo")
     if args.no_follow_up and not (args.note or args.evidence):
         raise ValueError("--no-follow-up requires --note or --evidence")
-    if args.followups:
-        raise ValueError("todo complete does not support --follow-up; use `todo capture-followups`")
     if args.continuation_policy:
         raise ValueError("todo complete does not update --continuation-policy; use todo update first")
     validate_successor_routing_options(args)
@@ -439,8 +429,6 @@ def validate_todo_supersede_options(args: argparse.Namespace) -> None:
         raise ValueError("todo supersede does not support --self-merged")
     if args.no_follow_up:
         raise ValueError("todo supersede does not support --no-follow-up")
-    if args.followups:
-        raise ValueError("todo supersede does not support --follow-up; use `todo capture-followups`")
     if args.continuation_policy:
         raise ValueError("todo supersede does not update --continuation-policy; use todo update first")
     validate_successor_routing_options(args)
@@ -461,42 +449,11 @@ def validate_todo_archive_completed_options(args: argparse.Namespace) -> None:
         (args.next_task_repository or args.next_required_capabilities, "todo archive-completed does not support successor routing metadata"),
         (args.self_merged, "todo archive-completed does not support --self-merged"),
         (args.no_follow_up, "todo archive-completed does not support --no-follow-up"),
-        (args.followups, "todo archive-completed does not support --follow-up; use `todo capture-followups`"),
         (args.successor_todo_ids, "todo archive-completed does not support --successor-todo-id"),
     )
     for triggered, message in checks:
         if triggered:
             raise ValueError(message)
-
-
-def validate_todo_suggest_options(args: argparse.Namespace) -> None:
-    _validate_todo_option_subset(
-        args,
-        {"agent_id", "suggestion_sources", "todo_limit", "suggestion_trigger"},
-        "todo suggest only accepts --goal-id, optional --project, --agent-id, "
-        "--from, --limit, --trigger, --dry-run, and --format; unsupported: ",
-    )
-
-
-def validate_todo_capture_followups_options(args: argparse.Namespace) -> None:
-    checks = (
-        (args.role, "todo capture-followups always records agent todos; do not pass --role"),
-        (args.claimed_by, "todo capture-followups writes unclaimed todos; do not pass --claimed-by"),
-    )
-    for triggered, message in checks:
-        if triggered:
-            raise ValueError(message)
-    _validate_todo_option_subset(
-        args,
-        {
-            "text", "followups", "evidence", "task_class", "action_kind",
-            "continuation_policy", "required_write_scopes", "required_capabilities",
-            "target_capabilities", "required_decision_scopes", "state_file",
-        },
-        "todo capture-followups only accepts --goal-id, --follow-up, optional "
-        "--text shorthand, --evidence, routing metadata, --project, --state-file, "
-        "and --dry-run; unsupported: ",
-    )
 
 
 def validate_shared_todo_options(args: argparse.Namespace) -> None:
@@ -563,7 +520,7 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
             "--authority-reason is supported only by todo update/complete/supersede"
         )
     if (
-        args.todo_command not in {"suggest", "plan", "capture-followups"}
+        args.todo_command != "plan"
         and args.agent_id
         and not agent_id_allowed_for_user_authoring
         and not agent_id_allowed_for_read
@@ -578,7 +535,7 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
             )
         raise ValueError(
             f"todo {args.todo_command} does not support --agent-id; --agent-id "
-            "scopes todo list/suggest, user-todo authoring, and lifecycle actor "
+            "scopes todo list, user-todo authoring, and lifecycle actor "
             "attribution only."
         )
     if args.global_gate and not global_gate_allowed:
@@ -596,16 +553,11 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
             "todo update accepts either --resume-when or --clear-resume-when, not both"
         )
     if (
-        args.todo_command not in {"suggest", "capture-followups"}
-        and (args.suggestion_sources or args.suggestion_trigger)
-    ):
-        raise ValueError("--from and --trigger are supported only by todo suggest")
-    if (
-        args.todo_command not in {"suggest", "list", "capture-followups"}
+        args.todo_command != "list"
         and args.todo_limit is not None
     ):
         raise ValueError(
-            "--limit is supported only by todo suggest and todo list"
+            "--limit is supported only by todo list"
         )
     if args.todo_thin and args.todo_command != "list":
         raise ValueError("--thin is supported only by todo list")

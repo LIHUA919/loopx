@@ -2115,16 +2115,16 @@ Per stage, this increment implements:
   failures, and zero skips.
 - Stage 2C observation foundation: seven `s2c1.*` rows port the local-shadow CLI
   E2E and migration assertions and pin the single-lineage guarantee. The configure round trip previews, enables,
-  reads back, and disables the observer; every writer family (handoff-mode,
-  todo add/update/complete/supersede/capture-followups/archive-completed,
+  reads back, and disables the observer; every retained writer family (handoff-mode,
+  todo add/update/complete/supersede/archive-completed,
   task-lease acquire/renew/transfer) captures with
   `primary_writeback_preserved`, `provider_to_local_writes=false`, and
   `candidate_read_for_decision=false`, while an idempotent re-acquire does not
   observe; default-off goals stay isolated; candidate failure preserves the
   primary commit; a POSIX SIGKILL in the crash gap loses only that
   observation; a `--runtime-root` override that differs from
-  `common_runtime_root` keeps todo add, task-lease acquire, todo update,
-  follow-up capture, and a leased completion in one store identity while the
+  `common_runtime_root` keeps two todo adds, task-lease acquire, todo update,
+  and a leased completion in one store identity while the
   registry root gains neither a candidate lineage nor lease state; and
   `migrate-state` seeds a fresh lineage without legacy bytes.
 - Stage 2C parity half: ten `s2c2.*` rows drive one explicitly enabled
@@ -2141,8 +2141,8 @@ Per stage, this increment implements:
   as `bootstrap_required`, rebootstraps a fresh lineage and replays; three
   cycles of interleaved writers (add, note update with a no-change repeat,
   explicit exclusion set and clear with a no-change repeat, acquire, renew,
-  transfer, leased complete and supersede with their fence closes,
-  capture-followups) keep every bounded qualification matched with
+  transfer, leased complete and supersede with their fence closes, and a
+  second add) keep every bounded qualification matched with
   `sustained_parity_verdict=not_evaluated`; a
   direct primary edit reports `shadow_projection_drift`, a later write holds
   on `source_partition_continuity_unproved`, and only rollback plus rebootstrap
@@ -2810,6 +2810,17 @@ one-way projections. Do not add a third TS-Markdown backend, bidirectional
 live synchronization, or per-command split authority. Unsupported post-cutover
 commands fail closed; they do not fall back to the old writer.
 
+The 2026-09-19 command-retirement checkpoint removes the unconsumed
+`coordination.local_authority.mutate` and Todo compatibility-edit execution
+wrappers while retaining `prepareCoordinationProjectionCommit` and the shared
+reducer used by live domain transactions. It also removes the unrelated public
+`todo capture-followups` product command. That command retirement does not
+remove, weaken, or rename the runtime shadow-capture mechanism described here.
+The standalone `todo suggest` prompt command is also retired; candidate
+analysis uses the current agent and existing Todo read/authoring paths, without
+adding a discovery wrapper or provider-promotion prerequisite. No stored Todo
+or authority history is removed by either public command retirement.
+
 #### Refactoring roadmap overview
 
 The Monitor state owner now lives in TS and is composed with authoring scope,
@@ -2965,6 +2976,8 @@ source paths, authorize monitor writeback, or change provider/promotion holds.
 
 **D1 — qualify permanent projection delivery; may overlap T1/T2.**
 
+Summary/work-lane counts now remain independent of display limits and retain incomplete-source knowledge through Agent scoping; canonical list acceptance holds match status. This closes one L5 read consumer, not permanent projection freshness or D1–D3. See [count semantics](../../reference/todo-work-counts.md).
+
 The Goal Channel ownership observation consumes one complete provider revision before bounding display. It never repairs Markdown or revives old local leases; provider failures and truncation stay visible. This is a T3 read closure with shared TS interpretation, not D1/D2 qualification or D3 cutover. See [coordination observation](../../reference/coordination-observation.md).
 
 The D1 document-ownership slice gives readers, editors and projection one visible-region
@@ -3081,7 +3094,7 @@ or moving a helper is not by itself a package exit.
 | A / L1: Monitor configuration (this slice) | Existing `todo update` config enters the TS planner/CAS/receipt; delete Python's duplicate intent field catalog. Separate authoring from observed hashes, times and generations. | Ordinary CLI/API, clear/omission, active lease proof, no-op/replay, failed display delivery, complete fixture and real providers. This does not complete delegated Chat or leased polling. |
 | A / L2: Complete public mutation admission | User completion updates now share the TS edit/terminal transaction and reviewed Chat recovery. Continue the actual CLI/Turn/Chat inventory for remaining effect-owned decisions, delegated owner actions and Monitor lifecycle transitions; [caller contract](../../reference/canonical-todo-completion-update.md). | Build on merged T1 owners, not a generic raw patch. Prove permission rejection and exact caller response; remove replaced Python admission and name every remaining unsupported command. |
 | A / L3: Canonical lease lifecycle | Standalone acquire/takeover, atomic claim lease admission and maintenance reuse TS facts/decision/materialization and one provider opening fence. Explicit claimed-work transfer now commits source-authorized Todo ownership and the new lease generation together; canonical request types exclude legacy held-fence fields. Acquire success verifies current execution proof; canonical completion can recover missing display. | Full-head scope conflict, archived/ineffective holders, exact create-CAS retry, stale execution, process loss and real CLI/four-arm rehearsal are covered. [Operation and remaining callers](../../reference/canonical-lease-renew.md). Executor-held external-effect fences remain explicit work; D1–D3/default holds remain. |
-| B / L4: Leased Monitor poll and settlement | Current execution proof now binds CLI intent, observation/generation/independent-successor CAS and historical business receipt. Quota pending admission is frozen before the business write; recovery preserves that decision after lease retirement. | Existing L3 lease lifecycle, real File/SQLite/PostgreSQL, mixed fixtures, process death between business/quota commits, competing renewal and unchanged polling. [Operation and snapshot rehearsal](../../reference/protocols/quota-monitor-observation-receipt-v0.md). No lease lifecycle effects or quota spend; separate authorities stay separate. Event callers, wider L2 admission and D1–D3/default remain open. |
+| B / L4: Leased Monitor poll and settlement | Current execution proof now binds CLI intent, observation/generation/independent-successor CAS and historical business receipt. Quota pending admission is frozen before the business write; recovery preserves that decision after lease retirement. | Existing L3 lease lifecycle, real File/SQLite/PostgreSQL, mixed fixtures, process death between business/quota commits, competing renewal and unchanged polling. [Operation and snapshot rehearsal](../../reference/protocols/quota-monitor-observation-receipt-v0.md). No lease lifecycle effects or quota spend; separate authorities stay separate. The retained grouped-Monitor observation/reactivation caller now uses Todo update v4 and the shared Monitor planner, with unchanged-group display recovery. Retained-lease reactivation, wider L2 admission and D1–D3/default remain open. |
 | B / L5: Consumer and display closure | Reconcile #4316, audit Turn/quota/Dashboard/Chat source reads, and finish D1 freshness/recovery through the existing projection outbox. | CLI, Lark/Chat and packaged frontend read back their affected interactions; absent/stale display, empty canonical state, pending projection and data beyond UI limits. Delete post-promotion legacy fallbacks with each consumer. |
 | A–C / L6: Local durability qualification | Continue contributor-owned #4224/#4328 on the selected SQLite profile; reuse File/NoKV references and complete 7.2's ledger. | Capacity, real process/crash/restore/upgrade, retained receipts/scans, consumer lag, supported runtimes/OS and the separately authorized >=10-day synthetic soak. Missing measurements remain holds. |
 | A–C / L7: Capture continuity | Reconcile the merged #4315 archive/lease-membership repair; qualify its ladder row/mutant and sustained mixed-writer/event-source matrix rather than reimplementing the closed defect. | Real CLI/File capture, history retained, partial drain unqualified, crash/replay and a new lease after archive/rebootstrap. Keep the legacy migration window provable; T4 cannot be used to skip this row. |
@@ -3120,3 +3133,21 @@ soak, release, merge and live promotion retain their respective authorization.
 | C. Canonical transaction capture | Qualify the implementation merged in #3870 | Transaction-bound outbox capture targets the one `coordination.runtime_shadow` lineage and retains complete versioned Todo/lease records. Finish sustained mixed-writer parity, explicit-clear/omission coverage, and event-only Todo recovery evidence. | Can run in parallel with P, but both C and the selected provider profile must finish before parity or promotion integration. |
 | I. Binding and qualification integration | After C and the selected profile's qualification | Bind one exact provider lineage, field manifest, source revision, digest, and cursor; qualify explicit v0 import, ordering/archival/consumer parity, and recovery/capacity without consulting legacy state for missing fields. | Long-goal local integration requires L and does not wait for P. PostgreSQL joins only when its own P holds pass. |
 | F. Promotion and cleanup | After I and explicit maintainer approval | Complete provider-first CLI routing, the lock-owning promotion orchestrator, compatibility projection outbox, post-promotion fenced export/rollback, then delete duplicate reference aggregates and flip the reviewed stage/hold declarations. | Each profile must pass C, I, and its own provider qualification; long-goal local promotion additionally requires L, and PostgreSQL requires P. |
+
+## Appendix D: Execution ledger
+
+Delivery records for this RFC are files under
+[`ledger/shared-goal-authority-state-provider-v0/`](ledger/shared-goal-authority-state-provider-v0/),
+one dated entry per change, named and paired per
+[the ledger convention](ledger/README.md). An entry states what the change
+measured, what it changed, and what it did not establish.
+
+New records go there instead of into the dated sections of Appendix C. Those
+sections stay as they are: append-only history that nobody edits, and rewriting
+them into files would produce a large mechanical diff that forces rework on the
+open branches it is meant to help, while fixing nothing. The reason is measured,
+not assumed — see
+[`2026-09-19-shared-goal-authority-entries-get-a-ledger.md`](ledger/shared-goal-authority-state-provider-v0/2026-09-19-shared-goal-authority-entries-get-a-ledger.md).
+
+`examples/docs-governance-smoke.py` checks the entry naming, the Chinese mirror
+beside each entry, and that this appendix exists for the directory it names.
