@@ -156,10 +156,20 @@ export function validateCoordinationTodoReadModel(
   if (readModel.records_sha256 !== canonicalAuthoritySha256(records)) {
     throw new AuthorityStoreProtocolError("coordination Todo read-model digest mismatch");
   }
-  if (!canonicalAuthorityBytes(readModel.contract_fields).equals(
-    canonicalAuthorityBytes(domain ? TODO_DOMAIN_RECORD_CONTRACT.fields : TODO_CANONICAL_READ_RECORD_FIELDS)
-  )) {
+  const fields = domain ? TODO_DOMAIN_RECORD_CONTRACT.fields : TODO_CANONICAL_READ_RECORD_FIELDS;
+  // Validator revisions extended the v0 manifest without changing its schema.
+  // Retain that exact pre-extension shape for persisted heads. This is not a
+  // general subset rule: partial extensions, reordered and unknown fields fail.
+  const revisionFields = ["completion_validation_revision", "completion_validation_revision_history"];
+  const beforeValidatorRevisions = fields.filter((field) => !revisionFields.includes(field));
+  const declaredFields = canonicalAuthorityBytes(readModel.contract_fields);
+  const currentContract = declaredFields.equals(canonicalAuthorityBytes(fields));
+  const historicalContract = declaredFields.equals(canonicalAuthorityBytes(beforeValidatorRevisions));
+  if (!currentContract && !historicalContract) {
     throw new AuthorityStoreProtocolError("coordination Todo read-model field contract mismatch");
+  }
+  if (historicalContract && records.some((record) => revisionFields.some((field) => field in record))) {
+    throw new AuthorityStoreProtocolError("coordination Todo record exceeds its historical field contract");
   }
   for (const [recordIndex, record] of records.entries()) {
     canonicalTodoRecord(record, `coordination Todo read record ${recordIndex}`);

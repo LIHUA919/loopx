@@ -28,7 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .inbox_reply import reply_lark_event_inbox, verify_lark_inbox_reply
+from .inbox_reply import (
+    MESSAGE_ID_PATTERN,
+    reply_lark_event_inbox,
+    verify_lark_inbox_reply,
+)
 from .outbound import DEFAULT_LARK_TEXT_LIMIT, split_lark_outbound_text
 
 # An oversized answer is delivered as a bounded sequence rather than a flood:
@@ -189,6 +193,35 @@ def recorded_part_attempt(
     return _recorded_attempt(recorded)
 
 
+def attempt_provider_locator(attempt: Mapping[str, Any]) -> str | None:
+    """The message id a recorded attempt can be verified against, when it has one.
+
+    A send the provider accepted without reporting a message id records its
+    intent instead of a locator. That record still proves a write happened, and
+    ``None`` here is what tells the sequence to stop instead of posting the same
+    text a second time.
+    """
+
+    message_ref = str(attempt.get("message_ref") or "").strip()
+    return message_ref if MESSAGE_ID_PATTERN.fullmatch(message_ref) else None
+
+
+def _locator_unavailable_result(*, reconciled_key: str) -> dict[str, Any]:
+    """The typed outcome for an attempt no readback can key on."""
+
+    return {
+        "ok": False,
+        "status": "sent_unverified",
+        "idempotency_key": None,
+        "external_write_performed": True,
+        "verification_performed": False,
+        "reply_verified": False,
+        "blocker": "lark_inbox_reply_not_verified",
+        reconciled_key: False,
+        "part_locator_unavailable": True,
+    }
+
+
 def recorded_stall_notice_attempt(
     delivery_state: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
@@ -218,6 +251,12 @@ def reconciled_part_reply(
     attempt = recorded_part_attempt(delivery_state, index)
     if attempt is None:
         return None
+    if attempt_provider_locator(attempt) is None:
+        # The provider took the write and gave no message id, so this part cannot
+        # be read back. Sending it again risks delivering the same text twice,
+        # which is worse than reporting the sequence as unverified: the record
+        # keeps the part where it stopped until the caller decides.
+        return _locator_unavailable_result(reconciled_key="part_reconciled")
     verified = verify_lark_inbox_reply(
         project=root,
         config_path=config_path,
@@ -251,6 +290,8 @@ def reconciled_stall_notice(
     attempt = recorded_stall_notice_attempt(delivery_state)
     if attempt is None:
         return None
+    if attempt_provider_locator(attempt) is None:
+        return _locator_unavailable_result(reconciled_key="notice_reconciled")
     verified = verify_lark_inbox_reply(
         project=root,
         config_path=config_path,
@@ -320,11 +361,22 @@ def deliver_stall_notice(
         config_path=config_path,
         message_id=message_id,
     )
-    # The locator of the send being attempted now replaces any older one, so the
-    # record always points at the most recent unconfirmed notice.
-    delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
     if reconciled is not None:
+        if reconciled.get("notice_reconciled") is not True:
+            # The provider accepted this notice and nothing can read it back, so
+            # this record is the only evidence the reader may already have it.
+            # Dropping it here would let the next retry post the same notice
+            # again; a confirmed notice, below, is the case that settles it.
+            return reconciled
+        # A confirmed notice is settled: the stall flag carries that fact from
+        # here on, so the attempt that proved it is no longer needed.
+        delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
         return reconciled
+    # The locator of the send being attempted now replaces any older one, so the
+    # record always points at the most recent unconfirmed notice. This runs only
+    # on the path that is about to call the provider, where the old record is
+    # genuinely superseded.
+    delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
 
     def record_attempt(attempt: Mapping[str, Any]) -> None:
         # The locator has to survive the attempt that produced it: a retry

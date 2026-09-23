@@ -20,8 +20,26 @@ export const teamEvidenceScenario = {
       Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn", native: {status: "active", tokenBudget: 100000}});
       await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
       const results = page.getByRole("region", {name: "团队成果", exact: true});
-      await results.getByRole("button", {name: "local-analyst · report.md", exact: true}).click();
+      // Accepted report opens in the original conversation without an extra click.
       await results.getByRole("table").waitFor();
+      assert.equal(await results.getByLabel("当前报告").evaluate(el => el === document.activeElement), false, "Automatic readback must not steal focus");
+      const reads = api.loopxModeRequests.filter(row => row.operation === "read").length;
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByRole("table").waitFor();
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "read").length, reads + 1, "Refresh revalidates the selected body");
+      await results.getByLabel("其他产物").selectOption("report.json");
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByLabel("证据内容: report.json").waitFor();
+      assert.equal(await results.getByLabel("其他产物").inputValue(), "report.json", "Refresh preserves explicit artifact selection");
+      const composer = page.getByLabel("向 LoopX 发送消息");
+      await composer.focus();
+      const refreshRead = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/loopx") && request.postDataJSON()?.operation === "read");
+      mode.deliveries = [{operation_id: "accepted-analysis", agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted"}];
+      await refreshRead;
+      await results.getByLabel("证据内容: report.json").waitFor();
+      assert(await composer.evaluate(el => el === document.activeElement), "Delivery refresh must not steal input focus");
+      assert.equal(await results.getByLabel("其他产物").inputValue(), "report.json", "Delivery refresh keeps the selected artifact");
+      await results.getByLabel("其他产物").selectOption("report.md");
       assert.match(await results.getByRole("table").textContent(), /Free cash75/);
       assert.equal(await results.locator("script,img").count(), 0);
       assert.equal(await page.evaluate(() => window.artifactExecuted), undefined);
@@ -43,7 +61,7 @@ export const teamEvidenceScenario = {
         return route.fallback();
       };
       await page.route("**/api/chat/sessions/*/loopx", changedReport);
-      await results.getByRole("button", {name: "local-analyst · report.md", exact: true}).click();
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
       await results.getByRole("alert").filter({hasText: "产物或验收已变化"}).waitFor();
       assert.equal(await results.getByRole("table").count(), 0);
       assert.equal(await results.getByText("newer unverified report").count(), 0);

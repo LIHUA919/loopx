@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contract import parse_todo_metadata_line
+from .contract import normalize_todo_task_class, parse_todo_metadata_line
 
 from ..effect_runtime import effect_runtime_result
 from .active_state_editing import (
@@ -144,11 +144,16 @@ def archive_completed_todo_lines(
                 if (metadata := parse_todo_metadata_line(line)) and "role" in metadata]
             if any(value != role for value in roles):
                 raise ValueError("Todo archive source role contradicts its active section")
-            if not roles:
+            retained = [] if roles else [f"role={role}"]
+            if role == "agent" and block.get("task_class") is None:
+                task_class = normalize_todo_task_class(None,
+                    text=str(block.get("text") or ""), action_kind=block.get("action_kind"))
+                retained.append(f"task_class={task_class}")
+            if retained:
                 insert_at = len(moved_lines)
                 while insert_at > 1 and not moved_lines[insert_at - 1].strip():
                     insert_at -= 1
-                moved_lines.insert(insert_at, f"  <!-- loopx:todo role={role} -->")
+                moved_lines.insert(insert_at, f"  <!-- loopx:todo {' '.join(retained)} -->")
             moved_blocks.append(moved_lines)
         if move_starts:
             new_lines: list[str] = []

@@ -62,7 +62,8 @@ export const loopxModeScenario = {
       if (!composerBox || composerBox.width < 300 || composerBox.y + composerBox.height > 982) throw new Error("Composer lost usable viewport space");
       const scrollBefore = await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop);
       if (api.loopxModeRequests.filter(row => row.operation === "operations").length !== 1) throw new Error("Configured results must load once, not on ordinary polling");
-      if (api.loopxModeRequests.some(row => row.operation === "read" || row.operation === "inspect")) throw new Error("Result inventory read artifact bodies or ran preflight without selection");
+      if (api.loopxModeRequests.filter(row => row.operation === "read").length !== 1) throw new Error("Results should read one default report, not every artifact or every poll");
+      if (api.loopxModeRequests.some(row => row.operation === "inspect")) throw new Error("Reading results ran member preflight");
       await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
       const team = page.getByRole("region", {name: "团队执行详情"});
       await team.getByText("local-analyst · 已通过当前验收", {exact: true}).waitFor();

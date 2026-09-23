@@ -78,6 +78,24 @@ def _delivery_attempt(value):
     )
 
 
+def _attempt_locator(value):
+    """The provider locator a recorded attempt can be verified against.
+
+    ``None`` covers both a record no normalization can read and the typed state
+    where the provider accepted the write without reporting a message id. The
+    attempt still proves a write happened; it just cannot name a readback
+    target, and that is what stops the pump from treating the return as unsent.
+    """
+
+    if value is None:
+        return None
+    try:
+        message_ref = _delivery_attempt(value).get("message_ref")
+    except (ValueError, EffectRuntimeRejected):
+        return None
+    return message_ref if isinstance(message_ref, str) and message_ref.strip() else None
+
+
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
@@ -379,6 +397,22 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                                 },
                             )
                             continue
+                        if _attempt_locator(state.get("attempt")) is None:
+                            # The attempt records a provider write that carried no
+                            # locator, so no readback can prove it and the provider
+                            # must not be called again. Converging here keeps the
+                            # attempt as the evidence of that write while making
+                            # the return terminal, instead of looping the pump
+                            # through verification attempts forever.
+                            _write(
+                                state_path,
+                                {
+                                    **state,
+                                    "status": "explicit_unverified",
+                                    "error": "provider_locator_unavailable",
+                                },
+                            )
+                            continue
                         verifier = getattr(external_sender, "verify", None)
                         if not callable(verifier):
                             _write(
@@ -489,21 +523,39 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                     if sent.get("reply_verified") is not True:
                         if sent.get("external_write_performed") is True:
                             current = _read(state_path) if state_path.exists() else {}
-                            _write(
-                                state_path,
-                                (
+                            if (
+                                current.get("attempt") is not None
+                                and _attempt_locator(current.get("attempt")) is not None
+                            ):
+                                _write(
+                                    state_path,
                                     {
                                         **current,
                                         "status": "verification_required",
                                         "error": "provider_delivery_unverified",
-                                    }
-                                    if current.get("attempt") is not None
-                                    else {
-                                        "status": "explicit_unverified",
-                                        "error": "provider_locator_unavailable",
-                                    }
-                                ),
-                            )
+                                    },
+                                )
+                            else:
+                                # Either nothing was recorded or the record says
+                                # the provider took the write without a locator.
+                                # Both leave no readback target, so the return is
+                                # terminal rather than retryable: a retry would
+                                # post the same text again.
+                                _write(
+                                    state_path,
+                                    (
+                                        {
+                                            **current,
+                                            "status": "explicit_unverified",
+                                            "error": "provider_locator_unavailable",
+                                        }
+                                        if current.get("attempt") is not None
+                                        else {
+                                            "status": "explicit_unverified",
+                                            "error": "provider_locator_unavailable",
+                                        }
+                                    ),
+                                )
                             continue
                         raise ValueError("return_transport_unavailable")
                     transport = {
@@ -529,6 +581,19 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
                         _write(
                             state_path,
                             {"status": "explicit_unverified", "error": error},
+                        )
+                    elif _attempt_locator(current.get("attempt")) is None:
+                        # The record says the provider took the write and named
+                        # no locator, so there is nothing left to verify and a
+                        # retry would post the same text again. Converge now
+                        # instead of leaving the return in a retryable state.
+                        _write(
+                            state_path,
+                            {
+                                **current,
+                                "status": "explicit_unverified",
+                                "error": "provider_locator_unavailable",
+                            },
                         )
                     processed += 1
                     continue

@@ -17,6 +17,23 @@ import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
 
+/**
+ * One parse of a Goal's rollout-event log.
+ *
+ * Receipt discovery is intentionally tolerant: an unrelated malformed line
+ * cannot erase a valid heartbeat receipt. Settlement readback is intentionally
+ * strict: once a receipt creates a closeout obligation, malformed persisted
+ * state must fail closed. Keeping the first strict error beside the valid
+ * records lets both readers share one physical read without weakening either
+ * contract.
+ */
+export interface GoalRolloutEventSnapshot {
+  readonly runtimeRoot: string;
+  readonly goalId: string;
+  readonly events: readonly JsonObject[];
+  readonly firstStrictErrorLine: number | null;
+}
+
 /** Reject a goal id that is not one path segment, before any log read. */
 export function goalPathSegment(value: unknown): string {
   const label = "goal_id";
@@ -57,6 +74,71 @@ export function goalRolloutEventLogPath(
   return path;
 }
 
+/** Read and parse the rollout log once, retaining strict-read diagnostics. */
+export async function readGoalRolloutEventSnapshot(
+  runtimeRoot: string,
+  goalId: string,
+): Promise<GoalRolloutEventSnapshot | null> {
+  let text: string;
+  try {
+    text = await readFile(goalRolloutEventLogPath(runtimeRoot, goalId), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const events: JsonObject[] = [];
+  let firstStrictErrorLine: number | null = null;
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    try {
+      const event = jsonObject(JSON.parse(line));
+      if (
+        event === null ||
+        event.schema_version !== ROLLOUT_EVENT_SCHEMA_VERSION
+      ) {
+        throw new Error("rollout event has an unsupported schema");
+      }
+      events.push(event);
+    } catch {
+      firstStrictErrorLine ??= index + 1;
+    }
+  }
+  return {runtimeRoot, goalId, events, firstStrictErrorLine};
+}
+
+/** Return strict settlement input, or fail on the first malformed line. */
+export function strictGoalRolloutEvents(
+  snapshot: GoalRolloutEventSnapshot | null,
+): readonly JsonObject[] {
+  if (snapshot !== null && snapshot.firstStrictErrorLine !== null) {
+    throw new EffectRuntimeRequestError(
+      `settlement readback line ${snapshot.firstStrictErrorLine} is malformed`,
+      "malformed_settlement_state",
+    );
+  }
+  return snapshot?.events ?? [];
+}
+
+/** Filter heartbeat receipts from an already parsed Goal log snapshot. */
+export function goalHeartbeatReceiptsFromSnapshot(
+  snapshot: GoalRolloutEventSnapshot | null,
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] | null {
+  if (snapshot === null) return null;
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
+  return snapshot.events.filter((event) =>
+    event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
+    event.goal_id === goalId &&
+    (agentId === undefined || event.agent_id === agentId)
+  );
+}
+
 /**
  * Read the heartbeat receipts this goal persisted for one Agent.
  *
@@ -70,30 +152,9 @@ export async function readGoalHeartbeatReceipts(
   goalId: string,
   agentId?: string | null,
 ): Promise<JsonObject[] | null> {
-  let text: string;
-  try {
-    text = await readFile(goalRolloutEventLogPath(runtimeRoot, goalId), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  const receipts: JsonObject[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const event = jsonObject(JSON.parse(line));
-      if (
-        event?.schema_version === ROLLOUT_EVENT_SCHEMA_VERSION &&
-        event.event_kind === HEARTBEAT_RECEIPT_EVENT_KIND &&
-        event.goal_id === goalId &&
-        (agentId === undefined || event.agent_id === agentId)
-      ) {
-        receipts.push(event);
-      }
-    } catch {
-      // Match the established non-strict rollout-event reader: unrelated
-      // malformed lines do not manufacture or erase a valid receipt.
-    }
-  }
-  return receipts;
+  return goalHeartbeatReceiptsFromSnapshot(
+    await readGoalRolloutEventSnapshot(runtimeRoot, goalId),
+    goalId,
+    agentId,
+  );
 }

@@ -328,7 +328,9 @@ def test_goal_todo_add_uses_provider_at_override_root_when_promoted(
     _engage_fence(runtime_override)
     captured: dict[str, object] = {}
 
-    def missing_provider(method: str, params: dict[str, object], **_kwargs: object) -> dict[str, object]:
+    def missing_provider(
+        method: str, params: dict[str, object], **_kwargs: object
+    ) -> dict[str, object]:
         captured.update(method=method, params=params)
         return {
             "status": "missing",

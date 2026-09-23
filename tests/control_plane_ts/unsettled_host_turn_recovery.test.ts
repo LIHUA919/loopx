@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 
-import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
+import {
+  settlementIdentity,
+  type JsonObject,
+} from "../../loopx/control_plane/effect_program.ts";
 import {
   ACCEPTED_CLOSEOUTS,
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
@@ -29,6 +33,81 @@ async function runtimeWith(events: JsonObject[]): Promise<Runtime> {
   await writeFile(
     join(goalRoot, "rollout-event-log.jsonl"),
     events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    "utf8",
+  );
+  return {root, close: () => rm(root, {recursive: true, force: true})};
+}
+
+async function runtimeWithSettledTurns(count: number): Promise<Runtime> {
+  const root = await mkdtemp(join(tmpdir(), "loopx-closeout-scale-"));
+  const goalRoot = join(root, "goals", GOAL);
+  const runsRoot = join(goalRoot, "runs");
+  await mkdir(runsRoot, {recursive: true});
+  const events: JsonObject[] = [];
+  const runs: JsonObject[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const suffix = String(index).padStart(4, "0");
+    const turn = `turn-${suffix}`;
+    const todoId = `todo_${suffix}`;
+    const identity = settlementIdentity({
+      goal_id: GOAL,
+      agent_id: AGENT,
+      todo_id: todoId,
+      turn_instance_id: turn,
+    });
+    events.push(
+      receipt(turn, {
+        todo_id: todoId,
+        settlement_effect_id: identity.effect_id,
+        closeout_required: true,
+      }, {event_id: `guard-${suffix}`}),
+      {
+        schema_version: "loopx_rollout_event_v0",
+        event_id: `writeback-${suffix}`,
+        event_kind: "refresh_state",
+        goal_id: GOAL,
+        agent_id: AGENT,
+        run_id: turn,
+        details: {settlement_effect_id: identity.effect_id},
+      },
+      {
+        schema_version: "loopx_rollout_event_v0",
+        event_id: `spend-${suffix}`,
+        event_kind: "quota_spend",
+        goal_id: GOAL,
+        agent_id: AGENT,
+        run_id: turn,
+        details: {settlement_effect_id: identity.effect_id},
+      },
+    );
+    runs.push(
+      {
+        classification: "state_refreshed",
+        delivery_outcome: "outcome_progress",
+        goal_id: GOAL,
+        agent_id: AGENT,
+        todo_id: todoId,
+        turn_instance_id: turn,
+        settlement_identity: identity,
+      },
+      {
+        classification: "quota_slot_spent",
+        goal_id: GOAL,
+        agent_id: AGENT,
+        todo_id: todoId,
+        turn_instance_id: turn,
+        settlement_identity: identity,
+      },
+    );
+  }
+  await writeFile(
+    join(goalRoot, "rollout-event-log.jsonl"),
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(runsRoot, "index.jsonl"),
+    `${runs.map((run) => JSON.stringify(run)).join("\n")}\n`,
     "utf8",
   );
   return {root, close: () => rm(root, {recursive: true, force: true})};
@@ -299,6 +378,42 @@ test("a malformed or foreign log line fails the read instead of erasing a closeo
     await assert.rejects(
       () => preflight(runtime.root),
       /malformed/,
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("an unrelated malformed line remains non-strict when no closeout exists", async () => {
+  const runtime = await runtimeWith([
+    receipt("turn-a", {closeout_required: false}),
+  ]);
+  try {
+    await writeFile(
+      join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl"),
+      `${JSON.stringify(receipt("turn-a", {closeout_required: false}))}\nnot json\n`,
+      "utf8",
+    );
+    const result = await preflight(runtime.root);
+    assert.equal(result.status, "none");
+    assert.equal(result.reason, "no_prior_turn_requires_closeout");
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("settled history is read and indexed once instead of rescanned per Turn", async () => {
+  const runtime = await runtimeWithSettledTurns(1000);
+  try {
+    const started = performance.now();
+    const result = await preflight(runtime.root);
+    const elapsedMs = performance.now() - started;
+    assert.equal(result.status, "none");
+    assert.equal(result.reason, "prior_turn_settlement_validated");
+    assert.equal(result.turns_validated, 1000);
+    assert.ok(
+      elapsedMs < 1500,
+      `indexed closeout preflight took ${elapsedMs.toFixed(1)}ms`,
     );
   } finally {
     await runtime.close();

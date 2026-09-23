@@ -250,6 +250,7 @@ def build_todo_runtime_shadow_projection(
 def capture_todo_archive_dependencies(todos: list[dict[str, Any]], state_text: str) -> list[dict[str, Any]]:
     """Use the same bounded capture for bootstrap and subsequent writer outbox."""
     from ..todos.active_state_todo_parser import parse_todo_source
+    from ..todos.contract import normalize_todo_task_class
     from ..todos.todo_summary import structured_todo_item, canonical_todo_read_record
 
     _, archived, _ = parse_todo_source(state_text)
@@ -257,18 +258,28 @@ def capture_todo_archive_dependencies(todos: list[dict[str, Any]], state_text: s
     capture_fields = ("todo_id", "role", "task_class", "status", "done", "archive_state", "resume_when",
         "decision_scope", "decision_outcome", "global_gate", "blocks_agent", "bound_agent", "goal_bound",
         "successor_todo_ids", "superseded_by", "unblocks_todo_id")
+    archive_facts = []
+    for item in archived:
+        facts = {key: item[key] for key in capture_fields if key in item}
+        # Keep the compatibility read class separate from recorded authority.
+        # Do not transport private prose or infer a missing role from it.
+        if item.get("role") == "agent" and item.get("task_class") is None:
+            facts["legacy_task_class"] = normalize_todo_task_class(None,
+                text=str(item.get("text") or ""), action_kind=item.get("action_kind"))
+        archive_facts.append(facts)
     capture = effect_runtime_result("todo.archive.capture_dependencies", {
-        "schema_version": "todo_archive_dependency_capture_request_v1",
+        "schema_version": "todo_archive_dependency_capture_request_v2",
         "active": [{key: item[key] for key in capture_fields if key in item} for item in todos],
-        "archived": [{key: item[key] for key in capture_fields if key in item} for item in archived],
+        "archived": archive_facts,
     })
-    if not isinstance(capture, dict) or capture.get("schema_version") != "todo_archive_dependency_capture_result_v0":
+    if not isinstance(capture, dict) or capture.get("schema_version") != "todo_archive_dependency_capture_result_v1":
         raise ValueError("invalid archived dependency capture result")
     result = list(todos)
     for selected in capture["records"]:
         item = archived[selected["index"]]
-        result.append(canonical_todo_read_record(structured_todo_item(item,
-            role=selected["role"], source_section=item["source_section"], archive_state="archive")))
+        result.append(canonical_todo_read_record(structured_todo_item(
+            {**item, "task_class": selected["task_class"]}, role=selected["role"],
+            source_section=item["source_section"], archive_state="archive")))
     return result
 
 

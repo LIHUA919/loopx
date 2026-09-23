@@ -60,6 +60,27 @@ operation id、expected revision 和替换内容；新的意图必须使用新�
 回执都不能完成新验证器。CLI 与 managed Turn 复用同一 facade；Dashboard 的 Todo
 详情只读展示 revision、digest 与最后修改者，不新增第二套编辑权威或 Lark 专用状态。
 
+## Reading pre-revision Todo heads after upgrade
+
+The v0 Todo read-model manifest predating validator revision history remains
+readable. Compatibility recognizes the exact earlier field list for both native
+and canonical records; it does not accept arbitrary subsets or a partial
+validator extension. A historical manifest cannot contain undeclared validator
+revision fields. Record identity, count, content digest and Todo semantics are
+still checked.
+
+Readback does not rewrite the stored head or historical receipts. The next
+ordinary admitted mutation writes the current manifest through the existing
+provider transaction. CLI status, packaged Chat and other projection consumers
+share this reader; no provider switch, automatic promotion or new grant occurs.
+
+升级后仍可读取增加验证器修订历史之前的 v0 Todo 记录。兼容只接受 native 与
+canonical 各自精确的历史字段清单，不接受任意子集或只增加一半的新字段；历史
+清单也不能夹带未声明的修订字段。身份、数量、内容摘要与 Todo 语义仍须通过校验。
+读取不重写旧 head 或历史回执，下一次正常获准的更新通过现有 provider 事务写入
+当前清单。CLI、打包 Chat 和其他投影入口共享该读取规则，不切换 provider、自动
+晋升或扩大授权。
+
 ## One edit, one terminal transaction
 
 The update decoder, authoring planner and record materializer are shared with

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,8 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import {
   indexCoordinationProjection,
   indexCoordinationProjectionTodos,
+  coordinationTodoReadModel,
+  validateCoordinationTodoReadModel,
   prepareCoordinationProjectionCommit,
   reduceCoordinationProjection,
   TODO_CANONICAL_READ_RECORD_FIELDS,
@@ -344,3 +346,78 @@ test("coordination projection commit derives one auditable atomic transaction", 
     { lease_epoch: 1, owner: "agent-a", todo_id: "todo_a" },
   ]);
 });
+
+
+// Frozen from the persisted pre-validator-revision contract, not from the
+// implementation under test: future unversioned field changes must fail here.
+const historicalFields = JSON.parse(await readFile(new URL(
+  "../fixtures/coordination/todo-pre-validator-revision-fields.json", import.meta.url,
+), "utf8"));
+for (const native of [false, true]) {
+  test(`historical ${native ? "native" : "canonical"} Todo head survives upgrade and next mutation`, async () => {
+    const fields: string[] = historicalFields.canonical_fields.filter((field: string) =>
+      !native || !historicalFields.projection_metadata_fields.includes(field));
+    const todo: JsonObject = {
+      schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id: "todo_upgrade", role: "agent", status: "open", done: false,
+      text: "Read previously accepted work after an upgrade", archive_state: "active",
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    };
+    const schema = native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA;
+    const head = {
+      goal_id: "goal-upgrade", todos: [todo], leases: [],
+      todo_read_model: {schema_version: schema, contract_fields: fields,
+        todo_count: 1, records_sha256: canonicalAuthoritySha256([todo])},
+    };
+    const original = structuredClone(head);
+    assert.deepEqual(validateCoordinationTodoReadModel(head, head.goal_id), head.todo_read_model);
+    assert.deepEqual(head, original, "reading must not rewrite a historical head");
+    for (const invalid of [
+      fields.filter(field => field !== "status"),
+      [...fields, "completion_validation_revision"],
+      [...fields, "unexpected_field"],
+      [...fields].reverse(),
+      [...fields, fields[0]],
+    ]) {
+      assert.throws(() => validateCoordinationTodoReadModel({...head,
+        todo_read_model: {...head.todo_read_model, contract_fields: invalid}}, head.goal_id), /field contract mismatch/);
+    }
+    for (const field of ["completion_validation_revision", "completion_validation_revision_history"]) {
+      const undeclared = {...todo, [field]: field.endsWith("history") ? [] : 1};
+      assert.throws(() => validateCoordinationTodoReadModel({...head, todos: [undeclared],
+        todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256([undeclared])}}, head.goal_id),
+      /exceeds its historical field contract/);
+    }
+    assert.throws(() => validateCoordinationTodoReadModel({...head,
+      todo_read_model: {...head.todo_read_model, records_sha256: "0".repeat(64)}}, head.goal_id), /digest mismatch/);
+    assert.throws(() => validateCoordinationTodoReadModel({...head,
+      todo_read_model: {...head.todo_read_model, todo_count: 2}}, head.goal_id), /count mismatch/);
+    const root = await mkdtemp(join(tmpdir(), "loopx-upgrade-todo-"));
+    const store = new FileAuthorityStore(root, head.goal_id);
+    const initial = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "historical-head", events: [{schema_version: "bootstrap_v0"}],
+      next_projection: head, receipts: []});
+    assert.equal(initial.status, "applied");
+    if (initial.status !== "applied") return;
+    const request = {schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
+      runtime_root: root, goal_id: head.goal_id};
+    const createStore = () => new FileAuthorityStore(root, head.goal_id);
+    const listed = await listLocalCoordinationTodos(request, {createStore});
+    assert.equal(listed.status, "loaded");
+    assert.equal(listed.legacy_fallback_used, false);
+    assert.deepEqual(listed.todos, [todo]);
+    const reopened = await createStore().loadAuthority();
+    assert.equal(reopened.status, "loaded");
+    if (reopened.status !== "loaded") return;
+    assert.deepEqual(reopened.head, original);
+    const changed = {...todo, note: "New work after upgrade"};
+    const commit = prepareCoordinationProjectionCommit({goal_id: head.goal_id,
+      operation_id: "next-mutation", expected_provider_revision: initial.provider_revision,
+      projection: reopened.head, mutations: [{kind: "todo_upsert", todo: changed}]});
+    assert.deepEqual(commit.next_projection.todo_read_model, coordinationTodoReadModel([changed], schema));
+    assert.equal((await store.commitAuthority(commit)).status, "applied");
+    const updated = await listLocalCoordinationTodos(request, {createStore});
+    assert.equal(updated.status, "loaded");
+    assert.deepEqual(updated.todos, [changed]);
+  });
+}

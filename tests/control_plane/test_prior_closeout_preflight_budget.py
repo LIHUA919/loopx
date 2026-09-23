@@ -37,13 +37,8 @@ def _preflight(**overrides):
     return _prior_closeout_preflight(**kwargs)
 
 
-def test_the_closeout_preflight_declares_the_latency_its_owner_needs():
-    """The typed owner scans the Goal's history, so the default budget is wrong.
-
-    The preflight validates every recorded Turn before it can name the one that
-    still owes a closeout. With the Effect runtime default its own query timed
-    out, and the whole quota entry reported itself unavailable.
-    """
+def test_the_closeout_preflight_stays_on_the_default_runtime_budget():
+    """A shared indexed snapshot must not need a special timeout exemption."""
 
     seen: dict[str, object] = {}
 
@@ -65,9 +60,7 @@ def test_the_closeout_preflight_declares_the_latency_its_owner_needs():
     )
     assert seen["params"]["runtime_root"] == str(DEVICE_ROOT)
     assert seen["timeout"] == PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS
-    assert PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS > 5.0, (
-        "a history scan must not be sized against the single-record default"
-    )
+    assert PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS == 5.0
 
 
 def test_the_identity_conflict_diagnostic_keeps_its_typed_error():

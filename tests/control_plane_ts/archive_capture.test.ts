@@ -11,7 +11,7 @@ const request = (archived: object[], active: object[] = [{todo_id: "todo_active"
 test("capture carries actual transitive archive nodes, not cached readiness or unrelated history", () => {
   assert.deepEqual(capture(request([{...dependency, resume_when: "todo_done:todo_prior"},
     {...dependency, todo_id: "todo_prior"}, {...dependency, todo_id: "todo_unrelated"}])),
-  {schema_version: "todo_archive_dependency_capture_result_v0", records: [{index: 0, role: "agent"}, {index: 1, role: "agent"}]});
+  {schema_version: "todo_archive_dependency_capture_result_v1", records: [{index: 0, role: "agent", task_class: "advancement_task"}, {index: 1, role: "agent", task_class: "advancement_task"}]});
   assert.deepEqual(capture(request([], [{todo_id: "todo_active", resume_when: "todo_done:todo_history", resume_ready: true}])).records, []);
 });
 
@@ -22,7 +22,7 @@ test("capture never invents user decision authority from class, text, or cached 
     assert.throws(() => capture(request([{...dependency, ...changed}])), /archive dependency capture/);
   }
   assert.deepEqual(capture(request([{...dependency, role: "user", task_class: "user_action"}])).records,
-    [{index: 0, role: "user"}]);
+    [{index: 0, role: "user", task_class: "user_action"}]);
 });
 
 test("capture preserves unreferenced archived standing decisions and their revocations", () => {
@@ -33,7 +33,7 @@ test("capture preserves unreferenced archived standing decisions and their revoc
     standing("todo_approve", "approve"), standing("todo_reject", "reject"), standing("todo_cancel", "cancel"),
     {...standing("todo_linked", "approve"), unblocks_todo_id: "todo_delivery"},
   ], [{todo_id: "todo_delivery"}])).records,
-  [{index: 0, role: "user"}, {index: 1, role: "user"}, {index: 2, role: "user"}]);
+  [{index: 0, role: "user", task_class: "user_gate"}, {index: 1, role: "user", task_class: "user_gate"}, {index: 2, role: "user", task_class: "user_gate"}]);
   assert.throws(() => capture(request([standing("todo_reject", "reject"), standing("todo_reject", "reject")],
     [{todo_id: "todo_delivery"}])), /duplicate standing decision identity/);
 });
@@ -42,7 +42,7 @@ test("duplicate identities cannot be selected by storage order; archived cycles 
   assert.throws(() => capture(request([dependency, dependency])), /duplicate dependency identity/);
   assert.throws(() => capture(request([dependency], [{todo_id: "todo_history", resume_when: "todo_done:todo_history"}])), /duplicate/);
   assert.deepEqual(capture(request([{...dependency, resume_when: "todo_done:todo_history"}])).records,
-    [{index: 0, role: "agent"}]);
+    [{index: 0, role: "agent", task_class: "advancement_task"}]);
 });
 
 test("capture retains explicit and inferred archived continuations through the same edge index", () => {
@@ -52,14 +52,14 @@ test("capture retains explicit and inferred archived continuations through the s
     {...dependency, todo_id: "todo_transitive", resume_when: "todo_done:todo_inferred"},
     {...dependency, todo_id: "todo_unrelated"}];
   assert.deepEqual(capture(request(archived, active)).records,
-    [{index: 1, role: "agent"}, {index: 0, role: "agent"}, {index: 2, role: "agent"}, {index: 3, role: "agent"}]);
+    [{index: 1, role: "agent", task_class: "advancement_task"}, {index: 0, role: "agent", task_class: "advancement_task"}, {index: 2, role: "agent", task_class: "advancement_task"}, {index: 3, role: "agent", task_class: "advancement_task"}]);
 });
 
 test("deferred successor lineage does not become a completed resume prerequisite", () => {
   const deferred = {...dependency, status: "deferred", done: true};
   assert.deepEqual(capture(request([deferred], [{todo_id: "todo_active", successor_todo_ids: [dependency.todo_id]}])).records,
-    [{index: 0, role: "agent"}]);
-  assert.deepEqual(capture(request([deferred])).records, [{index: 0, role: "agent"}]);
+    [{index: 0, role: "agent", task_class: "advancement_task"}]);
+  assert.deepEqual(capture(request([deferred])).records, [{index: 0, role: "agent", task_class: "advancement_task"}]);
   assert.equal(deferred.status, "deferred");
 });
 
@@ -68,7 +68,7 @@ test("retained deferred dependencies remain unsatisfied after capture", async ()
     await import("../../loopx/control_plane/todos/resume_condition.ts");
   const historical = {...dependency, role: "agent", status: "deferred", done: true};
   const selection = capture(request([historical]));
-  assert.deepEqual(selection.records, [{index: 0, role: "agent"}]);
+  assert.deepEqual(selection.records, [{index: 0, role: "agent", task_class: "advancement_task"}]);
   const result = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
     items: [{todo_id: "todo_active", role: "agent", status: "open", task_class: "advancement_task", resume_when: "todo_done:todo_history"}],
     source_items: [historical], rollout_events: [], evaluated_at: "2026-09-20T00:00:00Z"});
@@ -76,5 +76,33 @@ test("retained deferred dependencies remain unsatisfied after capture", async ()
 });
 
 test("old capture request cannot silently omit the expanded relationship contract", () => {
-  assert.throws(() => capture({...request([]), schema_version: "todo_archive_dependency_capture_request_v0"}), /invalid request/);
+  for (const schema_version of ["todo_archive_dependency_capture_request_v0", "todo_archive_dependency_capture_request_v1"])
+    assert.throws(() => capture({...request([]), schema_version}), /invalid request/);
+});
+
+test("recorded Agent role admits the legacy read class without creating authority", () => {
+  const historical = {...dependency, role: "agent", task_class: undefined,
+    legacy_task_class: "advancement_task", resume_when: "todo_done:todo_prior"};
+  const result = capture(request([historical, {...dependency, todo_id: "todo_prior"}]));
+  assert.deepEqual(result.records, [
+    {index: 0, role: "agent", task_class: "advancement_task"},
+    {index: 1, role: "agent", task_class: "advancement_task"},
+  ]);
+  for (const changed of [{role: undefined}, {role: "user"}, {task_class: "unknown"},
+    {task_class: "user_gate"}, {legacy_task_class: undefined}, {legacy_task_class: "user_gate"},
+    {global_gate: true}, {decision_outcome: "approve"}]) {
+    assert.throws(() => capture(request([{...historical, ...changed}])), /archive dependency capture/);
+  }
+});
+
+test("legacy classification participates in inferred succession before walking closure", () => {
+  const archived = [{...dependency, role: "agent", task_class: undefined,
+    legacy_task_class: "advancement_task", unblocks_todo_id: "todo_active"}];
+  assert.deepEqual(capture(request(archived, [{todo_id: "todo_active"}])).records,
+    [{index: 0, role: "agent", task_class: "advancement_task"}]);
+  assert.deepEqual(capture(request([{...archived[0], legacy_task_class: "continuous_monitor"}],
+    [{todo_id: "todo_active"}])).records, []);
+  // Explicit class wins over a stale legacy projection.
+  assert.deepEqual(capture(request([{...archived[0], task_class: "continuous_monitor"}],
+    [{todo_id: "todo_active"}])).records, []);
 });

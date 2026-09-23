@@ -321,7 +321,12 @@ output, preferring the same artifact name/type. The referenced artifact and hash
 must match; source text stays inspectable, with no inferred JSON narrative. A newer,
 missing or unverified source must not silently replace the requested version.
 Text differences do not establish semantic correctness or requester adoption.
-Keep readable output and comparison prominent; retain raw identifiers in details.
+The conversation now opens one eligible accepted report automatically, preferring
+Markdown. Desktop uses a compact member rail beside the report; narrow screens
+stack the reader below it. Explicit artifact choices survive delivery refresh and
+are revalidated by operation, reference and hash; automatic reads do not take
+keyboard focus. Acceptance and requester adoption remain separate in details.
+This qualifies report readback, not mixed-team launch or stop/recovery.
 Merged [#4814](https://github.com/loopx-project/loopx/pull/4814) adds confirmation
 of one canonical team plan from manager and Goal Lark cards. Authenticated card
 bindings and the shared decision owner prevent a second click from creating a

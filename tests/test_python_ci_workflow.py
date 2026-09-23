@@ -67,7 +67,7 @@ def test_minimum_node_lane_keeps_full_coverage_with_runner_headroom() -> None:
         "  node-forward-compatibility:\n", 1,
     )[0]
 
-    assert "timeout-minutes: 15" in minimum
+    assert "timeout-minutes: 20" in minimum
     assert "for test in tests/control_plane_ts/*.test.ts" in minimum
     assert 'node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"' in minimum
     assert "--test-name-pattern" not in minimum

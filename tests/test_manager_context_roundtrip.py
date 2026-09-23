@@ -795,3 +795,73 @@ def test_registration_revocation_blocks_return_without_retargeting(flow, project
     assert not [m for m in store.messages(session["session_id"])
                 if m.get("origin") == "manager_followup"]
     assert reply_status(root, receipt)[0]["status"] == "retry_pending"
+
+
+def test_provider_write_without_a_locator_is_terminal_and_not_repeated(flow):
+    """A write the provider took without a message id is never sent again.
+
+    The canonical attempt contract holds "accepted, no locator" as a typed
+    state. The pump has to converge there: a return whose only record names no
+    readback target cannot stay retryable, because the retry would post text the
+    reader may already have.
+    """
+
+    root, registry, store, create = flow
+    session, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(
+        root,
+        "research",
+        "worker",
+        rid,
+        "conclusion",
+        "Processed with a recorded validation result.",
+    )
+
+    class Transport:
+        def __init__(self):
+            self.send_calls = 0
+            self.verify_calls = 0
+
+        def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.send_calls += 1
+            record_attempt(
+                {
+                    "schema_version": "manager_return_delivery_attempt_v0",
+                    "provider": "lark",
+                    "message_ref": None,
+                    "intent_digest": "sha256:" + "a" * 64,
+                    "provider_receipt": "sha256:" + "b" * 64,
+                }
+            )
+            raise RuntimeError("synthetic process interruption after provider send")
+
+        def verify(self, route, session, turn, text, attempt):
+            self.verify_calls += 1
+            raise AssertionError("a write with no locator has nothing to verify")
+
+    transport = Transport()
+    drain(root, registry, store, transport)
+    first = reply_status(root, receipt)[0]
+
+    # The write is recorded and the return settles as unverifiable in the same
+    # pass: nothing can read it back, so it must not stay retryable.
+    assert first["status"] == "explicit_unverified"
+    assert first["error"] == "provider_locator_unavailable"
+    assert transport.send_calls == 1
+
+    state_path = next(
+        (root / ".local" / "manager-context" / "replies").glob(
+            f"{receipt['request_id']}/conclusion.delivery.json"
+        )
+    )
+    state = json.loads(state_path.read_text())
+    assert state["attempt"]["message_ref"] is None
+    assert state["attempt"]["intent_digest"] == "sha256:" + "a" * 64
+
+    drain(root, registry, ChatSessionStore(root), transport)
+    again = reply_status(root, receipt)[0]
+    assert again["status"] == "explicit_unverified"
+    assert transport.send_calls == 1
+    assert transport.verify_calls == 0

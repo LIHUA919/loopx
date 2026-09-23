@@ -16,6 +16,13 @@ const attempt = {
 
 test("normalizes the exact provider-neutral delivery attempt", () => {
   assert.deepEqual(normalizeManagerReturnDeliveryAttempt(attempt), attempt);
+  // The provider accepted the write and reported no message id. The attempt is
+  // still the record of that write, so the locator is typed as absent instead
+  // of being rejected or faked.
+  assert.deepEqual(
+    normalizeManagerReturnDeliveryAttempt({ ...attempt, message_ref: null }),
+    { ...attempt, message_ref: null },
+  );
   assert.throws(
     () => normalizeManagerReturnDeliveryAttempt({ ...attempt, private_payload: "no" }),
     /unsupported or missing fields/,
@@ -23,6 +30,10 @@ test("normalizes the exact provider-neutral delivery attempt", () => {
   assert.throws(
     () => normalizeManagerReturnDeliveryAttempt({ ...attempt, message_ref: "bad ref" }),
     /message_ref is invalid/,
+  );
+  assert.throws(
+    () => normalizeManagerReturnDeliveryAttempt({ ...attempt, message_ref: "" }),
+    /message_ref must be a non-empty string/,
   );
 });
 

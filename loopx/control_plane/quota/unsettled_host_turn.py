@@ -30,12 +30,11 @@ UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD = (
     "quota.prior_host_turn_closeout.preflight"
 )
-# The typed owner validates every recorded Turn of the Goal before it can name
-# the one that still owes a closeout, so its latency grows with that Goal's own
-# history (216 Turns took ~6s on 2026-09-21). The Effect runtime default budget
-# is sized for single-record reads, and using it here made the preflight time
-# out and report the whole quota entry as unavailable.
-PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS = 30.0
+# The typed owner reads and indexes the Goal history once, then validates each
+# candidate from that immutable snapshot. Keep this on the ordinary Effect
+# request budget: raising the timeout would hide a return to repeated full-log
+# scans and strand the quota entry again on long-lived Goals.
+PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_TIMEOUT_SECONDS = 5.0
 PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA = (
     "loopx_prior_host_turn_closeout_preflight_request_v0"
 )

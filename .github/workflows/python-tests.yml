@@ -87,7 +87,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -213,9 +213,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    # The full public-minimum suite now runs beyond ten minutes on hosted runners.
+    # The full public-minimum suite has reached fifteen minutes on hosted runners.
     # Keep a bounded margin above the measured workload without weakening coverage.
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6

@@ -2319,7 +2319,9 @@ commit receipt。各 provider 的 CAS/replay 边界、legacy 源顺序兼容、�
 
 完整来源与列表过滤的边界现保留已求值的 resume 事实。Bootstrap 与 writer outbox
 共用 typed 归档依赖 selector，把被引用的实际完成记录纳入 canonical，使 reader 能
-独立重算。新 legacy 归档保留 role；旧 agent-only class 记录可有界还原 agent 身份，
+独立重算。新 legacy Agent 归档保留 role 和既有读取分类；旧 Agent 专属 class 记录
+可有界还原 Agent 身份；明确记录 Agent role 而未记录 class 的历史记录，可保留
+legacy 读取分类。TS 选择器校验这项独立的 codec 事实，闭包遍历与物化使用同一分类，
 绝不推测用户批准权限。重复／矛盾 identity 明确拒绝，历史节点／lease 不重新进入
 活动 lane。三臂演练用真实 provider 检查此闭合；派生 readiness 不充当证据。通用历史
 导入、剩余 D3 资格化与显式 cutover 批准仍是后续工作。

@@ -2,8 +2,9 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import {
-  ROLLOUT_EVENT_SCHEMA_VERSION,
-  goalRolloutEventLogPath,
+  readGoalRolloutEventSnapshot,
+  strictGoalRolloutEvents,
+  type GoalRolloutEventSnapshot,
 } from "../rollout_receipt_log.ts";
 import {
   effectIdsMatch,
@@ -73,6 +74,17 @@ interface ReadbackRequest {
   refresh_retry: RefreshRetryRequest | null;
 }
 
+export interface QuotaSettlementReadbackSnapshot {
+  readonly runtimeRoot: string;
+  readonly goalId: string;
+  readonly events: readonly JsonObject[];
+  readonly runs: readonly JsonObject[];
+  readonly eventsByTurn: ReadonlyMap<string, readonly JsonObject[]>;
+  readonly runsByTurn: ReadonlyMap<string, readonly JsonObject[]>;
+  readonly runsByEffectRef: ReadonlyMap<string, readonly JsonObject[]>;
+  readonly runPositions: ReadonlyMap<JsonObject, number>;
+}
+
 interface ResultBundle extends JsonObject {
   result: SettlementResult;
   payload: JsonObject;
@@ -80,6 +92,21 @@ interface ResultBundle extends JsonObject {
 
 type SettlementProgressState = "identity_required" | "writeback_required" |
   "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
+
+function settlementScope(
+  runtimeRootValue: unknown,
+  goalIdValue: unknown,
+): { runtimeRoot: string; goalId: string } {
+  const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
+  if (!isAbsolute(runtimeRoot)) {
+    throw new EffectRuntimeRequestError("runtime_root must be absolute");
+  }
+  const goalId = requireNonEmptyString(goalIdValue, "goal_id");
+  if (goalId === "." || goalId === ".." || goalId.includes("/") || goalId.includes("\\")) {
+    throw new EffectRuntimeRequestError("goal_id must be a single path segment");
+  }
+  return {runtimeRoot, goalId};
+}
 
 /** Receipt verification owns progress; a durable debit alone is not settlement. */
 function settlementProgress(
@@ -123,14 +150,10 @@ function decodeRequest(value: unknown): ReadbackRequest {
       "Quota settlement readback request schema mismatch",
     );
   }
-  const runtimeRoot = requireNonEmptyString(request.runtime_root, "runtime_root");
-  if (!isAbsolute(runtimeRoot)) {
-    throw new EffectRuntimeRequestError("runtime_root must be absolute");
-  }
-  const goalId = requireNonEmptyString(request.goal_id, "goal_id");
-  if (goalId === "." || goalId === ".." || goalId.includes("/") || goalId.includes("\\")) {
-    throw new EffectRuntimeRequestError("goal_id must be a single path segment");
-  }
+  const {runtimeRoot, goalId} = settlementScope(
+    request.runtime_root,
+    request.goal_id,
+  );
   if (typeof request.infer_turn_instance_id !== "boolean") {
     throw new EffectRuntimeRequestError("infer_turn_instance_id must be a boolean");
   }
@@ -190,6 +213,144 @@ async function readJsonLines(path: string, schemaVersion?: string): Promise<Json
     }
   }
   return records;
+}
+
+function turnKey(
+  goalId: string | null,
+  agentId: string | null,
+  turnInstanceId: string | null,
+): string | null {
+  return goalId && agentId && turnInstanceId
+    ? `${goalId}\u0000${agentId}\u0000${turnInstanceId}`
+    : null;
+}
+
+function appendIndexed(
+  index: Map<string, JsonObject[]>,
+  key: string | null,
+  record: JsonObject,
+): void {
+  if (key === null) return;
+  const existing = index.get(key);
+  if (existing) existing.push(record);
+  else index.set(key, [record]);
+}
+
+function indexSettlementSnapshot(
+  runtimeRoot: string,
+  goalId: string,
+  events: readonly JsonObject[],
+  runs: readonly JsonObject[],
+): QuotaSettlementReadbackSnapshot {
+  const eventsByTurn = new Map<string, JsonObject[]>();
+  const runsByTurn = new Map<string, JsonObject[]>();
+  const runsByEffectRef = new Map<string, JsonObject[]>();
+  const runPositions = new Map<JsonObject, number>();
+  for (const event of events) {
+    appendIndexed(
+      eventsByTurn,
+      turnKey(
+        optionalString(event.goal_id),
+        optionalString(event.agent_id),
+        optionalString(event.run_id),
+      ),
+      event,
+    );
+  }
+  for (const [position, run] of runs.entries()) {
+    runPositions.set(run, position);
+    appendIndexed(
+      runsByTurn,
+      turnKey(
+        optionalString(run.goal_id),
+        normalizeAgentId(run.agent_id),
+        optionalString(run.turn_instance_id),
+      ),
+      run,
+    );
+    appendIndexed(runsByEffectRef, optionalString(run.effect_ref), run);
+  }
+  return {
+    runtimeRoot,
+    goalId,
+    events,
+    runs,
+    eventsByTurn,
+    runsByTurn,
+    runsByEffectRef,
+    runPositions,
+  };
+}
+
+/** Load one immutable settlement snapshot for one or many readbacks. */
+export async function readQuotaSettlementSnapshot(
+  runtimeRoot: string,
+  goalId: string,
+  rolloutSnapshot?: GoalRolloutEventSnapshot | null,
+): Promise<QuotaSettlementReadbackSnapshot> {
+  settlementScope(runtimeRoot, goalId);
+  if (
+    rolloutSnapshot !== undefined &&
+    rolloutSnapshot !== null &&
+    (
+      rolloutSnapshot.runtimeRoot !== runtimeRoot ||
+      rolloutSnapshot.goalId !== goalId
+    )
+  ) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not match the settlement scope",
+      "settlement_snapshot_scope_mismatch",
+    );
+  }
+  const goalRoot = join(runtimeRoot, "goals", goalId);
+  const [snapshot, runs] = await Promise.all([
+    rolloutSnapshot === undefined
+      ? readGoalRolloutEventSnapshot(runtimeRoot, goalId)
+      : Promise.resolve(rolloutSnapshot),
+    readJsonLines(join(goalRoot, "runs", "index.jsonl")),
+  ]);
+  return indexSettlementSnapshot(
+    runtimeRoot,
+    goalId,
+    strictGoalRolloutEvents(snapshot),
+    runs,
+  );
+}
+
+function indexedEvents(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  goalId: string,
+  agentId: string,
+  turnInstanceId: string,
+): readonly JsonObject[] {
+  return snapshot.eventsByTurn.get(
+    turnKey(goalId, agentId, turnInstanceId)!,
+  ) ?? [];
+}
+
+function indexedRuns(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  identity: SettlementIdentity,
+): readonly JsonObject[] {
+  return snapshot.runsByTurn.get(
+    turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
+  ) ?? [];
+}
+
+function spendCandidateRuns(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  identity: SettlementIdentity,
+  turnRuns: readonly JsonObject[],
+): readonly JsonObject[] {
+  const effectRuns = snapshot.runsByEffectRef.get(
+    `${identity.effect_id}#quota_spend`,
+  ) ?? [];
+  if (effectRuns.length === 0) return turnRuns;
+  return [...new Set([...turnRuns, ...effectRuns])].sort(
+    (left, right) =>
+      (snapshot.runPositions.get(left) ?? -1) -
+      (snapshot.runPositions.get(right) ?? -1),
+  );
 }
 
 function persistedIdentityMatches(
@@ -732,17 +893,34 @@ function failedReadback(
   };
 }
 
-export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
-  const request = decodeRequest(value);
-  const goalRoot = join(request.runtime_root, "goals", request.goal_id);
-  const [events, runs] = await Promise.all([
-    readJsonLines(
-      goalRolloutEventLogPath(request.runtime_root, request.goal_id),
-      ROLLOUT_EVENT_SCHEMA_VERSION,
-    ),
-    readJsonLines(join(goalRoot, "runs", "index.jsonl")),
-  ]);
-  const identityResult = resolveIdentity(request, events, runs);
+function readQuotaSettlementFromRequest(
+  request: ReadbackRequest,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
+  if (
+    snapshot.runtimeRoot !== request.runtime_root ||
+    snapshot.goalId !== request.goal_id
+  ) {
+    throw new EffectRuntimeRequestError(
+      "settlement snapshot does not match the readback request",
+      "settlement_snapshot_scope_mismatch",
+    );
+  }
+  const explicitAgentId = normalizeAgentId(request.agent_id);
+  const explicitEvents = !request.infer_turn_instance_id &&
+      explicitAgentId !== null && request.turn_instance_id !== null
+    ? indexedEvents(
+      snapshot,
+      request.goal_id,
+      explicitAgentId,
+      request.turn_instance_id,
+    )
+    : snapshot.events;
+  const identityResult = resolveIdentity(
+    request,
+    explicitEvents,
+    snapshot.runs,
+  );
   if (identityResult === null) {
     return {
       schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
@@ -760,6 +938,13 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     turn_instance_id: String(identityResult.value.turn_instance_id),
     replan_obligation_id: optionalString(identityResult.value.replan_obligation_id),
   });
+  const events = indexedEvents(
+    snapshot,
+    identity.goal_id,
+    identity.agent_id,
+    identity.turn_instance_id,
+  );
+  const runs = indexedRuns(snapshot, identity);
   const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity);
   if (heartbeatReceipt === null) {
     return failedReadback(
@@ -772,7 +957,10 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
   const receiptDetails = details(heartbeatReceipt);
   const writebackRun = findWriteback(runs, identity);
   const writebackEvent = findStepEvent(events, identity, "refresh_state");
-  const spendRun = findSpend(runs, identity);
+  const spendRun = findSpend(
+    spendCandidateRuns(snapshot, identity, runs),
+    identity,
+  );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
   const completionEvent = findStepEvent(events, identity, "todo_complete");
 
@@ -813,7 +1001,9 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
     workspaceCausality?.requirement,
-    writebackRun !== null && runs.slice(runs.indexOf(writebackRun) + 1).some((run) =>
+    writebackRun !== null && snapshot.runs.slice(
+      (snapshot.runPositions.get(writebackRun) ?? -1) + 1,
+    ).some((run) =>
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
@@ -858,4 +1048,19 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       quota_spend_present: spend.failure === null,
     }),
   };
+}
+
+export function readQuotaSettlementFromSnapshot(
+  value: unknown,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
+  return readQuotaSettlementFromRequest(decodeRequest(value), snapshot);
+}
+
+export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  const request = decodeRequest(value);
+  return readQuotaSettlementFromRequest(
+    request,
+    await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id),
+  );
 }

@@ -16,6 +16,7 @@ import {
   projectSemanticReplanGuard,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlement,
+  readQuotaSettlementSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
 
 const goalId = "settlement-goal";
@@ -899,6 +900,14 @@ test("rejects malformed request authority at the runtime boundary", async () => 
   await assert.rejects(
     readQuotaSettlement(request(runtimeRoot, { runtime_root: "relative" })),
     /runtime_root must be absolute/,
+  );
+  await assert.rejects(
+    readQuotaSettlementSnapshot("relative", goalId),
+    /runtime_root must be absolute/,
+  );
+  await assert.rejects(
+    readQuotaSettlementSnapshot(runtimeRoot, "../other-goal"),
+    /goal_id must be a single path segment/,
   );
   await assert.rejects(
     readQuotaSettlement(request(runtimeRoot, { schema_version: "future" })),

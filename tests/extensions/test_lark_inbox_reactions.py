@@ -329,6 +329,7 @@ class ReplyRunner:
         member_bucket: str = "users",
         member_read_denied: bool = False,
         auth_failures: int = 0,
+        send_message_id: str | None = "om_reply_fixture",
     ) -> None:
         self.calls: list[list[str]] = []
         self.matching_readback = matching_readback
@@ -339,6 +340,7 @@ class ReplyRunner:
         self.member_bucket = member_bucket
         self.member_read_denied = member_read_denied
         self.auth_failures = auth_failures
+        self.send_message_id = send_message_id
 
     def __call__(self, args: Sequence[str]) -> dict[str, Any]:
         call = list(args)
@@ -428,7 +430,11 @@ class ReplyRunner:
                 }
             return {
                 "returncode": 0,
-                "stdout": json.dumps({"message_id": "om_reply_fixture"}),
+                "stdout": json.dumps(
+                    {"message_id": self.send_message_id}
+                    if self.send_message_id is not None
+                    else {}
+                ),
                 "stderr": "",
             }
         if "+messages-mget" in call:
@@ -974,6 +980,51 @@ def test_unverified_reply_records_private_locator_and_read_only_recovery(
         "+messages-send" in call or "+messages-reply" in call
         for call in recovery_runner.calls
     )
+
+
+def test_a_send_that_reports_no_message_id_records_its_intent(
+    tmp_path: Path,
+) -> None:
+    """A provider write without a message id must still leave a record.
+
+    Nothing can read back a send that reported no message id, so without the
+    record a retry has no evidence a write happened and posts the same text
+    again. The recorded intent is what stops that, and no readback is attempted
+    because there is no message id to key it on.
+    """
+
+    config, _, project = _fixture(tmp_path, lifecycle=False)
+    attempts: list[dict[str, str]] = []
+    runner = ReplyRunner(send_message_id=None)
+
+    sent = reply_lark_event_inbox(
+        project=project,
+        config_path=config,
+        message_id="om_reaction_fixture",
+        text="处理完成",
+        execute=True,
+        runner=runner,
+        delivery_attempt_recorder=attempts.append,
+    )
+
+    assert sent["status"] == "sent_unverified"
+    assert sent["external_write_performed"] is True
+    assert sent["reply_verified"] is False
+    assert sent["blocker"] == "lark_inbox_reply_not_verified"
+    assert attempts == [
+        {
+            "schema_version": "manager_return_delivery_attempt_v0",
+            "provider": "lark",
+            # The provider supplied no message id, so the locator is absent
+            # rather than an invalid empty string the canonical contract would
+            # reject: the attempt records the write, not a readback target.
+            "message_ref": None,
+            "intent_digest": attempts[0]["intent_digest"],
+            "provider_receipt": sent["idempotency_key"],
+        }
+    ]
+    assert attempts[0]["intent_digest"].startswith("sha256:")
+    assert not any("+messages-mget" in call for call in runner.calls)
 
 
 def test_read_only_recovery_rejects_changed_intent_without_provider_call(

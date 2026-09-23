@@ -2939,8 +2939,11 @@ display limits, not just a sorted in-memory list.
 The full-source/list-filter boundary preserves evaluated resume facts. Bootstrap
 and writer-outbox capture share the typed archived-dependency selector, bringing
 referenced completion records into canonical state so readers can recompute those
-facts independently. New legacy archive moves preserve role; old agent-only class
-records allow bounded role reconstruction, never inferred user approval authority.
+facts independently. New legacy Agent archive moves preserve role and the existing
+read classification. Old Agent-only class records allow bounded role reconstruction;
+records with an explicit Agent role may retain the legacy read class when no class
+was recorded. The TS selector admits that separate codec fact and uses the same
+class for closure and materialization, never inferring user approval authority.
 Duplicate/contradictory identities are rejected, and historical nodes/leases do not
 re-enter active lanes. The three-arm rehearsal checks this closure against real
 providers; derived readiness is not evidence. General historical import and the

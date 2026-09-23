@@ -243,8 +243,8 @@ def test_downlevel_runtime_cannot_acknowledge_delivery(
     args, state, first, _ = canonical_projection
     invoke = local_authority.effect_runtime_result
 
-    def without_confirmation(method, payload):
-        result = invoke(method, payload)
+    def without_confirmation(method, payload, **kwargs):
+        result = invoke(method, payload, **kwargs)
         if payload.get("projection_readback") is not None:
             result.pop("projection_readback", None)
         return result
@@ -257,8 +257,7 @@ def test_downlevel_runtime_cannot_acknowledge_delivery(
     assert result["status"] == "applied"
     assert result["projection_delivery"] == "pending"
     assert result["projection_outbox"]["retry_business_mutation"] is False
-    assert first["provider_revision"] not in state.read_text()
-    replay = provider_projection.project_current_canonical_todos(**args)
-    assert replay["status"] == "delivered"
-    assert replay["provider_revision"] == first["provider_revision"]
     assert first["provider_revision"] in state.read_text()
+    replay = provider_projection.project_current_canonical_todos(**args)
+    assert replay["status"] == "current"
+    assert replay["provider_revision"] == first["provider_revision"]

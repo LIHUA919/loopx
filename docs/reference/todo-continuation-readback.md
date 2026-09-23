@@ -88,9 +88,25 @@ satisfy `todo_done`. Duplicate identities, invalid archive state and incompatibl
 role/authority combinations still reject capture. Unrelated archive records
 remain outside the bounded canonical capture.
 
-The internal request is `todo_archive_dependency_capture_request_v1`. Python
-and the bundled TS runtime must be upgraded together; an older runtime rejects
-the new request instead of silently omitting continuation edges. Existing
+For a historical record with an explicit `role=agent` but no `task_class`,
+capture retains the same class as the legacy active read. The Python Markdown
+codec sends that compatibility classification as `legacy_task_class`, separate
+from recorded metadata; the TS selector accepts it only for a recorded Agent
+role and an Agent-compatible class. Explicit classes take precedence. Missing
+roles still require an explicit Agent-only class; user authority, contradictory
+scope and unknown classes cannot be reconstructed from text. The selected class
+also drives inferred successor closure, so dependency traversal and materialized
+records agree. The existing legacy text classifier remains a compatibility
+codec, not a second authority-admission rule or a new classification heuristic.
+
+New legacy Agent archive moves persist the read classification when the source
+omitted it, alongside the source role. Unknown metadata and original receipt
+lines remain intact. Existing archives are not rewritten by capture.
+
+The internal request is `todo_archive_dependency_capture_request_v2`, and the
+result is `todo_archive_dependency_capture_result_v1` with the selected class.
+Python and the bundled TS runtime must be upgraded together; an older runtime
+rejects the new request instead of silently losing classification or edges. Existing
 historical capture/promotion receipts are not rewritten or upgraded in place.
 Requalify capture on this runtime before a future promotion.
 

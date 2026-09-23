@@ -21,7 +21,10 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
-import { readGoalHeartbeatReceipts } from "../rollout_receipt_log.ts";
+import {
+  goalHeartbeatReceiptsFromSnapshot,
+  readGoalRolloutEventSnapshot,
+} from "../rollout_receipt_log.ts";
 import { isCommittedMonitorPollEffect } from "./settlement_phase.ts";
 import {
   heartbeatReceiptBinding,
@@ -35,7 +38,8 @@ import {
 } from "./heartbeat_receipt_identity.ts";
 import {
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
-  readQuotaSettlement,
+  readQuotaSettlementFromSnapshot,
+  readQuotaSettlementSnapshot,
 } from "./settlement_readback.ts";
 
 export const PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA =
@@ -125,7 +129,6 @@ function selectCloseoutCandidates(
   excludeTurnInstanceId: string | null,
 ): { candidates: PriorHostTurnCloseoutCandidate[]; turnsValidated: number } {
   const perTurn = new Map<string, HeartbeatReceiptFact[]>();
-  const newestFirst: string[] = [];
   for (const event of receipts) {
     const fact = heartbeatReceiptFactFromEvent(event);
     const turnInstanceId = fact.run_id;
@@ -133,16 +136,21 @@ function selectCloseoutCandidates(
       continue;
     }
     const existing = perTurn.get(turnInstanceId);
-    if (existing) existing.push(fact);
-    else perTurn.set(turnInstanceId, [fact]);
-    const position = newestFirst.indexOf(turnInstanceId);
-    if (position !== -1) newestFirst.splice(position, 1);
-    newestFirst.push(turnInstanceId);
+    if (existing) {
+      existing.push(fact);
+      // Map insertion order is the append-order recency index. Moving an
+      // existing Turn to the tail avoids an O(T) indexOf/splice for every
+      // receipt while preserving "last receipt wins recency" exactly.
+      perTurn.delete(turnInstanceId);
+      perTurn.set(turnInstanceId, existing);
+    } else {
+      perTurn.set(turnInstanceId, [fact]);
+    }
   }
 
   const candidates: PriorHostTurnCloseoutCandidate[] = [];
   let validated = 0;
-  for (const turnInstanceId of [...newestFirst].reverse()) {
+  for (const turnInstanceId of [...perTurn.keys()].reverse()) {
     const entries = (perTurn.get(turnInstanceId) ?? []).map((fact) => ({
       fact,
       value: fact,
@@ -203,8 +211,12 @@ export async function preflightPriorHostTurnCloseout(
   value: unknown,
 ): Promise<JsonObject> {
   const request = decodePreflightRequest(value);
-  const receipts = await readGoalHeartbeatReceipts(
+  const rolloutSnapshot = await readGoalRolloutEventSnapshot(
     request.runtime_root,
+    request.goal_id,
+  );
+  const receipts = goalHeartbeatReceiptsFromSnapshot(
+    rolloutSnapshot,
     request.goal_id,
     request.agent_id,
   );
@@ -222,10 +234,16 @@ export async function preflightPriorHostTurnCloseout(
       turns_validated: turnsValidated,
     };
   }
+  const settlementSnapshot = await readQuotaSettlementSnapshot(
+    request.runtime_root,
+    request.goal_id,
+    rolloutSnapshot,
+  );
   let newestSettledTurn: string | null = null;
   for (const selected of candidates) {
-    const readback = await readQuotaSettlement(
+    const readback = readQuotaSettlementFromSnapshot(
       settlementReadbackRequest(request, selected),
+      settlementSnapshot,
     );
     if (readback.found === true && !bundleFailed(readback, "settlement")) {
       // A newer settled Turn cannot hide an older missing closeout. Keep

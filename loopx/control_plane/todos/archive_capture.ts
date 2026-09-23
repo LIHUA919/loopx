@@ -1,7 +1,8 @@
 import {indexInferredSuccessors} from "./succession.ts";
 /** Capture actual archived dependency records, never cached resume conclusions.
  * Missing legacy roles can be reconstructed only from an explicit agent-only
- * task class. User decision authority always requires a recorded user role. */
+ * task class. A recorded Agent role can retain its legacy read classification;
+ * that projection cannot establish a role or user decision authority. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -9,8 +10,15 @@ import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} f
 import {AGENT_TODO_TASK_CLASSES as AGENT_CLASSES, USER_TODO_TASK_CLASSES as USER_CLASSES} from "./authoring_scope.ts";
 import {isStandingDecisionReceipt} from "./standing_decision.ts";
 
-export const ARCHIVE_CAPTURE_REQUEST_SCHEMA = "todo_archive_dependency_capture_request_v1";
+export const ARCHIVE_CAPTURE_REQUEST_SCHEMA = "todo_archive_dependency_capture_request_v2";
 const fail = (reason: string): never => {throw new EffectRuntimeRequestError(`archive dependency capture: ${reason}`);};
+
+// The codec supplies the existing Markdown read classification separately from
+// recorded metadata. Only an explicit Agent identity may adopt that fallback.
+function capturedTaskClass(item: JsonObject): string {
+  const value = item.task_class ?? (item.role === "agent" ? item.legacy_task_class : null);
+  return typeof value === "string" ? value : "";
+}
 
 export function captureArchivedTodoDependencies(value: unknown): JsonObject {
   const request = requireJsonObject(value, "archive dependency capture");
@@ -29,7 +37,7 @@ export function captureArchivedTodoDependencies(value: unknown): JsonObject {
   const inferred = indexInferredSuccessors([...active, ...archived].map(item => {
     const resume = normalizedResume(item);
     return {id: typeof item.todo_id === "string" ? item.todo_id : null,
-      advancement: item.task_class === "advancement_task",
+      advancement: capturedTaskClass(item) === "advancement_task",
       unblocks: typeof item.unblocks_todo_id === "string" ? item.unblocks_todo_id : null,
       resumes: resume?.startsWith("todo_done:") ? resume.slice("todo_done:".length) : null};
   }));
@@ -46,7 +54,7 @@ export function captureArchivedTodoDependencies(value: unknown): JsonObject {
       fail("duplicate standing decision identity");
     }
     if (item.archive_state !== "archive") fail("standing decision is not archived");
-    selected.set(item.todo_id, {index, role: "user"});
+    selected.set(item.todo_id, {index, role: "user", task_class: item.task_class});
     queue.push(item);
   }
   for (let cursor = 0; cursor < queue.length; cursor++) {
@@ -68,17 +76,18 @@ export function captureArchivedTodoDependencies(value: unknown): JsonObject {
         fail("dependency is not an archived terminal record");
       }
       if (selected.has(id)) continue;
-      const taskClass = String(item.task_class ?? "");
+      const taskClass = capturedTaskClass(item);
       const role = item.role ?? (AGENT_CLASSES.has(taskClass) ? "agent" : null);
       if (!((role === "agent" && AGENT_CLASSES.has(taskClass)) ||
             (role === "user" && USER_CLASSES.has(taskClass)))) {
-        fail("dependency requires a recorded role and compatible explicit task_class");
+        fail(`archive index ${index}: dependency requires a recorded role and compatible task_class; ` +
+          "legacy classification is accepted only for a recorded agent role");
       }
       // Contradictory user authority on an agent record is not repaired by inference.
       if (role === "agent" && ["decision_scope", "decision_outcome", "global_gate", "blocks_agent", "bound_agent", "goal_bound"]
           .some(field => item[field] != null && item[field] !== false)) fail("agent dependency carries user authority");
-      selected.set(id, {index, role}); queue.push(item);
+      selected.set(id, {index, role, task_class: taskClass}); queue.push(item);
     }
   }
-  return {schema_version: "todo_archive_dependency_capture_result_v0", records: [...selected.values()]};
+  return {schema_version: "todo_archive_dependency_capture_result_v1", records: [...selected.values()]};
 }

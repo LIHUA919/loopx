@@ -28,6 +28,20 @@ function matchingString(value: unknown, label: string, pattern: RegExp): string 
   return result;
 }
 
+/**
+ * The provider locator for one recorded attempt, when the provider gave one.
+ *
+ * `null` is the typed state for "the provider accepted the write and reported
+ * no message id". Such an attempt is still the durable record that a write
+ * happened; what it cannot do is name a readback target. Keeping the key
+ * required and the absence explicit is what stops a later retry from treating
+ * an unlocatable write as a write that never happened.
+ */
+function optionalOpaqueRef(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  return matchingString(value, label, OPAQUE_REF);
+}
+
 export function normalizeManagerReturnDeliveryAttempt(value: unknown): JsonObject {
   const attempt = requireJsonObject(value, "attempt");
   const keys = Object.keys(attempt).sort();
@@ -45,11 +59,7 @@ export function normalizeManagerReturnDeliveryAttempt(value: unknown): JsonObjec
   return {
     schema_version: MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA,
     provider: matchingString(attempt.provider, "attempt.provider", PROVIDER),
-    message_ref: matchingString(
-      attempt.message_ref,
-      "attempt.message_ref",
-      OPAQUE_REF,
-    ),
+    message_ref: optionalOpaqueRef(attempt.message_ref, "attempt.message_ref"),
     intent_digest: matchingString(
       attempt.intent_digest,
       "attempt.intent_digest",

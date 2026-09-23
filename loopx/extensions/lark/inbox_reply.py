@@ -571,8 +571,40 @@ def _deliver_lark_inbox_outbound(
             provider_preview_verified=True,
         )
 
+    intent_digest = _intent_digest(profile, chat_id, receipt)
     reply_message_id = _message_id(_json_object(send.get("stdout")))
     if not reply_message_id:
+        # The provider accepted the write and reported no message id, so there is
+        # nothing a later readback could key on. Recording the attempt with an
+        # empty locator is what keeps a retry from posting the same text again:
+        # the durable record proves a write happened even though it cannot be
+        # located, and a locator nothing can verify must not be re-sent blindly.
+        if delivery_attempt_recorder is not None:
+            try:
+                delivery_attempt_recorder(
+                    {
+                        "schema_version": "manager_return_delivery_attempt_v0",
+                        "provider": "lark",
+                        "message_ref": None,
+                        "intent_digest": intent_digest,
+                        "provider_receipt": receipt,
+                    }
+                )
+            except (OSError, TypeError, ValueError):
+                return _result(
+                    status="sent_unverified",
+                    ok=False,
+                    execute=True,
+                    receipt=receipt,
+                    identity_verified=True,
+                    membership_verified=True,
+                    write_performed=True,
+                    placement=placement,
+                    blocker="lark_inbox_reply_delivery_attempt_not_persisted",
+                    format_preflight_passed=True,
+                    provider_preview_performed=True,
+                    provider_preview_verified=True,
+                )
         return _result(
             status="sent_unverified",
             ok=False,
@@ -587,7 +619,6 @@ def _deliver_lark_inbox_outbound(
             provider_preview_performed=True,
             provider_preview_verified=True,
         )
-    intent_digest = _intent_digest(profile, chat_id, receipt)
     if delivery_attempt_recorder is not None:
         try:
             delivery_attempt_recorder(
