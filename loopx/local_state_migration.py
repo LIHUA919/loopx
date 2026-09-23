@@ -25,7 +25,7 @@ from .paths import (
 from .runtime import validate_goal_id_path_segment
 
 
-SCHEMA = "loopx_local_state_migration_v1"
+LOCAL_STATE_MIGRATION_SCHEMA = "loopx_local_state_migration_v1"
 RECEIPT_NAME = "migration-receipt.json"
 
 
@@ -202,7 +202,7 @@ def plan_local_state_migration(
         raise FileExistsError(f"backup directory already exists: {backup}")
     return {
         "ok": True,
-        "schema_version": SCHEMA,
+        "schema_version": LOCAL_STATE_MIGRATION_SCHEMA,
         "dry_run": True,
         "plan_id": plan_id,
         "source_runtime_root": str(source),
@@ -368,7 +368,7 @@ def migrate_local_state(
 def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False) -> dict[str, Any]:
     receipt_path = _absolute(receipt_path)
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    if not isinstance(receipt, dict) or receipt.get("schema_version") != SCHEMA or receipt.get("status") != "migrated":
+    if not isinstance(receipt, dict) or receipt.get("schema_version") != LOCAL_STATE_MIGRATION_SCHEMA or receipt.get("status") != "migrated":
         raise ValueError("receipt does not describe a completed local state migration")
     entries = receipt.get("entries")
     if not isinstance(entries, list):
@@ -382,7 +382,7 @@ def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False)
             raise ValueError(f"migrated state changed; automatic rollback is unsafe: {new}")
         if _digest(backup / "snapshot" / str(index)) != entry["digest"]:
             raise ValueError(f"migration backup changed: {backup / 'snapshot' / str(index)}")
-    result = {"ok": True, "schema_version": SCHEMA, "dry_run": not execute, "status": "rollback_ready", "receipt": str(receipt_path)}
+    result = {"ok": True, "schema_version": LOCAL_STATE_MIGRATION_SCHEMA, "dry_run": not execute, "status": "rollback_ready", "receipt": str(receipt_path)}
     if not execute:
         return result
     for entry in reversed(entries):
