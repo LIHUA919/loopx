@@ -316,12 +316,12 @@ def main() -> int:
     assert "full" not in payload, payload
     assert "Observed capabilities -> `--available-capability`; never user gates." in thin_task, thin_task
     assert payload["quota_guard_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         'quota should-run --goal-id public-heartbeat-goal '
         '--turn-instance-id "${LOOPX_TURN:?}"'
     ), payload
     assert payload["quota_spend_command"] == (
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
         "quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute"
     ), payload
     assert compact_payload["compact"] is True, compact_payload
@@ -464,7 +464,7 @@ def main() -> int:
         "Compact policy: registry/state/adapter/`goal_boundary`",
         "Detail:",
         "loopx heartbeat-prompt --full --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "state=operator_gate",
         "notify_user_on_open_todo=true",
         "`user_channel.notify=NOTIFY`",
@@ -493,7 +493,7 @@ def main() -> int:
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate|user_action",
         "owner todos and `--role agent` for agent todos, not prose",
         "Done->successor; final->refresh/spend/no-follow-up",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
         "Account actual class/scale/outcome",
         "once unpiped; never retry",
         "Optional state-only post-spend",
@@ -587,7 +587,7 @@ def main() -> int:
         "lifecycle/registry and `loopx-self-repair` for runtime/projection drift",
         "use selection_command when required",
         "heartbeat-prequota",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run '
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run '
         "--goal-id loopx-meta --agent-id codex-product-capability --available-capability network "
         "--available-capability external_evidence_poll",
         "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
@@ -645,7 +645,7 @@ def main() -> int:
         "Brief 详情：",
         "loopx heartbeat-prompt --compact --goal-id public-heartbeat-goal --active-state /tmp/public-heartbeat-goal/ACTIVE_GOAL_STATE.md",
         "Run assignment and guard as separate statements in one shell",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; DONT_NOTIFY=安静输出",
         "Due/peer非用户动作",
         "Todo验收非结算",
@@ -733,7 +733,7 @@ def main() -> int:
         'export PATH="$HOME/.local/bin:$PATH"',
         'install_script="$HOME/loopx/scripts/install-local.sh"',
         "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
         "project non-basic capabilities that are actually present",
         "without guessing capabilities the host does not have",
         "If that preflight still fails",
@@ -836,7 +836,7 @@ def main() -> int:
         "loopx todo add --goal-id <GOAL_ID> --role user --task-class user_action",
         "Use `--role agent` for project-agent follow-up work",
         "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
         "loopx refresh-state --goal-id <GOAL_ID>",
         "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
         "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
@@ -858,7 +858,7 @@ def main() -> int:
         'export PATH="$HOME/.local/bin:$PATH"',
         'install_script="$HOME/loopx/scripts/install-local.sh"',
         "loopx doctor >/dev/null",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id public-heartbeat-goal',
         "If that preflight still fails",
         "should_run=false",
         "state=operator_gate",
@@ -939,7 +939,7 @@ def main() -> int:
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_gate",
         "loopx todo add --goal-id public-heartbeat-goal --role user --task-class user_action",
         "docs/project-agent-todo-contract.md",
-        'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
+        'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id public-heartbeat-goal --slots 1 --source heartbeat --execute',
         "loopx refresh-state --goal-id public-heartbeat-goal",
         "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
         "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
@@ -961,7 +961,7 @@ def main() -> int:
             "Before spending delivery compute, first make the LoopX CLI reachable",
             'export PATH="$HOME/.local/bin:$PATH"',
             "loopx doctor >/dev/null",
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID>',
             "If that preflight still fails",
             "If the result says should_run=false",
             "state=operator_gate",
@@ -992,7 +992,7 @@ def main() -> int:
             "Public-safe repo publication is not an operator gate by itself",
             "Run validation proportionate to the change and risk",
             "loopx refresh-state --goal-id <GOAL_ID>",
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute',
             "If the dashboard or controller needs a state-only update after spend",
             "Return a compact final report",
         ),

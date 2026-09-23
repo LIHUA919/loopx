@@ -790,7 +790,7 @@ def main() -> int:
         assert payload["ok"] is True, payload
         assert payload["schema_version"] == "heartbeat_agent_input_v1", payload
         expected_quota_guard = (
-            'loopx --format json --registry "$HOME/.codex/loopx/registry.global.json" '
+            'loopx --format json --registry "$HOME/.loopx/registry.global.json" '
             'quota should-run --goal-id installer-smoke-goal '
             '--turn-instance-id "${LOOPX_TURN:?}"'
         )
