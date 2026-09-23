@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,11 +32,39 @@ RECEIPT_NAME = "migration-receipt.json"
 
 
 def _absolute(path: Path) -> Path:
-    return path.expanduser().absolute()
+    # Collapse lexical `..` without following a symlink before boundary checks.
+    return Path(os.path.abspath(path.expanduser()))
 
 
 def _within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
+
+
+def _require_backup_path(path: Path, *, must_be_absent: bool = False) -> None:
+    """Keep private backup writes on the declared, unlinked directory route."""
+
+    for ancestor in (path, *path.parents):
+        is_junction = getattr(ancestor, "is_junction", lambda: False)()
+        # Python 3.11 lacks Path.is_junction; Windows exposes reparse-point
+        # attributes through lstat, so reject those as well.
+        reparse_point = False
+        if os.name == "nt":
+            try:
+                attributes = getattr(ancestor.lstat(), "st_file_attributes", 0)
+            except FileNotFoundError:
+                attributes = 0
+            reparse_point = bool(
+                attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+        if ancestor.is_symlink() or is_junction or reparse_point:
+            raise ValueError(f"backup path has a symlink or junction ancestor: {ancestor}")
+        if ancestor != path and ancestor.exists() and not ancestor.is_dir():
+            raise ValueError(f"backup path ancestor is not a directory: {ancestor}")
+    if path.exists():
+        if must_be_absent:
+            raise FileExistsError(f"backup directory already exists: {path}")
+        if not path.is_dir():
+            raise ValueError(f"backup path is not a directory: {path}")
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
@@ -223,8 +252,7 @@ def plan_local_state_migration(
     backup = requested_backup or source.parent / "loopx-local-state-backups" / plan_id[:16]
     if any(_within(backup, root) for root in (source, target, *moves, *moves.values())):
         raise ValueError("backup must be outside runtime and Goal state directories")
-    if backup.exists() or backup.is_symlink():
-        raise FileExistsError(f"backup directory already exists: {backup}")
+    _require_backup_path(backup, must_be_absent=True)
     return {
         "ok": True,
         "schema_version": LOCAL_STATE_MIGRATION_SCHEMA,
@@ -241,7 +269,11 @@ def plan_local_state_migration(
 
 
 def _copy(source: Path, target: Path) -> None:
+    _require_backup_path(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
+    _require_backup_path(target.parent)
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"backup snapshot target already exists: {target}")
     if source.is_dir():
         shutil.copytree(source, target, symlinks=True)
     else:
@@ -270,14 +302,18 @@ def migrate_local_state(
     target = Path(plan["target_runtime_root"])
     backup = Path(plan["backup_dir"])
     entries = plan["entries"]
+    _require_backup_path(backup, must_be_absent=True)
     backup.mkdir(mode=0o700, parents=True, exist_ok=False)
+    _require_backup_path(backup)
     try:
         for index, entry in enumerate(entries):
+            _require_backup_path(backup)
             original = Path(entry["source"])
             copied = backup / "snapshot" / str(index)
             _copy(original, copied)
             if _digest(copied) != entry["digest"]:
                 raise ValueError(f"backup verification failed for {original}")
+        _require_backup_path(backup)
         (backup / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception:
         # Keep any partial backup for inspection. No authoritative state moved.
@@ -354,6 +390,7 @@ def migrate_local_state(
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "entries": after,
         }
+        _require_backup_path(backup)
         _write_registry(backup / RECEIPT_NAME, receipt)
         return receipt
     except Exception as exc:
@@ -395,6 +432,9 @@ def migrate_local_state(
 
 def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False) -> dict[str, Any]:
     receipt_path = _absolute(receipt_path)
+    _require_backup_path(receipt_path.parent)
+    if receipt_path.is_symlink():
+        raise ValueError(f"backup receipt is a symlink: {receipt_path}")
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     if not isinstance(receipt, dict) or receipt.get("schema_version") != LOCAL_STATE_MIGRATION_SCHEMA or receipt.get("status") != "migrated":
         raise ValueError("receipt does not describe a completed local state migration")
