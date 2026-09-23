@@ -559,7 +559,7 @@ def main() -> int:
                 )
 
         cli_env = {**env, "PATH": f"{bin_dir}:{env['PATH']}"}
-        runtime_run_dir = home / ".codex" / "loopx" / "goals" / "loopx-meta" / "runs"
+        runtime_run_dir = home / ".loopx" / "goals" / "loopx-meta" / "runs"
         generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         write_promotion_readiness(runtime_run_dir, generated_at=generated_at, label="fresh")
 

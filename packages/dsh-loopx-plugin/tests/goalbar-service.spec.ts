@@ -17,6 +17,7 @@ import type {
 import {
   GoalBarCoordinator,
 } from '../src/goalbar/events.ts'
+import { computeGoalBarSourceRevision } from '../src/goalbar/read-model.ts'
 import {
   createGoalBarService,
   decodeGoalBarLifecycleExecutionV1,
@@ -26,6 +27,8 @@ import type { GoalBarRequestV1 } from '../src/goalbar/protocol.ts'
 const sessionId = 'session-fixture'
 const goalId = 'goal-fixture'
 const loopxAgentId = 'agent-fixture'
+const defaultCwd = '/fixture/project'
+const defaultSourceRevision = await computeGoalBarSourceRevision({ cwd: defaultCwd })
 const command: LoopXCommand = {
   file: 'loopx',
   prefix: [],
@@ -56,7 +59,7 @@ function agentFixture(
   id = sessionId,
   initialStatus: 'idle' | 'running' = 'idle',
   eventSource?: (() => SessionEvent[]) | undefined,
-  cwd = '/fixture/project',
+  cwd = defaultCwd,
 ): AgentFixture {
   const events: SessionEvent[] = []
   let status = initialStatus
@@ -366,8 +369,7 @@ function watchRequest(
     op: 'watch',
     sessionId,
     afterSessionEventSeq,
-    sourceRevision: options.sourceRevision
-      ?? 'sha256:04284a0332528476ac54e743cb76d5c0731985225b77926e7f6a32941db96c42',
+    sourceRevision: options.sourceRevision ?? defaultSourceRevision,
     expected: options.expected ?? null,
     agentStatus: options.agentStatus ?? 'idle',
   }
@@ -655,7 +657,7 @@ describe('GoalBar Host read/watch', () => {
 
   it('retries a read when the active state is atomically replaced during CLI reads', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-stable-read-'))
-    const stateDir = join(cwd, '.codex', 'goals', goalId)
+    const stateDir = join(cwd, '.loopx', 'goals', goalId)
     await mkdir(join(cwd, '.loopx'), { recursive: true })
     await mkdir(stateDir, { recursive: true })
     await writeFile(join(cwd, '.loopx', 'registry.json'), '{"goals":[]}', 'utf8')
