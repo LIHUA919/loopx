@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -116,6 +117,98 @@ def test_new_default_route_rejects_orphaned_legacy_state(tmp_path: Path) -> None
 
 def _read(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _extension_cli_result(
+    home: Path, *arguments: str, runtime_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, "-m", "loopx.cli", "--format", "json"]
+    if runtime_root is not None:
+        command.extend(("--runtime-root", str(runtime_root)))
+    command.extend(("extension", *arguments))
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in {"LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"}
+    }
+    env["HOME"] = str(home)
+    return subprocess.run(
+        command, cwd=home, env=env, text=True, capture_output=True, check=False,
+    )
+
+
+def _extension_cli(
+    home: Path, *arguments: str, runtime_root: Path | None = None,
+) -> dict[str, object]:
+    result = _extension_cli_result(home, *arguments, runtime_root=runtime_root)
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    return payload
+
+
+def _list_extensions(home: Path, *, runtime_root: Path | None = None) -> list[dict[str, object]]:
+    return _extension_cli(home, "list", runtime_root=runtime_root)["extensions"]
+
+
+def test_extension_cli_follows_legacy_execute_and_rollback_routes(tmp_path: Path) -> None:
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    home = tmp_path / "home"
+    extension_state = {
+        "schema_version": "loopx_extension_state_v0",
+        "extensions": {"example": {
+            "id": "example", "enabled": True, "active_revision": "rev-1", "revisions": [],
+        }},
+    }
+    _write_json(source / "extensions" / "state.json", extension_state)
+    assert _list_extensions(home) == _list_extensions(home, runtime_root=source)
+    assert _list_extensions(home)[0]["id"] == "example"
+
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    assert not source.exists()
+    assert _read(target / "extensions" / "state.json") == extension_state
+    assert _list_extensions(home) == _list_extensions(home, runtime_root=target)
+    assert _list_extensions(home)[0]["id"] == "example"
+    assert not (source / "extensions" / "state.json").exists()
+
+    rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)
+    assert _list_extensions(home) == _list_extensions(home, runtime_root=source)
+    assert _list_extensions(home)[0]["id"] == "example"
+    assert not target.exists()
+
+
+def test_extension_cli_uses_fresh_loopx_default(tmp_path: Path) -> None:
+    home = tmp_path / "fresh-home"
+    _write_json(home / ".loopx" / "extensions" / "state.json", {
+        "schema_version": "loopx_extension_state_v0",
+        "extensions": {"fresh": {
+            "id": "fresh", "enabled": True, "active_revision": "rev-1", "revisions": [],
+        }},
+    })
+    assert _list_extensions(home)[0]["id"] == "fresh"
+    disabled = _extension_cli(home, "disable", "fresh", "--execute")
+    assert disabled["changed"] is True
+    assert _list_extensions(home)[0]["enabled"] is False
+    assert _read(home / ".loopx" / "extensions" / "state.json")["extensions"]["fresh"]["enabled"] is False
+    assert not (home / ".codex" / "loopx").exists()
+
+
+def test_extension_cli_conflicting_defaults_require_an_explicit_route(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write_json(home / ".codex" / "loopx" / "registry.global.json", {"goals": []})
+    _write_json(home / ".loopx" / "registry.global.json", {"goals": []})
+    _write_json(home / ".loopx" / "extensions" / "state.json", {
+        "schema_version": "loopx_extension_state_v0",
+        "extensions": {"selected": {"id": "selected", "enabled": False}},
+    })
+
+    result = _extension_cli_result(home, "list")
+    assert result.returncode != 0
+    assert "Both default LoopX registries exist" in result.stderr
+    assert _list_extensions(home, runtime_root=home / ".loopx")[0]["id"] == "selected"
 
 
 def test_preview_execute_and_verified_rollback_cover_all_registered_projects(tmp_path: Path) -> None:

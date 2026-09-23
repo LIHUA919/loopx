@@ -13,7 +13,6 @@ from loopx.capabilities.explore.result_log import (
     build_explore_node_event,
     explore_result_log_path,
 )
-from loopx.control_plane.runtime import runtime_projection_route
 from loopx.extensions.lark import goal_channel_contracts, goal_channel_runtime
 from loopx.extensions.lark.presentation import explore_results
 from loopx.extensions.runtime import install_extension
