@@ -109,7 +109,8 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
     shared = tmp_path / "shared-runtime"
     monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(shared))
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
-    monkeypatch.setattr(runtime_projection_route, "DEFAULT_RUNTIME_ROOT", shared)
+    monkeypatch.setattr("loopx.paths.DEFAULT_RUNTIME_ROOT", shared)
+    monkeypatch.setattr("loopx.paths.LEGACY_RUNTIME_ROOT", tmp_path / "absent-legacy-runtime")
     monkeypatch.chdir(project)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime)]
 
