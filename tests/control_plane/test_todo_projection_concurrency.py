@@ -257,7 +257,8 @@ def test_downlevel_runtime_cannot_acknowledge_delivery(
     assert result["status"] == "applied"
     assert result["projection_delivery"] == "pending"
     assert result["projection_outbox"]["retry_business_mutation"] is False
-    assert first["provider_revision"] in state.read_text()
+    assert first["provider_revision"] not in state.read_text()
     replay = provider_projection.project_current_canonical_todos(**args)
-    assert replay["status"] == "current"
+    assert replay["status"] == "delivered"
     assert replay["provider_revision"] == first["provider_revision"]
+    assert first["provider_revision"] in state.read_text()
