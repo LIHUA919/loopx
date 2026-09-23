@@ -8,10 +8,14 @@ from typing import Any
 from ...bootstrap import build_goal_entry
 from ...control_plane.runtime.time import now_local_iso
 from ...file_lock import exclusive_cross_runtime_file_lock as exclusive_file_lock
-from ...paths import resolve_runtime_root
+from ...paths import (
+    registered_goal_state_file,
+    require_single_goal_state_route,
+    resolve_runtime_root,
+)
 from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
-from ...paths import DEFAULT_RUNTIME_ROOT
+from ...paths import select_default_runtime_root
 from ...registry import atomic_write_json
 from ..goals.active_state_metadata import (
     markdown_blockquote, markdown_frontmatter_string, split_state_frontmatter,
@@ -231,7 +235,13 @@ def register_project_goal(
 
     knowledge_root = knowledge_root.expanduser().resolve()
     registry_path = registry_path.expanduser()
-    state_file = knowledge_root / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
+    existing_registry = (
+        json.loads(registry_path.read_text(encoding="utf-8"))
+        if registry_path.exists()
+        else None
+    )
+    state_file = registered_goal_state_file(knowledge_root, goal_id, existing_registry)
+    require_single_goal_state_route(knowledge_root, goal_id, state_file)
     updated_at = now_local_iso()
     project_record = {
         "project_id": project_id,
@@ -289,7 +299,7 @@ def register_project_goal(
             registry = {
                 "schema_version": "0.1",
                 "registry_role": "project-local",
-                "common_runtime_root": str(runtime_root or DEFAULT_RUNTIME_ROOT),
+                "common_runtime_root": str(runtime_root or select_default_runtime_root()),
             }
         projects, goals = _project_goal_records(registry)
         existing_project = next(

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
-from ...paths import DEFAULT_RUNTIME_ROOT, resolve_runtime_root
+from ...paths import resolve_runtime_root, select_default_runtime_root
 from ...registry import read_json
 from .git_hook import (
     EnforcementLevel,
@@ -214,7 +214,7 @@ def _runtime_root(registry_path: Path, runtime_root_arg: str | None) -> Path:
     return (
         Path(runtime_root_arg).expanduser()
         if runtime_root_arg
-        else DEFAULT_RUNTIME_ROOT
+        else select_default_runtime_root()
     )
 
 
