@@ -1583,7 +1583,7 @@
     },
     {
       "site": "loopx/local_state_migration.py::<module>._read_registry::codec_read:load_registry#1",
-      "line": 42,
+      "line": 71,
       "column": 15,
       "kind": "codec_read",
       "api": "load_registry",
@@ -1591,7 +1591,7 @@
     },
     {
       "site": "loopx/local_state_migration.py::<module>._write_project_registry::codec_transaction:project_registry_transaction#1",
-      "line": 58,
+      "line": 87,
       "column": 10,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",

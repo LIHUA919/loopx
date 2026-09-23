@@ -396,6 +396,111 @@ def test_symlinked_goal_destination_ancestor_never_writes_outside_project(
     assert list(outside.iterdir()) == []
 
 
+@pytest.mark.parametrize("explicit_backup", [False, True])
+def test_symlinked_backup_parent_is_rejected_before_preview_or_copy(
+    tmp_path: Path, explicit_backup: bool,
+) -> None:
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    backup_parent = (
+        tmp_path / "explicit-backups"
+        if explicit_backup else source.parent / "loopx-local-state-backups"
+    )
+    backup_parent.symlink_to(outside, target_is_directory=True)
+    backup_dir = backup_parent / "receipt" if explicit_backup else None
+
+    with pytest.raises(ValueError, match="backup.*symlink"):
+        migrate_local_state(
+            source_runtime_root=source,
+            target_runtime_root=target,
+            backup_dir=backup_dir,
+        )
+    assert list(outside.iterdir()) == []
+    assert source.exists() and not target.exists()
+
+
+def test_backup_parent_redirected_after_plan_cannot_write_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    preview = migration.migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+    )
+    original_plan = migration.plan_local_state_migration
+
+    def plan_then_redirect(**kwargs: object) -> dict[str, object]:
+        plan = original_plan(**kwargs)
+        (source.parent / "loopx-local-state-backups").symlink_to(
+            outside, target_is_directory=True,
+        )
+        return plan
+
+    monkeypatch.setattr(migration, "plan_local_state_migration", plan_then_redirect)
+    with pytest.raises(ValueError, match="backup.*symlink"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert list(outside.iterdir()) == []
+    assert source.exists() and not target.exists()
+
+
+def test_backup_snapshot_parent_changed_before_copy_cannot_write_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    preview = migration.migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+    )
+    backup = Path(preview["backup_dir"])
+    original_copy = migration._copy
+    calls = 0
+
+    def redirect_before_second_copy(original: Path, copied: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            snapshot = backup / "snapshot"
+            snapshot.rename(backup / "snapshot-before-link")
+            snapshot.symlink_to(outside, target_is_directory=True)
+        original_copy(original, copied)
+
+    monkeypatch.setattr(migration, "_copy", redirect_before_second_copy)
+    with pytest.raises(ValueError, match="backup.*symlink"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert list(outside.iterdir()) == []
+    assert source.exists() and not target.exists()
+
+
+def test_explicit_real_backup_path_supports_execute_and_rollback(tmp_path: Path) -> None:
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    backup = tmp_path / "private-backups" / "receipt"
+    preview = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target, backup_dir=backup,
+    )
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target, backup_dir=backup,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    assert receipt["backup_dir"] == str(backup)
+    assert (backup / RECEIPT_NAME).is_file()
+    assert target.exists() and not source.exists()
+    rollback_local_state_migration(backup / RECEIPT_NAME, execute=True)
+    assert source.exists() and not target.exists()
+
+
 def test_cli_preview_execute_and_rollback_readback(tmp_path: Path) -> None:
     source, target, projects = _fixture(tmp_path, projects=1)
 
