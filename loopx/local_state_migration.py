@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .control_plane.projects.registry_codec import load_registry, project_registry_transaction
 from .paths import (
     DEFAULT_PROJECT_GOALS,
     DEFAULT_RUNTIME_ROOT,
@@ -38,7 +39,7 @@ def _within(path: Path, parent: Path) -> bool:
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = load_registry(path)
     if not isinstance(payload, dict) or not isinstance(payload.get("goals"), list):
         raise ValueError(f"registry must contain a goals list: {path}")
     return payload
@@ -51,6 +52,13 @@ def _write_registry(path: Path, payload: dict[str, Any]) -> None:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _write_project_registry(path: Path, payload: dict[str, Any]) -> None:
+    with project_registry_transaction(
+        path, operation="migrate_local_state_project_registry",
+    ) as transaction:
+        transaction.commit(payload)
 
 
 def _digest(path: Path) -> str:
@@ -93,6 +101,22 @@ def _state_route(project: Path, goal: dict[str, Any]) -> tuple[Path, Path] | Non
     if _within(resolved, project / LEGACY_PROJECT_GOALS):
         raise ValueError(f"noncanonical legacy Goal state path requires manual review: {resolved}")
     return None  # Explicit custom state_file remains where its owner placed it.
+
+
+def _require_goal_destination(project: Path, target_dir: Path) -> None:
+    """Reject a target whose existing ancestors can redirect a Goal rename."""
+
+    if project not in target_dir.parents:
+        raise ValueError(f"Goal migration target escapes its project: {target_dir}")
+    if target_dir.exists() or target_dir.is_symlink():
+        raise ValueError(f"Goal migration target exists or is a symlink: {target_dir}")
+    ancestor = target_dir.parent
+    while ancestor != project:
+        if ancestor.is_symlink():
+            raise ValueError(f"Goal migration target ancestor is a symlink: {ancestor}")
+        if ancestor.exists() and not ancestor.is_dir():
+            raise ValueError(f"Goal migration target ancestor is not a directory: {ancestor}")
+        ancestor = ancestor.parent
 
 
 def _rewrite_registry(
@@ -172,9 +196,10 @@ def plan_local_state_migration(
                 raise ValueError(f"legacy state file is missing or linked: {state_source}")
             source_dir = state_source.parent
             target_dir = state_target.parent
-            if source_dir.is_symlink() or target_dir.exists() or target_dir.is_symlink():
-                raise ValueError(f"legacy Goal directory is linked or target exists: {source_dir} -> {target_dir}")
-            if (project / ".loopx").is_symlink() or (project / LEGACY_PROJECT_GOALS).is_symlink():
+            if source_dir.is_symlink():
+                raise ValueError(f"legacy Goal directory is linked: {source_dir}")
+            _require_goal_destination(project, target_dir)
+            if (project / LEGACY_PROJECT_GOALS).is_symlink():
                 raise ValueError(f"project Goal root is a symlink: {project}")
             moves[source_dir] = target_dir
 
@@ -271,7 +296,10 @@ def migrate_local_state(
             if entry["kind"] != "goal":
                 continue
             old, new = Path(entry["source"]), Path(entry["target"])
+            project = new.parent.parent.parent
+            _require_goal_destination(project, new)
             new.parent.mkdir(parents=True, exist_ok=True)
+            _require_goal_destination(project, new)
             old.rename(new)
             moved.append((old, new))
         for entry in entries:
@@ -285,7 +313,7 @@ def migrate_local_state(
                 source_root=source,
                 target_root=target,
             )
-            _write_registry(registry_path, updated)
+            _write_project_registry(registry_path, updated)
             modified.append(registry_path)
             expected_project_registries[registry_path] = updated
         source.rename(target)

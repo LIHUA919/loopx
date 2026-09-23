@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from loopx import paths
+from loopx.control_plane.projects.registry_codec import load_project_registry
 from loopx.local_state_migration import (
     RECEIPT_NAME,
     migrate_local_state,
@@ -117,6 +119,50 @@ def test_new_default_route_rejects_orphaned_legacy_state(tmp_path: Path) -> None
 
 def _read(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_strict_project_registry(path: Path, payload: dict[str, object]) -> None:
+    encoded = json.dumps(
+        payload, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    envelope = [
+        {"schema_version": "loopx_project_registry_envelope_v1",
+         "minimum_writer_protocol": "goal_instance_v1",
+         "payload_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest()},
+        payload,
+    ]
+    path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def test_strict_project_registry_keeps_legacy_route_and_wire_format(tmp_path: Path) -> None:
+    source, target, projects = _fixture(tmp_path, projects=1)
+    project = projects[0]
+    local_registry = project / ".loopx" / "registry.json"
+    _write_strict_project_registry(local_registry, _read(local_registry))
+    before = local_registry.read_bytes()
+
+    prompt = build_new_project_prompt(
+        project=project, goal_doc=project / "GOAL.md", goal_id="goal-0",
+        objective="Continue the registered Goal", domain="example",
+        adapter_kind="read_only_project_map_v0", adapter_status="connected-read-only",
+        next_probe=None, spawn_allowed=False, allowed_domains=None, write_scope=None,
+    )
+    assert f"--runtime-root {source}" in prompt["quota_guard_command"]
+    assert ".codex/goals/goal-0/ACTIVE_GOAL_STATE.md" in prompt["prompt"]
+
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    migrated = load_project_registry(local_registry)
+    assert migrated["common_runtime_root"] == str(target)
+    assert migrated["goals"][0]["state_file"] == ".loopx/goals/goal-0/ACTIVE_GOAL_STATE.md"
+    assert isinstance(json.loads(local_registry.read_text(encoding="utf-8")), list)
+
+    rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)
+    assert local_registry.read_bytes() == before
+    assert source.exists() and not target.exists()
 
 
 def _extension_cli_result(
@@ -301,6 +347,53 @@ def test_symlink_and_changed_target_block_unsafe_migration_or_rollback(tmp_path:
     with pytest.raises(ValueError, match="automatic rollback is unsafe"):
         rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)
     assert target.exists() and not source.exists()
+
+
+def test_symlinked_goal_destination_ancestor_never_writes_outside_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_parent = projects[0] / ".loopx" / "goals"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    goal_parent.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    assert source.exists() and not target.exists()
+    assert list(outside.iterdir()) == []
+
+    goal_parent.unlink()
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    goal_parent.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert source.exists() and not target.exists()
+    assert list(outside.iterdir()) == []
+
+    goal_parent.unlink()
+    original_copy = migration._copy
+    injected = False
+
+    def inject_after_backup(original: Path, copied: Path) -> None:
+        nonlocal injected
+        original_copy(original, copied)
+        if not injected:
+            goal_parent.symlink_to(outside, target_is_directory=True)
+            injected = True
+
+    monkeypatch.setattr(migration, "_copy", inject_after_backup)
+    with pytest.raises(RuntimeError, match="original routes were restored"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert source.exists() and not target.exists()
+    assert list(outside.iterdir()) == []
 
 
 def test_cli_preview_execute_and_rollback_readback(tmp_path: Path) -> None:

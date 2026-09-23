@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import shlex
 from pathlib import Path
 from typing import Any
 
 from .bootstrap import default_goal_id
+from .control_plane.projects.registry_codec import load_project_registry
 from .paths import (
     registered_goal_state_file,
     rel_or_abs,
@@ -423,7 +423,7 @@ def build_new_project_prompt(
     resolved_next_probe = next_probe or DEFAULT_HANDOFF_NEXT_PROBE
     project_registry_path = project.expanduser() / ".loopx" / "registry.json"
     existing_registry = (
-        json.loads(project_registry_path.read_text(encoding="utf-8"))
+        load_project_registry(project_registry_path)
         if project_registry_path.is_file()
         else None
     )
