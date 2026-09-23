@@ -582,7 +582,7 @@ def build_codex_cli_bootstrap_message(
         f"{cli_bin} doctor passed after PyPI install repair or an existing install",
         "repo bootstrap/connect completed conservatively or a concrete install/connect blocker was shown",
         f"thin heartbeat task_body generated from {cli_bin} heartbeat-prompt --thin, not hand-written",
-        "host loop surface activated from the thin task_body: Codex CLI /goal or Codex App heartbeat automation initially every 3 minutes, then following quota scheduler_hint",
+        "host loop surface activated from the thin task_body: Codex CLI /goal or Codex App heartbeat automation initially at max(3 minutes, owner cadence floor), then following quota scheduler_hint",
         "setup was not reported complete from registry/quota identity alone; missing host-loop mutation was reported as a concrete gate",
         "quota/status guard checked with the registered agent id when available after bootstrap/connect",
         "current goal, concrete user gate or none, top todos, and next safe action shown in the TUI",

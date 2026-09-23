@@ -1,15 +1,15 @@
 """CLI wire projection reusing the manager's existing Core providers."""
 
-import json
 from pathlib import Path
 
 
 def export_page(registry_path, runtime_root_arg, args):
     from ...paths import resolve_runtime_root
     from ...chat_manager_context import manager_turn_context
+    from ...history import load_registry
     from .inspection import ManagerInspection, TOOL_NAME
 
-    registry = json.loads(Path(registry_path).read_text())
+    registry = load_registry(Path(registry_path))
     root = resolve_runtime_root(registry, runtime_root_arg, registry_path=registry_path)
     ids = args.portfolio_goal_ids
     if not 1 <= args.limit <= 12 or not 1 <= args.days <= 90 or args.offset < 0:

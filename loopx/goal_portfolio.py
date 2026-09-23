@@ -15,6 +15,7 @@ from .agent_registry import registered_agent_ids_for_goal
 from .control_plane.goals.activation import goal_activation_state
 from .control_plane.quota.should_run import build_quota_should_run
 from .global_todos import _classify_goal_todos
+from .history import decode_registry_snapshot
 from .paths import resolve_runtime_root
 from .status import collect_status
 
@@ -327,7 +328,7 @@ def build_goal_portfolio(
         raise ValueError("collection time must include a timezone")
     try:
         registry_bytes = registry_path.read_bytes()
-        registry = json.loads(registry_bytes)
+        registry = decode_registry_snapshot(registry_path, registry_bytes)
         raw_goals = registry["goals"]
         if not isinstance(raw_goals, list):
             raise ValueError("registry goals must be a list")

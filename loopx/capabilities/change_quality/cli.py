@@ -4,8 +4,8 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+from ...history import load_registry
 from ...paths import resolve_runtime_root
-from ...registry import read_json
 from .receipt import (
     build_change_quality_prepare_packet,
     record_change_quality_receipt,
@@ -129,7 +129,7 @@ def handle_change_quality_command(
 ) -> int | None:
     if args.command != "change-quality":
         return None
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(
         registry,
         runtime_root_arg,

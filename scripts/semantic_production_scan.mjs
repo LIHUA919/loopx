@@ -20,6 +20,107 @@ for (const source of request.sources) {
       ts.isSatisfiesExpression(node) || ts.isNonNullExpression(node))) node = node.expression;
     return node;
   };
+  if (request.mode === 'registry_io') {
+    const approvedReads = new Set(request.approved_reads ?? []);
+    const approvedWrites = new Set(request.approved_writes ?? []);
+    const approvedTransactions = new Set(request.approved_transactions ?? []);
+    const directReads = new Set(['readFile', 'readFileSync', 'readJson', 'readJSON', 'readTextFile']);
+    const directWrites = new Set(['outputJson', 'write', 'writeFile', 'writeFileSync', 'writeJson', 'writeJSON', 'writeTextFile']);
+    const callName = expression => {
+      const node = unwrap(expression);
+      if (ts.isIdentifier(node)) return node.text;
+      if (ts.isPropertyAccessExpression(node)) return node.name.text;
+      return null;
+    };
+    const identifierRole = name => {
+      const normalized = name.toLowerCase();
+      if ((normalized.includes('global') && normalized.includes('registr')) ||
+          normalized === 'globalpath' || normalized === 'globalregistry') return 'global';
+      if (normalized.includes('registr') &&
+          !['registrypayload', 'registryrecord', 'registryrecords', 'registrydata'].includes(normalized)) {
+        return 'project';
+      }
+      return 'unknown';
+    };
+    const mergeRoles = roles => roles.includes('global') ? 'global'
+      : roles.includes('project') ? 'project' : 'unknown';
+    const pathRole = expression => {
+      const node = unwrap(expression);
+      if (!node) return 'unknown';
+      if (ts.isIdentifier(node)) return identifierRole(node.text);
+      if (ts.isPropertyAccessExpression(node)) {
+        const own = identifierRole(node.name.text);
+        return own === 'unknown' ? pathRole(node.expression) : own;
+      }
+      if (ts.isElementAccessExpression(node)) {
+        return mergeRoles([pathRole(node.expression), pathRole(node.argumentExpression)]);
+      }
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+        const normalized = node.text.replaceAll('\\', '/').toLowerCase();
+        if (normalized.includes('registry.global.json')) return 'global';
+        if (normalized.endsWith('/.loopx/registry.json') ||
+            normalized === '.loopx/registry.json' || normalized === 'registry.json') return 'project';
+        return 'unknown';
+      }
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const name = callName(node.expression) ?? '';
+        if (name === 'globalRegistryPath') return 'global';
+        if (['defaultRegistryPath', 'findRegistry', 'registryPath'].includes(name)) return 'project';
+        if (name === 'Path' && (node.arguments ?? []).length > 0) return pathRole(node.arguments[0]);
+        if (ts.isPropertyAccessExpression(node.expression) &&
+            ['absolute', 'expanduser', 'resolve'].includes(name)) {
+          return pathRole(node.expression.expression);
+        }
+        return 'unknown';
+      }
+      if (ts.isBinaryExpression(node)) return mergeRoles([pathRole(node.left), pathRole(node.right)]);
+      if (ts.isConditionalExpression(node)) {
+        return mergeRoles([pathRole(node.whenTrue), pathRole(node.whenFalse)]);
+      }
+      if (ts.isTemplateExpression(node)) {
+        return mergeRoles(node.templateSpans.map(span => pathRole(span.expression)));
+      }
+      return 'unknown';
+    };
+    const record = (node, scope, kind, api) => {
+      const location = tree.getLineAndCharacterOfPosition(node.getStart(tree));
+      result.push({
+        path: source.path,
+        scope,
+        line: location.line + 1,
+        column: location.character + 1,
+        kind,
+        api,
+      });
+    };
+    const visit = (node, scope) => {
+      if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) {
+        const name = node.name ? callName(node.name) : null;
+        scope = name ? (scope === '<module>' ? name : `${scope}.${name}`) : '<anonymous>';
+      } else if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+        const parent = node.parent;
+        const name = ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)
+          ? callName(parent.name) : null;
+        scope = name ? (scope === '<module>' ? name : `${scope}.${name}`) : '<anonymous>';
+      }
+      if (ts.isCallExpression(node)) {
+        const api = callName(node.expression);
+        if (approvedReads.has(api)) record(node, scope, 'codec_read', api);
+        else if (approvedWrites.has(api)) record(node, scope, 'codec_write', api);
+        else if (approvedTransactions.has(api)) record(node, scope, 'codec_transaction', api);
+        else if (directReads.has(api) && node.arguments.length > 0 &&
+            pathRole(node.arguments[0]) === 'project') {
+          record(node, scope, 'direct_json_read', api);
+        } else if (directWrites.has(api) && node.arguments.length > 0 &&
+            pathRole(node.arguments[0]) === 'project') {
+          record(node, scope, 'direct_json_write', api);
+        }
+      }
+      ts.forEachChild(node, child => visit(child, scope));
+    };
+    visit(tree, '<module>');
+    continue;
+  }
   // Say why a write stayed unknown using the same labels as the Python scanner,
   // so one residue taxonomy covers both runtimes instead of a single catch-all.
   const blockerFor = node => {

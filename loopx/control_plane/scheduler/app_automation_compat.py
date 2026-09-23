@@ -72,11 +72,12 @@ def build_codex_app_compatibility_projection(
             scheduler_host_facts=failure_facts,
             scheduler_before=scheduler_before,
         )
-        legacy["fallback_hint"] = build_fallback_hint(
-            goal_id=goal_id,
-            agent_id=agent_id,
-            automation_id=automation_id,
-        )
+        if not legacy.get("execution_interval_policy"):
+            legacy["fallback_hint"] = build_fallback_hint(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                automation_id=automation_id,
+            )
     if isinstance(legacy.get("ack_hint"), dict):
         canonical_ack = app_automation["ack_hint"]
         canonical_args = (

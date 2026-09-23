@@ -1,3 +1,4 @@
+import {manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {manageLocalAuthorityArchive} from "./coordination/local_authority_archive.ts";
 import {selectPeriodicReportProgress, selectPeriodicReportApprovalRetry} from "./capabilities/periodic_report_progress.ts";
 import {planIssueFixMonitorReconciliation} from "./capabilities/issue_fix_monitor_reconciliation.ts";
@@ -119,6 +120,8 @@ import {
 } from "./turn_driver/delivery_continuity.ts";
 import { reduceTurnSettlementTransaction } from "./turn_driver/settlement.ts";
 import { evaluateHostTodoCompletion } from "./turn_driver/host_todo_completion.ts";
+import { projectReplanHistory } from "./work_items/replan_history.ts";
+import { projectReplanHistorySnapshot } from "./work_items/replan_history_snapshot.ts";
 import { projectReplanSemantics } from "./work_items/replan_semantics.ts";
 import {
   projectReplanSettlementContract,
@@ -475,6 +478,8 @@ export function createEffectRuntimeHandlers(
     ["goal.long_todo_chain.evaluate", evaluateLongTodoChain],
     ["todo.external_wait.plan", planTodoExternalWaitTransition],
     ["scheduler.state_transition.evaluate", evaluateSchedulerStateTransition],
+    ["quota.automation_cadence.manage", manageAutomationCadence],
+    ["quota.automation_cadence.schedule", projectCadenceSchedule],
     ["scheduler.state.evaluate", evaluateSchedulerStateOperation],
     ["scheduler.state.load", loadSchedulerState],
     ["scheduler.state.write", writeSchedulerState],
@@ -787,6 +792,8 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+  ["work_item.replan_history.project", projectReplanHistory],
+  ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],
     [
       "work_item.replan_settlement.reentry",
       projectTodoLifecycleSettlementReentry,

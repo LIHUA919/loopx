@@ -28,6 +28,7 @@ from ..capabilities.pr_review_queue.github_source import (
     scan_github_pull_request_targets,
 )
 from ..file_lock import exclusive_file_lock
+from ..history import load_registry
 from ..pr_review import (
     build_pr_review_packet,
     load_pr_fixture,
@@ -42,7 +43,7 @@ from ..pr_review_merge_readiness import (
     fetch_github_pull_request,
     fetch_github_review_thread_summary,
 )
-from ..registry import atomic_write_json, read_json, find_registry_goal
+from ..registry import atomic_write_json, find_registry_goal
 from ..capabilities.pr_review_queue.goal_configuration import resolve_configuration
 
 PrintPayload = Callable[
@@ -254,7 +255,7 @@ def handle_pr_review_command(
         if goal_id:
             if registry_path is None or not registry_path.exists():
                 raise ValueError("--goal-id requires an available Goal registry")
-            goal = find_registry_goal(read_json(registry_path), goal_id)
+            goal = find_registry_goal(load_registry(registry_path), goal_id)
             if goal is None:
                 raise ValueError("PR review Goal was not found: " + goal_id)
         review_configuration = resolve_configuration(goal, machine_configuration)

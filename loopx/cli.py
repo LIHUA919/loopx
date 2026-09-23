@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from .cli_commands.automation_cadence import (
+    register_automation_cadence_command, handle_automation_cadence_command,
+)
+
 import argparse
 import sys
 
@@ -359,6 +363,7 @@ def build_parser() -> LoopXArgumentParser:
     register_explore_commands(sub, add_subcommand_format)
     register_todo_command(sub, add_subcommand_format)
     register_coordination_shadow_command(sub, add_subcommand_format)
+    register_automation_cadence_command(sub, add_subcommand_format)
     register_authority_archive_command(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
     register_authority_shadow_command(sub, add_subcommand_format)
@@ -889,6 +894,12 @@ def main(argv: list[str] | None = None) -> int:
     if explore_result is not None:
         return explore_result
 
+    cadence_result = handle_automation_cadence_command(
+        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+        print_payload=print_payload, output_format=output_format,
+    )
+    if cadence_result is not None:
+        return cadence_result
     authority_archive_result = handle_authority_archive_command(
         args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
         output_format=output_format, print_payload=print_payload,

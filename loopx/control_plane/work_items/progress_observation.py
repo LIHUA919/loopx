@@ -193,54 +193,13 @@ def typed_progress_repeat_trigger(
     agent_id: str | None,
     threshold: int = PROGRESS_REPEAT_THRESHOLD,
 ) -> dict[str, Any] | None:
-    """Return a repeat trigger only for consecutive equivalent typed rows."""
+    """Compatibility entrypoint for the shared TypeScript history window."""
+    from .replan_history_codec import project_replan_history
 
-    required_count = max(2, int(threshold))
-    normalized_agent_id = str(agent_id or "").strip()
-    observations: list[tuple[Mapping[str, Any], dict[str, Any]]] = []
-    observed_turn_instance_ids: set[str] = set()
-    for run in newest_first_runs:
-        run_agent_id = str(run.get("agent_id") or "").strip()
-        if normalized_agent_id and run_agent_id not in {"", normalized_agent_id}:
-            continue
-        turn_instance_id = _progress_turn_instance_id(run)
-        if turn_instance_id and turn_instance_id in observed_turn_instance_ids:
-            continue
-        observation = progress_observation_from_run(run)
-        if observation is None:
-            if observations:
-                break
-            continue
-        observations.append((run, observation))
-        if turn_instance_id:
-            observed_turn_instance_ids.add(turn_instance_id)
-        if len(observations) >= required_count:
-            break
-    if len(observations) < required_count:
-        return None
-    fingerprints = {item[1]["fingerprint"] for item in observations}
-    if len(fingerprints) != 1:
-        return None
-    result_class = observations[0][1]["result_class"]
-    if result_class not in {
-        ProgressResultClass.UNCHANGED.value,
-        ProgressResultClass.BLOCKED.value,
-    }:
-        return None
-    baseline = observations[0][1]
-    return {
-        "kind": PROGRESS_REPEAT_TRIGGER_KIND,
-        "schema_version": PROGRESS_OBSERVATION_SCHEMA_VERSION,
-        "agent_id": normalized_agent_id or None,
-        "run_count": required_count,
-        "threshold": required_count,
-        "progress_fingerprint": baseline["fingerprint"],
-        "progress_baseline": baseline,
-        "latest_generated_at": str(observations[0][0].get("generated_at") or ""),
-        "oldest_counted_generated_at": str(
-            observations[-1][0].get("generated_at") or ""
-        ),
-    }
+    return project_replan_history(
+        newest_first_runs, operation="progress", agent_id=agent_id,
+        stall_threshold=threshold,
+    )
 
 
 def _has_new_terminal_coverage(

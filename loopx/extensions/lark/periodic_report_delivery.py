@@ -25,6 +25,7 @@ from ...capabilities.periodic_report.machine_defaults import (
 from ...capabilities.periodic_report.machine_store import (
     read_periodic_report_machine_defaults,
 )
+from ...history import load_registry
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_contracts import (
     binding_for_goal,
@@ -40,7 +41,6 @@ from .goal_channel_targets import (
 )
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 from .presentation.periodic_report import periodic_report_lark_sink_adapter
-from ...registry import read_json
 from ...presentation.public_safety import redact_public_text
 
 
@@ -193,7 +193,7 @@ def _resolved_goal_channel_binding(
     goal_id: str,
     expected_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     goal = goal_from_registry(registry, goal_id)
     subscription = resolve_goal_periodic_report_subscription(
         goal,

@@ -7,21 +7,24 @@ from typing import Any
 
 from ...bootstrap import build_goal_entry
 from ...control_plane.runtime.time import now_local_iso
-from ...file_lock import exclusive_cross_runtime_file_lock as exclusive_file_lock
 from ...paths import (
     registered_goal_state_file,
     require_single_goal_state_route,
     resolve_runtime_root,
+    select_default_runtime_root,
 )
 from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
-from ...paths import select_default_runtime_root
-from ...registry import atomic_write_json
 from ..goals.active_state_metadata import (
     markdown_blockquote, markdown_frontmatter_string, split_state_frontmatter,
 )
 from ...repository_identity import normalize_repository_identity
 from .contract import validate_project_record_bindings
+from .registry_codec import (
+    load_project_registry,
+    mutate_project_registry,
+    project_registry_transaction,
+)
 
 PROJECT_KINDS = ("work", "personal")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
@@ -235,11 +238,7 @@ def register_project_goal(
 
     knowledge_root = knowledge_root.expanduser().resolve()
     registry_path = registry_path.expanduser()
-    existing_registry = (
-        json.loads(registry_path.read_text(encoding="utf-8"))
-        if registry_path.exists()
-        else None
-    )
+    existing_registry = load_project_registry(registry_path) if registry_path.exists() else None
     state_file = registered_goal_state_file(knowledge_root, goal_id, existing_registry)
     require_single_goal_state_route(knowledge_root, goal_id, state_file)
     updated_at = now_local_iso()
@@ -290,17 +289,16 @@ def register_project_goal(
         updated_at=updated_at,
     )
 
-    with exclusive_file_lock(registry_path, operation="project_register"):
-        if registry_path.exists():
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
-            if not isinstance(registry, dict):
-                raise ValueError("registry root must be a JSON object")
-        else:
-            registry = {
+    with project_registry_transaction(
+        registry_path,
+        operation="project_register",
+        create=lambda: {
                 "schema_version": "0.1",
                 "registry_role": "project-local",
                 "common_runtime_root": str(runtime_root or select_default_runtime_root()),
-            }
+        },
+    ) as transaction:
+        registry = transaction.payload_copy()
         projects, goals = _project_goal_records(registry)
         existing_project = next(
             (
@@ -391,8 +389,8 @@ def register_project_goal(
                 registry["projects"] = [*projects, project_record]
                 registry["goals"] = [*goals, goal_record]
                 registry["updated_at"] = updated_at
-                atomic_write_json(registry_path, registry)
-            except OSError:
+                transaction.commit(registry)
+            except Exception:
                 if state_created:
                     state_file.unlink(missing_ok=True)
                 raise
@@ -420,12 +418,7 @@ def bind_session(
     goal_id = _identifier(goal_id, field="goal_id")
     registry_path = registry_path.expanduser()
 
-    with exclusive_file_lock(registry_path, operation="project_bind_session"):
-        if not registry_path.exists():
-            raise FileNotFoundError(f"registry file does not exist: {registry_path}")
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        if not isinstance(registry, dict):
-            raise TypeError("registry root must be a JSON object")
+    def reduce(registry: dict[str, Any]) -> dict[str, Any]:
         project_id = _project_id_for_goal(
             registry,
             goal_id=goal_id,
@@ -468,16 +461,20 @@ def bind_session(
             if not (isinstance(item, dict) and item.get("session_id") == session_id)
         ] + [requested]
         registry["updated_at"] = now_local_iso()
-        atomic_write_json(registry_path, registry)
+        return {
+            "ok": True,
+            "schema_version": "loopx_session_binding_v0",
+            "changed": True,
+            "registry": str(registry_path),
+            "project_id": project_id,
+            "binding": requested,
+        }
 
-    return {
-        "ok": True,
-        "schema_version": "loopx_session_binding_v0",
-        "changed": True,
-        "registry": str(registry_path),
-        "project_id": project_id,
-        "binding": requested,
-    }
+    return mutate_project_registry(
+        registry_path,
+        operation="project_bind_session",
+        reducer=reduce,
+    )
 
 
 def unbind_session(
@@ -494,12 +491,7 @@ def unbind_session(
     goal_id = _identifier(goal_id, field="goal_id")
     registry_path = registry_path.expanduser()
 
-    with exclusive_file_lock(registry_path, operation="project_unbind_session"):
-        if not registry_path.exists():
-            raise FileNotFoundError(f"registry file does not exist: {registry_path}")
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        if not isinstance(registry, dict):
-            raise TypeError("registry root must be a JSON object")
+    def reduce(registry: dict[str, Any]) -> dict[str, Any]:
         project_id = _project_id_for_goal(
             registry,
             goal_id=goal_id,
@@ -536,16 +528,20 @@ def unbind_session(
             item for item in bindings if item.get("session_id") != session_id
         ]
         registry["updated_at"] = now_local_iso()
-        atomic_write_json(registry_path, registry)
+        return {
+            "ok": True,
+            "schema_version": "loopx_session_unbinding_v0",
+            "changed": True,
+            "registry": str(registry_path),
+            "project_id": project_id,
+            "binding": binding,
+        }
 
-    return {
-        "ok": True,
-        "schema_version": "loopx_session_unbinding_v0",
-        "changed": True,
-        "registry": str(registry_path),
-        "project_id": project_id,
-        "binding": binding,
-    }
+    return mutate_project_registry(
+        registry_path,
+        operation="project_unbind_session",
+        reducer=reduce,
+    )
 
 
 def resolve_project(
@@ -559,9 +555,7 @@ def resolve_project(
     registry_path = registry_path.expanduser()
     if not registry_path.exists():
         raise FileNotFoundError(f"registry file does not exist: {registry_path}")
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    if not isinstance(registry, dict):
-        raise TypeError("registry root must be a JSON object")
+    registry = load_project_registry(registry_path)
     projects = _registry_records(
         registry,
         field="projects",

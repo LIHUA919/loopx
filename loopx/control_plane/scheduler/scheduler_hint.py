@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Any
 
 from ..quota.decision_summary import compact_quota_decision
+from ..effect_runtime import effect_runtime_result
 from ..runtime.time import now_utc, utc_isoformat
 from ..todos.frontier_deadline import build_frontier_recheck_plan
 from .arbitration import (
@@ -644,6 +645,24 @@ class _SchedulerHintBuilder:
             current = current.get(part)
         return current
 
+    def _cadence_projections(
+        self, interval: int, maximum: int, multiplier: int, override: list[int] | None,
+    ) -> dict[str, Any]:
+        """Keep legacy profile selection separate from the owner constraint projection."""
+        local = override or [min(interval * multiplier**step, maximum) for step in range(3)]
+        app_max = min(max(1, maximum), CODEX_APP_MAX_INTERVAL_MINUTES)
+        app: list[int] = []
+        for value in local:
+            bounded = min(max(1, int(value)), app_max)
+            if not app or app[-1] != bounded:
+                app.append(bounded)
+        projections = {"local": local, "app": app, "app_max": app_max, "local_max": maximum, "floor": 0}
+        policy = _dict_or_empty(self.payload.get("automation_cadence"))
+        floor = policy.get("min_interval_minutes")
+        return effect_runtime_result("quota.automation_cadence.schedule", {
+            **projections, "min_interval_minutes": floor,
+        }) if floor else projections
+
     def build(
         self,
         *,
@@ -667,18 +686,9 @@ class _SchedulerHintBuilder:
             if context is not None and context.app_automation_applicable
             else CODEX_APP_SURFACE
         )
-        local_cadence_progression = cadence_progression_override or [
-            min(codex_interval * (multiplier**step), codex_max) for step in range(3)
-        ]
-        app_host_max = min(max(1, codex_max), CODEX_APP_MAX_INTERVAL_MINUTES)
-        app_cadence_progression: list[int] = []
-        for interval in local_cadence_progression:
-            bounded_interval = min(max(1, int(interval)), app_host_max)
-            if (
-                not app_cadence_progression
-                or app_cadence_progression[-1] != bounded_interval
-            ):
-                app_cadence_progression.append(bounded_interval)
+        cadence = self._cadence_projections(codex_interval, codex_max, multiplier, cadence_progression_override)
+        local_cadence_progression, app_cadence_progression = cadence["local"], cadence["app"]
+        app_host_max, codex_max, floor = cadence["app_max"], cadence["local_max"], cadence["floor"]
         app_initial_interval = app_cadence_progression[0]
         local_initial_interval = local_cadence_progression[0]
         final_replan_check = {
@@ -813,7 +823,7 @@ class _SchedulerHintBuilder:
             "progression_minutes": app_cadence_progression,
             "current_interval_minutes": current_interval,
             "host_max_interval_minutes": app_host_max,
-            "coarser_wait_fallback": "local_scheduler_only",
+            "coarser_wait_fallback": "hold_affected_automation" if floor else "local_scheduler_only",
             "host_update_failure": "cache_recent_failed_target_and_observed_host_pairs_then_suppress_each_exact_repeat_until_host_changes_ack_or_expiry",
             "ack_required_after_apply": apply_needed,
             "ack_required_from_host_match": host_match_ack_needed,
@@ -881,6 +891,11 @@ class _SchedulerHintBuilder:
             },
             "no_spend_for_cadence_change": True,
         }
+        if floor:
+            app_automation["execution_interval_policy"] = self.payload["automation_cadence"]
+            app_automation["guarantee"] = cadence["guarantee"]
+            if host_failure_suppressed:
+                app_automation.update(host_action="pause_current_heartbeat", apply="pause_affected_automation")
         stateful_backoff = app_automation["stateful_backoff"]
         if host_update_failures:
             stateful_backoff["host_update_failures"] = [
@@ -942,7 +957,7 @@ class _SchedulerHintBuilder:
                     scheduler_before=self.payload,
                     surface=app_surface,
                 )
-                if app_surface == CODEX_APP_SURFACE:
+                if app_surface == CODEX_APP_SURFACE and not floor:
                     app_automation["fallback_hint"] = build_codex_app_scheduler_fallback_hint(
                         goal_id=goal_id,
                         agent_id=agent_id,
@@ -957,7 +972,7 @@ class _SchedulerHintBuilder:
                 identity_signature=identity_signature,
                 available_capabilities=self.scheduler_ack_capabilities,
                 after=(
-                    "automation_update_rrule_success"
+                    ("automation_update_then_readback_actual_rrule" if floor else "automation_update_rrule_success")
                     if apply_needed
                     else "matching_host_rrule_observed"
                 ),

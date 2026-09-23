@@ -10,12 +10,12 @@ unconditional planning contract — fail-closed.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ..coordination.local_authority import read_canonical_todo_fields_if_promoted
+from ...history import load_registry
 from ...paths import resolve_runtime_root
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ...control_plane.todos.contract import (
@@ -223,8 +223,10 @@ def append_todo_delta_render_line(
 
 
 def _read_registry(registry_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not registry_path.is_file():
+        return None, "unreadable"
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        payload = load_registry(registry_path)
     except (OSError, ValueError):
         return None, "unreadable"
-    return (payload, None) if isinstance(payload, dict) else (None, "not_a_mapping")
+    return payload, None

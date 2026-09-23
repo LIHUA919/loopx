@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
-from .file_lock import exclusive_cross_runtime_file_lock
-from .registry import atomic_write_json, find_registry_goal
+from .registry import find_registry_goal
 from .control_plane.coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
 from .control_plane.coordination.runtime_shadow_writer_adapter import require_runtime_shadow_capture_prepared, begin_todo_runtime_shadow_capture, settle_todo_runtime_shadow_capture
+from .control_plane.projects.registry_codec import (
+    load_project_registry,
+    project_registry_transaction,
+)
 from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
@@ -73,16 +75,7 @@ def now_iso() -> str:
 def read_json_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as f:
-        payload = json.load(f)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    return payload
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return load_project_registry(path)
 
 
 def resolve_project_path(project: Path, path: Path | None) -> Path | None:
@@ -510,11 +503,15 @@ def bootstrap_project(
     shadow_capture = None
     shadow_evidence: dict[str, Any] = {}
     if not dry_run:
-        with exclusive_cross_runtime_file_lock(registry_path, operation="bootstrap_registry"), legacy_todo_write_transaction(
+        with project_registry_transaction(
+            registry_path,
+            operation="bootstrap_registry",
+            create=dict,
+        ) as registry_transaction, legacy_todo_write_transaction(
             registry_path, goal_id, state_file, None, "bootstrap_state", False,
             runtime_root=runtime_root,
         ):
-            current_registry = read_json_if_exists(registry_path)
+            current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
             previous_root = resolve_runtime_root(current_registry, None, registry_path=registry_path)
             if previous_root != runtime_root:
@@ -556,7 +553,7 @@ def bootstrap_project(
             current_registry["updated_at"] = updated_at.split("T")[0]
             current_registry["common_runtime_root"] = str(runtime_root)
             registry, registry_goal_action = merge_goal(current_registry, goal_entry, force=force)
-            atomic_write_json(registry_path, registry)
+            registry_transaction.commit(registry)
         if shadow_capture is not None:
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
                 runtime_root=runtime_root, goal_id=goal_id, write_class="bootstrap_state",

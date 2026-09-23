@@ -722,6 +722,13 @@ def build_work_lane_contract(
                     "non-blocking monitor contract"
                 ),
             }
+        if first_due_monitor and todo_counts.get("complete", True) is not True:
+            # Incomplete counts cannot certify a monitor-only schedule, but
+            # the admitted due item is an exact executable candidate. Do not
+            # let an unrelated blocked successor turn it into a quiet wait.
+            return due_monitor_contract(
+                reason_codes=["monitor_due", "todo_source_incomplete"]
+            )
         if monitor_only_schedule:
             if first_due_monitor:
                 return due_monitor_contract(

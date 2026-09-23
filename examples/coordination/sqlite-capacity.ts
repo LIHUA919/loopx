@@ -17,13 +17,14 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {capacityLedger, latency, type CapacityAxis, type QualificationRow} from "./sqlite-capacity-report.ts";
+import {CAPACITY_PROFILES, capacityLedger, latency, type CapacityAxis, type CapacityProfileId,
+  type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
   python: {type: "string", default: "python3"}, cli: {type: "boolean", default: false},
 }});
-const goal = "sqlite-capacity", formal = options.profile === "matched-64k";
+const goal = "sqlite-capacity";
 const script = fileURLToPath(import.meta.url), repository = fileURLToPath(new URL("../../", import.meta.url));
 const sqlite = (() => {
   try { return sqliteAuthorityRuntime(); }
@@ -38,14 +39,17 @@ const sqlite = (() => {
   }
 })(); // Fail before creating a qualification database.
 
-assert(["rehearsal", "matched-64k"].includes(options.profile), "profile must be rehearsal or matched-64k");
+assert(options.profile in CAPACITY_PROFILES, `profile must be one of ${Object.keys(CAPACITY_PROFILES).join(", ")}`);
+const profileId = options.profile as CapacityProfileId;
+const profile = CAPACITY_PROFILES[profileId];
+const formal = profile.formal;
 const report: Record<string, unknown> = {
   schema_version: "loopx_sqlite_capacity_report_v1", profile: options.profile,
   runtime: sqlite.info, source: sourceIdentity(),
   host: {platform: platform(), release: release(), arch: process.arch,
     logical_cpus: cpus().length, cpu_model: cpus()[0]?.model ?? "unknown", memory_bytes: totalmem(),
     storage_medium: "not_captured"},
-  workload: {projection_json_bytes: 65536, event_receipt_max_bytes: 4096,
+  workload: {projection_json_bytes: profile.payload, event_receipt_max_bytes: 4096,
     fill_read_write_ratio: "5:1", read_mix: "three head, oldest receipt, deterministic middle receipt",
     records: "one native synthetic Todo; fixed padding isolates history growth; not the full domain profile",
     sampling: "last 1000 commits (or entire smaller rehearsal); nearest-rank quantiles",
@@ -55,7 +59,8 @@ const report: Record<string, unknown> = {
     cold_node: "new Node process and import plus first load; OS file cache is not dropped",
     warm: "same process, actual provider opens and closes each connection"},
   durability: {journal_mode: "WAL", synchronous: "FULL", altered_for_measurement: false},
-  budgets: {per_axis_fill_seconds: 2400, database_bytes: 16 * 1024 ** 3, minimum_free_bytes: 5 * 1024 ** 3},
+  budgets: {per_axis_fill_seconds: 2400, per_axis_fill_seconds_scaling: "operational guard, floored at 2400 s and scaled by commits and payload bytes beyond the 64 KiB 100k workload",
+    database_bytes: 16 * 1024 ** 3, minimum_free_bytes: 5 * 1024 ** 3},
   metric_limits: {
     logical_storage_writes: "measured per commit as serialized bytes handed to SQLite (commits row delta+events+receipts, full-projection head rewrite, amortized checkpoint row); page, index and compaction overhead excluded",
     cumulative_wal_traffic: "measured over one bounded commit window per axis with a held read mark that blocks WAL resets; whole-run WAL totals remain unmeasured",
@@ -66,11 +71,13 @@ const report: Record<string, unknown> = {
   full_d2_qualified: false,
 };
 const axes: CapacityAxis[] = [];
-for (const count of formal ? [10000, 100000] : [100, 1000]) {
+for (const count of profile.counts) {
   const axis = await measureAxis(count); axes.push(axis);
   if (axis.status === "failed") break;
 }
-const ledger = capacityLedger(axes, formal);
+// The ledger validates the measured axes against the same profile the runner
+// used, before its dedicated coverage row can disappear.
+const ledger = capacityLedger(axes, profileId);
 const sourceStable = (report.source as Record<string, unknown>).source_tree_sha256 === sourceIdentity().source_tree_sha256;
 if (!sourceStable) ledger.push({id: "source_stability", status: "failed", scope: "source changed while the profile was running"});
 Object.assign(report, {axes, ledger, source_stable: sourceStable, status: axes.some(axis => axis.status === "failed") ||
@@ -101,14 +108,15 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   const projection = authorityProjectionFixture(goal, [{todo_id: "todo_capacity", role: "agent", status: "open",
     done: false, text: "Capacity 000000", archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task"}],
   [], "native", {handoff_mode: "soft_claim", capacity_padding: ""});
-  const padding = 65536 - Buffer.byteLength(JSON.stringify(projection));
+  const padding = profile.payload - Buffer.byteLength(JSON.stringify(projection));
   assert(padding >= 0); projection.capacity_padding = "p".repeat(padding);
-  assert.equal(Buffer.byteLength(JSON.stringify(projection)), 65536);
+  assert.equal(Buffer.byteLength(JSON.stringify(projection)), profile.payload);
+  const payloadBytes = profile.payload;
   const root = mkdtempSync(join(tmpdir(), "loopx-sqlite-capacity-"));
   const runtime = join(root, "runtime"), state = join(root, "state.md"), registry = join(root, "registry.json");
   const directory = join(runtime, "authority", "sqlite-v0");
   const store = new SqliteAuthorityStore(directory, goal);
-  const axis: CapacityAxis = {target_commits: count, completed_commits: 0, projection_json_bytes: 65536,
+  const axis: CapacityAxis = {target_commits: count, completed_commits: 0, projection_json_bytes: profile.payload,
     sample_window: Math.min(1000, count), status: "failed", warm: null, cold_node: null, cold_cli: null,
     application_request_json_bytes: 0, files_at_target: null, sampled_peak_rss_bytes: process.memoryUsage().rss,
     bounded_profile: null, history_audit: null, wal_traffic_window: null, logical_writes: null, lock_wait: null,
@@ -189,7 +197,11 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
       if (i % 100 === 0) {
         axis.sampled_peak_rss_bytes = Math.max(axis.sampled_peak_rss_bytes, process.memoryUsage().rss);
         const fs = statfsSync(root);
-        assert(performance.now() - start < 2400000, "axis wall budget exhausted");
+        // The fill wall budget is an operational guard over the work performed
+        // (commits x payload bytes), never a qualification budget; the RFC
+        // p95/growth budgets below are unaffected by this floor.
+        const wallBudgetMs = Math.max(2400000, 2400000 * count / 100000 * payloadBytes / 65536);
+        assert(performance.now() - start < wallBudgetMs, "axis wall budget exhausted");
         assert(statSync(store.path).size < 16 * 1024 ** 3, "database budget exhausted");
         assert(fs.bavail * fs.bsize > 5 * 1024 ** 3, "disk reserve exhausted");
       }

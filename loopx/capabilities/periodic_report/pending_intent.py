@@ -16,11 +16,11 @@ from ...control_plane.capability_hooks import (
     InteractionProjectionHookRegistration,
 )
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...history import load_registry
 from .todo_source import read_report_todo_source
 from ...registry import (
     atomic_write_json,
     find_registry_goal,
-    read_json,
 )
 from ...todos import add_goal_todo
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
@@ -242,7 +242,7 @@ def _active_delivery_subscription(
 ) -> dict[str, Any] | None:
     """Resolve the current standing delivery authority for one pending report."""
 
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     goal = find_registry_goal(registry, goal_id)
     if not isinstance(goal, Mapping) or goal.get("status") in {"stopped", "paused", "archived"}:
         return None

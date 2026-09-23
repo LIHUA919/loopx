@@ -13,10 +13,10 @@ from ...control_plane.goals.configure_goal_service import (
     _configure_goal_with_global_sync_unlocked,
     resolve_configure_goal_sync_target,
 )
-from ...file_lock import exclusive_file_lock
+from ...control_plane.projects.registry_codec import project_registry_transaction
 from ...global_registry import GlobalRegistryReduction, mutate_global_registry
 from ...history import load_registry
-from ...registry import atomic_write_json, registry_goals
+from ...registry import read_json, registry_goals
 from .goal_channel_contracts import (
     binding_for_goal,
     bindings_for_goal,
@@ -229,16 +229,22 @@ def save_retiring_async_inbox(
         raise ValueError("the prior async inbox must identify its exact Agent")
     if registry_path is None:
         raise ValueError("source registry path is required to retire the Agent inbox")
-    with exclusive_file_lock(registry_path, operation="upgrade_lark_manager_route"):
-        source_before = load_registry(registry_path)
+    with project_registry_transaction(
+        registry_path,
+        operation="upgrade_lark_manager_route",
+    ) as registry_transaction:
+        source_before = registry_transaction.payload_copy()
         binding_before = read_goal_channel_binding(binding_path)
         target = resolve_configure_goal_sync_target(
             registry_path=registry_path, goal_id=goal_id, runtime_root_override=None
         )
         global_path = Path(target["target_global_registry"])
         shared_source = global_path.resolve() == registry_path.resolve()
+        global_before_payload = (
+            source_before if shared_source else read_json(global_path)
+        )
         global_goal_before = next(
-            (g for g in registry_goals(load_registry(global_path)) if g["id"] == goal_id),
+            (g for g in registry_goals(global_before_payload) if g["id"] == goal_id),
             None,
         )
         try:
@@ -248,6 +254,7 @@ def save_retiring_async_inbox(
                 goal_id=goal_id,
                 runtime_root_override=None,
                 execute=True,
+                registry_transaction=registry_transaction,
                 lark_event_inbox_agent_id=agent_id,
                 clear_lark_event_inbox_config=True,
             )
@@ -263,7 +270,7 @@ def save_retiring_async_inbox(
 
             def restore_source() -> None:
                 if load_registry(registry_path) != source_before:
-                    atomic_write_json(registry_path, source_before)
+                    registry_transaction.restore()
 
             def restore_global() -> None:
                 if shared_source:
@@ -293,8 +300,17 @@ def save_retiring_async_inbox(
                 except (OSError, ValueError, TimeoutError):
                     restored = False
             try:
+                global_after_payload = (
+                    load_registry(registry_path)
+                    if shared_source
+                    else read_json(global_path)
+                )
                 global_goal_after = next(
-                    (g for g in registry_goals(load_registry(global_path)) if g["id"] == goal_id),
+                    (
+                        g
+                        for g in registry_goals(global_after_payload)
+                        if g["id"] == goal_id
+                    ),
                     None,
                 )
                 restored = bool(

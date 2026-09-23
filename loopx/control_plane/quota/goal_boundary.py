@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...execution_profile import execution_profile_outcome_floor
 from ...explore_graph import compact_explore_graph_policy
+from ..projects.registry_codec import load_registry
 from ...orchestration import (
     compact_orchestration_policy,
     compact_peer_task_coordination_policy,
@@ -78,10 +78,10 @@ def registry_goal_by_id(
         return {}
     registry_path = Path(str(registry_value)).expanduser()
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_registry(registry_path)
+    except (OSError, ValueError):
         return {}
-    goals = payload.get("goals") if isinstance(payload, dict) else None
+    goals = payload.get("goals")
     if not isinstance(goals, list):
         return {}
     return {

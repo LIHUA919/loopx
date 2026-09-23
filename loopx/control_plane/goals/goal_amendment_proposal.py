@@ -65,7 +65,7 @@ from typing import Any
 from ...agent_registry import registered_agent_ids_for_goal
 from ...event_sourced_state import now_utc_iso
 from ...file_lock import exclusive_file_lock
-from ...history import load_index
+from ...history import load_index, load_registry
 from ...runtime import validate_goal_id_path_segment
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..status.autonomous_replan_projection import (
@@ -195,15 +195,11 @@ def admit_goal_amendment_proposal(
         else project / DEFAULT_REGISTRY_RELATIVE_PATH
     )
     try:
-        registry_payload = json.loads(
-            effective_registry_path.read_text(encoding="utf-8")
-        )
+        registry_payload = load_registry(effective_registry_path)
     except (OSError, ValueError):
         raise ValueError(
             f"goal registry is unreadable: {effective_registry_path}"
         ) from None
-    if not isinstance(registry_payload, dict):
-        raise TypeError("goal registry must contain a JSON object")
 
     effective_runtime_root = (
         runtime_root

@@ -50,6 +50,11 @@ from .control_plane.agents.work_mode import normalize_agent_work_modes
 from .control_plane.coordination import runtime_shadow as shadow
 from .control_plane.coordination.configuration import normalize_goal_write_scope
 from .control_plane.operator_inbox_binding import local_private_config_digest
+from .control_plane.projects.registry_codec import (
+    ProjectRegistryTransaction,
+    load_project_registry,
+    project_registry_transaction,
+)
 from .control_plane.todos.contract import normalize_todo_claimed_by
 from .control_plane.todos.mutation_authority import (
     normalize_todo_lifecycle_authority,
@@ -68,7 +73,7 @@ from .orchestration import (
     update_spawn_execution_policy,
 )
 from .quota import goal_quota_config
-from .registry import atomic_write_json, read_json, registry_goals
+from .registry import registry_goals
 
 WAITING_ON_CHOICES = (
     "codex",
@@ -495,7 +500,16 @@ def configure_goal(
     reward_memory_agents: list[str] | None = None,
     clear_reward_memory_config: bool = False,
     execute: bool = False,
+    _registry_transaction: ProjectRegistryTransaction | None = None,
 ) -> dict[str, Any]:
+    if execute and _registry_transaction is None:
+        forwarded = dict(locals())
+        with project_registry_transaction(
+            registry_path,
+            operation="configure_goal",
+        ) as transaction:
+            forwarded["_registry_transaction"] = transaction
+            return configure_goal(**forwarded)
     if not registry_path.exists():
         raise FileNotFoundError(f"registry file does not exist: {registry_path}")
     if clear_allowed_domains and allowed_domains:
@@ -690,7 +704,11 @@ def configure_goal(
         change_quality_strict_receipt,
         clear=clear_change_quality_configuration,
     )
-    payload = read_json(registry_path)
+    payload = (
+        _registry_transaction.payload_copy()
+        if _registry_transaction is not None
+        else load_project_registry(registry_path)
+    )
     goals = registry_goals(payload)
     goal = next((item for item in goals if str(item.get("id")) == goal_id), None)
     if goal is None:
@@ -1236,7 +1254,9 @@ def configure_goal(
                 f"{registry_path.name}.before-agent-model-{stamp}.bak"
             )
             shutil.copy2(registry_path, backup_path)
-        atomic_write_json(registry_path, payload)
+        if _registry_transaction is None:
+            raise RuntimeError("configure_goal mutation requires a registry transaction")
+        _registry_transaction.commit(payload)
 
     feature_summary = {
         "multi_subagent": _multi_subagent_feature_status(

@@ -40,6 +40,7 @@ from .host_loop_activation import (
     build_host_loop_activation_packet,
     scheduler_command_binding_for_agent_type,
 )
+from .history import load_registry
 from .project_alias import resolve_canonical_project_alias
 from .project_prompt import (
     DEFAULT_HANDOFF_ADAPTER_KIND,
@@ -499,15 +500,12 @@ def _resolve_project(project: Path) -> Path:
 
 
 def _read_registry(path: Path) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        with path.open(encoding="utf-8") as f:
-            payload = json.load(f)
-    except FileNotFoundError:
+    if not path.is_file():
         return None, None
-    except (OSError, json.JSONDecodeError) as exc:
+    try:
+        payload = load_registry(path)
+    except (OSError, ValueError) as exc:
         return None, str(exc)
-    if not isinstance(payload, dict):
-        return None, "registry root must be a JSON object"
     return payload, None
 
 

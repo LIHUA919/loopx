@@ -14,6 +14,7 @@ from .host_loop_activation import (
     render_agent_type_catalog_markdown,
     scheduler_command_binding_for_agent_type,
 )
+from .history import load_registry
 from .install_contract import NO_CLONE_INSTALL_URL
 from .kiro_cli_goal_mode import (
     KIRO_CLI_GOAL_CLEAR_COMMAND,
@@ -30,7 +31,7 @@ from .project_prompt import (
     render_quota_guard_command,
     shell_arg,
 )
-from .registry import read_json, registry_goals
+from .registry import registry_goals
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
     configured_host_skills_dir,
@@ -428,7 +429,7 @@ def build_agent_onboarding_packet(
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
     registry_path = Path(str(inspection["registry"]))
-    registry = read_json(registry_path) if registry_path.exists() else {}
+    registry = load_registry(registry_path) if registry_path.exists() else {}
     goal = next(
         (
             item

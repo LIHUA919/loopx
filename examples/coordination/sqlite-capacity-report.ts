@@ -93,26 +93,44 @@ export interface QualificationRow {
   unit?: "ms" | "ratio" | "delta_ms" | "bytes";
 }
 
+/**
+ * The runner and ledger share one profile definition. A report can only claim
+ * an axis after its measured payload and both commit depths match this shape.
+ */
+export const CAPACITY_PROFILES = {
+  rehearsal: {payload: 65536, counts: [100, 1000], formal: false, prefix: ""},
+  "matched-64k": {payload: 65536, counts: [10000, 100000], formal: true, prefix: ""},
+  "matched-1m": {payload: 1048576, counts: [10000, 100000], formal: true, prefix: "one_mib_"},
+  "headroom-64k": {payload: 65536, counts: [100000, 300000], formal: true, prefix: "headroom_300k_"},
+} as const;
+export type CapacityProfileId = keyof typeof CAPACITY_PROFILES;
+
 /** Thresholds come from RFC 7.2; a rehearsal cannot qualify the full profile. */
-export function capacityLedger(axes: readonly CapacityAxis[], formal: boolean): QualificationRow[] {
+export function capacityLedger(axes: readonly CapacityAxis[], profileId: CapacityProfileId = "matched-64k"): QualificationRow[] {
   const rows: QualificationRow[] = [];
+  const selectedProfile = CAPACITY_PROFILES[profileId];
+  const id = (name: string) => `${selectedProfile.prefix}${name}`;
+  const payloadBytes = selectedProfile.payload;
+  const formal = selectedProfile.formal;
   const valid = (value: Latency | undefined, samples: number): boolean => !!value && value.n === samples &&
     [value.p50_ms, value.p95_ms, value.p99_ms].every(n => Number.isFinite(n) && n >= 0) &&
     value.p50_ms <= value.p95_ms && value.p95_ms <= value.p99_ms;
-  const baseline = axes.find(axis => axis.target_commits === 10000);
-  const final = axes.find(axis => axis.target_commits === 100000);
-  const ready = formal && axes.length === 2 && baseline?.status === "passed" && final?.status === "passed" &&
+  const [baseline, final] = axes;
+  const depths = `${baseline?.target_commits ?? "?"} to ${final?.target_commits ?? "?"} commits`;
+  const ready = formal && axes.length === 2 && baseline !== undefined && final !== undefined &&
+    baseline.target_commits === selectedProfile.counts[0] && final.target_commits === selectedProfile.counts[1] &&
+    baseline.status === "passed" && final.status === "passed" &&
     [baseline, final].every(axis => axis.completed_commits === axis.target_commits &&
-      axis.projection_json_bytes === 65536 && axis.sample_window === 1000 && axis.cleanup_verified &&
+      axis.projection_json_bytes === payloadBytes && axis.sample_window === 1000 && axis.cleanup_verified &&
       valid(axis.warm?.commit, 1000) && valid(axis.warm?.head, 3000) &&
       valid(axis.warm?.receipt, 2000) && valid(axis.warm?.scan_100, 200));
-  rows.push({id: "matched_profile_execution", status: axes.some(axis => axis.status === "failed") ? "failed" :
-    ready ? "passed" : "missing", scope: "complete 64 KiB 10k/100k runs and declared sample counts"});
-  const add = (id: string, value: number | undefined, budget: number,
+  rows.push({id: id("matched_profile_execution"), status: axes.some(axis => axis.status === "failed") ? "failed" :
+    ready ? "passed" : "missing", scope: `complete ${payloadBytes}-byte matched runs at ${selectedProfile.counts[0]} to ${selectedProfile.counts[1]} commits (observed ${depths}) and declared sample counts`});
+  const add = (name: string, value: number | undefined, budget: number,
     unit: "ms" | "ratio" | "delta_ms" | "bytes") => {
     if (!ready || value === undefined || !Number.isFinite(value) || (value < 0 && unit !== "delta_ms")) {
-      rows.push({id, status: "missing", scope: "requires the complete matched 64 KiB 10k/100k profile"});
-    } else rows.push({id, status: value <= budget ? "passed" : "failed", scope: "fixed 64 KiB storage axis",
+      rows.push({id: id(name), status: "missing", scope: `requires the complete matched ${payloadBytes}-byte profile`});
+    } else rows.push({id: id(name), status: value <= budget ? "passed" : "failed", scope: `fixed ${payloadBytes}-byte storage axis`,
       observed: value, budget, unit});
   };
   for (const [key, budget] of [["commit", 100], ["head", 50], ["receipt", 50], ["scan_100", 250]] as const) {
@@ -140,28 +158,29 @@ export function capacityLedger(axes: readonly CapacityAxis[], formal: boolean): 
   };
   if (!profileReady || !checkpointBound(baseline) || !checkpointBound(final) || profile === null ||
     profile === undefined || final === undefined) {
-    rows.push({id: "bounded_retained_state", status: "missing",
+    rows.push({id: id("bounded_retained_state"), status: "missing",
       scope: "requires the complete matched profile and a bounded checkpoint profile per axis"});
   } else {
     const perCommitCopy = final.projection_json_bytes * final.completed_commits;
     const retained = profile.retained_projection_bytes + profile.retained_delta_bytes;
-    rows.push({id: "bounded_retained_state", status: retained <= perCommitCopy / 8 ? "passed" : "failed",
+    rows.push({id: id("bounded_retained_state"), status: retained <= perCommitCopy / 8 ? "passed" : "failed",
       scope: "retained checkpoint and delta bytes against one full copy per retained commit",
       observed: retained, budget: Math.floor(perCommitCopy / 8), unit: "bytes"});
   }
   // Logical writes, WAL traffic and final file size are three separate
   // measurements; none may substitute for another. Each growth row is the
-  // cumulative 10k -> 100k growth implied by per-commit traffic measured at
-  // both depths under the identical matched workload, so a per-commit cost
+  // cumulative baseline -> final growth implied by per-commit traffic measured
+  // at both depths under the identical matched workload, so a per-commit cost
   // that grows with history depth fails the <=15x budget.
-  const perCommitGrowth = (id: string, baselinePerCommit: number | undefined,
+  const growthFactor = selectedProfile.counts[1] / selectedProfile.counts[0];
+  const perCommitGrowth = (name: string, baselinePerCommit: number | undefined,
     finalPerCommit: number | undefined, method: string) => {
     const ratio = baselinePerCommit !== undefined && finalPerCommit !== undefined &&
-      baselinePerCommit > 0 && finalPerCommit > 0 ? 10 * (finalPerCommit / baselinePerCommit) : undefined;
+      baselinePerCommit > 0 && finalPerCommit > 0 ? growthFactor * (finalPerCommit / baselinePerCommit) : undefined;
     if (!ready || ratio === undefined || !Number.isFinite(ratio)) {
-      rows.push({id, status: "missing", scope: `requires the complete matched profile and a measured window at both depths (${method})`});
-    } else rows.push({id, status: ratio <= 15 ? "passed" : "failed",
-      scope: `cumulative ${method} growth from 10k to 100k commits at fixed live state and delta sizes`,
+      rows.push({id: id(name), status: "missing", scope: `requires the complete matched profile and a measured window at both depths (${method})`});
+    } else rows.push({id: id(name), status: ratio <= 15 ? "passed" : "failed",
+      scope: `cumulative ${method} growth from ${depths} at fixed live state and delta sizes`,
       observed: ratio, budget: 15, unit: "ratio"});
   };
   perCommitGrowth("logical_write_growth",
@@ -173,22 +192,33 @@ export function capacityLedger(axes: readonly CapacityAxis[], formal: boolean): 
     "WAL traffic");
   const lock = final?.lock_wait;
   if (!ready || lock?.status !== "measured" || lock.observed_wait.n !== (formal ? 12 : 3)) {
-    rows.push({id: "lock_wait_observed", status: "missing",
-      scope: "requires the matched profile's held-write-lock probe at the 100k axis"});
-  } else rows.push({id: "lock_wait_observed", status: "passed",
+    rows.push({id: id("lock_wait_observed"), status: "missing",
+      scope: "requires the matched profile's held-write-lock probe at the final axis"});
+  } else rows.push({id: id("lock_wait_observed"), status: "passed",
     scope: "app-observed store commit wait while a probe process holds the write lock; driver busy-handler internals remain unexposed",
     observed: lock.observed_wait.p95_ms, unit: "ms"});
+  // The dedicated headroom axes are covered only by the reports that ran
+  // them; every other report keeps them as explicit missing evidence. These
+  // axis-coverage rows keep their canonical ids across profiles.
+  const headroomScope: [string, string][] = [];
+  if (profileId !== "matched-1m" || !ready) {
+    headroomScope.push(["payload_one_mib", "the 1 MiB live-projection axis runs in its own matched-1m report"]);
+  }
+  if (profileId !== "headroom-64k" || !ready) {
+    headroomScope.push(["headroom_300k", "the 300,000-commit headroom axis runs in its own headroom-64k report"]);
+  }
+  headroomScope.push(["burst_60s", "10 commits/s for 60 s bursts are not launched by this profile"]);
   const scope: Record<string, string> = {
     domain_workload: "eight agents, four writers, leases/capture/archive and the production-scale fixture remain separate",
     steady_state_rss: "sampled RSS and per-process peak are observations, not a proof across steady-state windows",
     large_history_recovery: "small fault regressions do not qualify bounded recovery of a 100k history; the linear archive audit is only launched in the rehearsal profile",
-    payload_and_headroom: "1 MiB, 300k and bursts are not launched by this profile",
     consumer_lag: "24-hour logical consumer backlog requires its own persisted-cursor test",
     restore_upgrade_rollback: "fenced restore lineage and supported upgrade/rollback are not implemented by this harness",
     elapsed_soak: "at least ten actual days require a separately authorized recoverable synthetic soak",
     os_runtime_matrix: "one local run cannot qualify every supported OS and installed runtime",
     promotion: "provider defaults, live migration and D3 remain separately gated",
   };
-  for (const [id, reason] of Object.entries(scope)) rows.push({id, status: "missing", scope: reason});
+  for (const [rowId, reason] of Object.entries(scope)) rows.push({id: id(rowId), status: "missing", scope: reason});
+  for (const [rowId, reason] of headroomScope) rows.push({id: rowId, status: "missing", scope: reason});
   return rows;
 }

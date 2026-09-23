@@ -23,6 +23,10 @@ from .control_plane.quota.slot_accounting import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
 )
+from .control_plane.projects.registry_codec import (
+    decode_registry_snapshot as decode_registry_snapshot,
+    load_registry,
+)
 from .control_plane.runtime.run_artifacts import (
     next_run_artifact_paths,
     reserve_run_artifact_paths,
@@ -54,7 +58,7 @@ from .presentation.markdown import (
     markdown_table_separator,
 )
 from .quota import goal_quota_with_spend_ledger
-from .registry import read_json, registry_goals
+from .registry import registry_goals
 
 STATUS_NEUTRAL_CLASSIFICATIONS = {
     QUOTA_SLOT_SPENT_CLASSIFICATION,
@@ -202,12 +206,6 @@ def validate_goal_id_path_segment(goal_id: str) -> str:
     if Path(value).name != value:
         raise ValueError("goal id must not include path traversal")
     return value
-
-
-def load_registry(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    return read_json(path)
 
 
 def discover_goal_ids(

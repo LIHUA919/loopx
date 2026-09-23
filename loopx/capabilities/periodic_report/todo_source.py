@@ -15,8 +15,9 @@ from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from ...history import load_registry
 from ...paths import resolve_runtime_root
-from ...registry import find_registry_goal, read_json, resolve_state_file
+from ...registry import find_registry_goal, resolve_state_file
 
 
 def read_report_todo_source(
@@ -33,7 +34,7 @@ def read_report_todo_source(
     Archived decisions can still supersede an approval-pending receipt; they
     must not disappear just because a display stopped showing them.
     """
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     goal = find_registry_goal(registry, goal_id)
     if not isinstance(goal, Mapping):
         raise ValueError("periodic-report Goal is not registered")

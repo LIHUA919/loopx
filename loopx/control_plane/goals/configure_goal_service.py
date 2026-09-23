@@ -8,7 +8,6 @@ from typing import Any
 
 from ...configuration_transaction import goal_capability_configuration_revision
 from ...configure_goal import configure_goal
-from ...file_lock import exclusive_file_lock
 from ...global_registry import (
     sanitize_goal_for_global,
     sync_project_registry_to_global,
@@ -17,6 +16,10 @@ from ...history import load_registry
 from ...paths import global_registry_path, resolve_runtime_root
 from ...registry import registry_goals
 from ...registry_writability import probe_registry_write_path
+from ..projects.registry_codec import (
+    ProjectRegistryTransaction,
+    project_registry_transaction,
+)
 from ..runtime.runtime_projection_route import (
     compact_runtime_projection_route,
     resolve_goal_source_runtime_route,
@@ -282,6 +285,7 @@ def _configure_goal_with_global_sync_unlocked(
     goal_id: str,
     runtime_root_override: str | None,
     execute: bool,
+    registry_transaction: ProjectRegistryTransaction | None = None,
     **configure_options: Any,
 ) -> dict[str, Any]:
     """Configure one source goal and keep its authoritative shared read model current."""
@@ -290,6 +294,7 @@ def _configure_goal_with_global_sync_unlocked(
         registry_path=registry_path,
         goal_id=goal_id,
         execute=False,
+        _registry_transaction=registry_transaction,
         **configure_options,
     )
     changed = bool(preview.get("changed"))
@@ -315,6 +320,7 @@ def _configure_goal_with_global_sync_unlocked(
             registry_path=registry_path,
             goal_id=goal_id,
             execute=True,
+            _registry_transaction=registry_transaction,
             **configure_options,
         )
         applied["global_sync"] = preview["global_sync"]
@@ -351,6 +357,7 @@ def _configure_goal_with_global_sync_unlocked(
         registry_path=registry_path,
         goal_id=goal_id,
         execute=True,
+        _registry_transaction=registry_transaction,
         **configure_options,
     )
     if not applied.get("written"):
@@ -545,15 +552,16 @@ def configure_goal_with_global_sync(
             **configure_options,
         )
         return add_host_capacity(preview)
-    with exclusive_file_lock(
+    with project_registry_transaction(
         source_registry_path,
         operation="configure_goal_with_global_sync",
-    ):
+    ) as registry_transaction:
         if expected_goal_configuration_revision is not None:
             current = configure_goal(
                 registry_path=source_registry_path,
                 goal_id=goal_id,
                 execute=False,
+                _registry_transaction=registry_transaction,
             )
             catalog = current.get("configuration_catalog")
             capability_catalog = (
@@ -574,6 +582,7 @@ def configure_goal_with_global_sync(
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
             execute=False,
+            registry_transaction=registry_transaction,
             **configure_options,
         )
         preview = add_host_capacity(preview)
@@ -583,6 +592,7 @@ def configure_goal_with_global_sync(
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
             execute=True,
+            registry_transaction=registry_transaction,
             **configure_options,
         )
         if not applied.get("ok"):

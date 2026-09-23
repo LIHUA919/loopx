@@ -730,3 +730,52 @@ A change satisfies this contract only when:
 - auto-research remains a thin preset over the reusable kernel; and
 - public docs and smokes cover the budget, state machine, and `quota.py`
   boundary without private material.
+
+## History-trigger ownership and retry semantics
+
+The built-in `work_items/replan_history.ts` decision owns historical progress
+repetition, blocked-successor repetition, repeated executed Monitor polls,
+periodic review, and the persisted unchanged-Monitor streak. The Python codec
+preserves historical observation fingerprints and timestamp parsing, then sends
+one bounded fact request. Obligation rendering and identity serialization retain
+the existing public contract. This is deterministic policy; no observer model,
+new capability, provider selection, or additional permission is introduced.
+
+History is newest first. Agent scoping precedes an accepted replan ACK cutoff;
+a peer ACK cannot clear another lane. The three existing neutral accounting
+classifications are transparent. A valid logical turn id is counted once per
+agent, including an id carried by settlement identity. Missing, malformed, or
+conflicting historical ids remain separate rows; the reader does not invent an
+identity. Unknown material work still breaks an established progress streak.
+
+The default thresholds remain two equivalent typed observations, two blocked
+successor waits, six executed unchanged Monitor turns, twenty material turns
+for periodic review, and five persisted unchanged polls for a Monitor-only
+lane. Trigger precedence remains progress, Monitor, then periodic review.
+Accepted ACKs reset the historical window; clearing another frontier obligation
+still requires its existing typed semantic outcome and revision rules. A future
+blocking Monitor suppresses premature wait replanning only while its schedule
+and expiry are valid; the decision reuses the Todo resume planner.
+
+These are enforced replan conditions, not advisory hints. Relative to the older
+reader, retry records no longer accelerate periodic/Monitor thresholds, accepted
+ACKs now stop typed-progress repetition, and neutral accounting no longer hides
+repetition. These changes apply to legacy, File, and SQLite status/quota callers
+without an opt-in. Frontend and Lark consume the existing obligation shape and
+need no new setting or editor. Read back with `loopx status --goal-id <id>` and
+`loopx quota should-run --goal-id <id> --agent-id <agent>`.
+
+### 中文：历史触发与重试语义
+
+历史触发规则由现有 work_items 的 TypeScript 边界统一维护，Python 负责旧数据
+解码及原有 obligation 呈现。没有新增模型、capability、provider 选择或权限。
+先按 agent 筛选，再遇到已接受的 replan ACK 截断窗口；其他 agent 的 ACK 不能
+清空当前窗口。中性额度记账不计数、不打断停滞；同一 agent 的有效 Turn ID
+只计一次。无效、缺失或相互矛盾的历史 ID 不被猜测性合并。
+
+阈值仍为：2 次相同 typed progress、2 次 successor 等待、6 次已执行监控、
+20 次实质工作轮次、5 次持久化监控无变化。优先级及 obligation 标识保持原样。
+修复的是计数单位、ACK 截断和记账透明性，适用于旧路径及 File/SQLite；这些是
+机器执行的 replan 条件。尚未到期且在到期时仍有效的关联监控继续抑制提前重规划。
+这不替代其他 frontier 的语义验收、版本检查或权限。前端与 Lark 继续使用原有
+返回结构；可用上面的 status/quota 命令核对。

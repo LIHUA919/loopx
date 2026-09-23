@@ -44,6 +44,7 @@ from ...event_sourced_state import (
     build_state_projection,
     event_sort_key,
 )
+from ...history import load_registry
 from ...registry import registry_goals
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.contract import normalize_todo_claimed_by
@@ -224,15 +225,11 @@ def _project_shared_goal_alignment(
         else project / DEFAULT_REGISTRY_RELATIVE_PATH
     )
     try:
-        registry_payload = json.loads(
-            effective_registry_path.read_text(encoding="utf-8")
-        )
+        registry_payload = load_registry(effective_registry_path)
     except (OSError, ValueError):
         raise ValueError(
             f"goal registry is unreadable: {effective_registry_path}"
         ) from None
-    if not isinstance(registry_payload, dict):
-        raise ValueError("goal registry must contain a JSON object")
     goal = _registered_goal(registry_payload, goal_id=normalized_goal_id)
 
     registered_agents = registered_agent_ids_for_goal(goal)

@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .control_plane.projects.registry_codec import mutate_project_registry
 from .control_plane.todos.contract import normalize_todo_claimed_by
-from .file_lock import exclusive_file_lock
 from .history import load_registry
-from .registry import atomic_write_json, find_registry_goal, registry_goals
+from .registry import find_registry_goal, registry_goals
 
 THREAD_ID_MAX_LENGTH = 128
 THREAD_BINDING_SCHEMA_VERSION = "loopx_thread_agent_binding_v0"
@@ -544,12 +544,7 @@ def bind_thread_agent_in_registry(
         raise ValueError("agent_id must be a public-safe registered agent id")
 
     if execute:
-        with exclusive_file_lock(
-            registry_path,
-            agent_id=normalized_agent,
-            operation="bind_agent_thread",
-        ):
-            latest = load_registry(registry_path)
+        def reduce(latest: dict[str, Any]) -> dict[str, Any]:
             result, latest_goal, merged = _prepare_binding(
                 latest,
                 goal_id=goal_id,
@@ -565,9 +560,15 @@ def bind_thread_agent_in_registry(
             coordination = coordination if isinstance(coordination, dict) else {}
             coordination["thread_agent_bindings"] = merged
             latest_goal["coordination"] = coordination
-            atomic_write_json(registry_path, latest, preserve_mode=True)
             result["written"] = True
             return result
+
+        return mutate_project_registry(
+            registry_path,
+            agent_id=normalized_agent,
+            operation="bind_agent_thread",
+            reducer=reduce,
+        )
 
     payload = load_registry(registry_path)
     result, _goal, _merged = _prepare_binding(
@@ -602,12 +603,7 @@ def unbind_thread_agent_in_registry(
         raise ValueError("agent_id must be a public-safe registered agent id")
 
     if execute:
-        with exclusive_file_lock(
-            registry_path,
-            agent_id=normalized_agent,
-            operation="unbind_agent_thread",
-        ):
-            latest = load_registry(registry_path)
+        def reduce(latest: dict[str, Any]) -> dict[str, Any]:
             result, latest_goal, remaining = _prepare_unbinding(
                 latest,
                 goal_id=goal_id,
@@ -623,9 +619,15 @@ def unbind_thread_agent_in_registry(
             coordination = coordination if isinstance(coordination, dict) else {}
             coordination["thread_agent_bindings"] = remaining
             latest_goal["coordination"] = coordination
-            atomic_write_json(registry_path, latest, preserve_mode=True)
             result["written"] = True
             return result
+
+        return mutate_project_registry(
+            registry_path,
+            agent_id=normalized_agent,
+            operation="unbind_agent_thread",
+            reducer=reduce,
+        )
 
     payload = load_registry(registry_path)
     result, _goal, _remaining = _prepare_unbinding(

@@ -9,7 +9,8 @@ from ...agent_registry import registered_agent_ids_for_goal
 from ...control_plane.capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION, TurnStartHookRegistration, dispatch_turn_start_hooks,
 )
-from ...registry import find_registry_goal, read_json
+from ...history import load_registry
+from ...registry import find_registry_goal
 from .cadence_journal import admit_cadence_window, read_cadence_journal
 from .machine_defaults import (
     resolve_goal_periodic_report_subscription, select_goal_periodic_report_executor,
@@ -23,7 +24,7 @@ def periodic_report_cadence_hooks(
 ) -> tuple[TurnStartHookRegistration, ...]:
     if not agent_id:
         return ()
-    goal = find_registry_goal(read_json(registry_path), goal_id)
+    goal = find_registry_goal(load_registry(registry_path), goal_id)
     if not isinstance(goal, dict) or goal.get("status") in {"stopped", "paused", "archived"}:
         return ()
     subscription = resolve_goal_periodic_report_subscription(
@@ -48,7 +49,7 @@ def periodic_report_cadence_hooks(
 
         def resolve_current_subscription():
             nonlocal current_reporters
-            current_goal = find_registry_goal(read_json(registry_path), goal_id)
+            current_goal = find_registry_goal(load_registry(registry_path), goal_id)
             if not isinstance(current_goal, dict) or current_goal.get("status") in {"stopped", "paused", "archived"}:
                 return None
             current_reporters = registered_agent_ids_for_goal(current_goal)

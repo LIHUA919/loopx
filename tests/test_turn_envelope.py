@@ -1123,3 +1123,18 @@ def test_contract_capsule_stays_bounded_with_replan_and_vision_contracts() -> No
     assert envelope["contract_capsule"]["vision_continuation_audit"]["required"] is True
     assert envelope["compaction"]["within_budget"] is True
     assert envelope["compaction"]["envelope_json_bytes"] < TURN_ENVELOPE_BUDGET_BYTES
+
+
+def test_turn_envelope_retains_configured_cadence_floor_and_host_boundary() -> None:
+    source = _full_decision()
+    app = source["scheduler_hint"]["codex_app"]
+    policy = {"min_interval_minutes": 1440, "configuration_revision": 3,
+              "enforcement": "scheduler_recommendation"}
+    guarantee = {"pre_model_atomic_admission": "not_qualified",
+                 "model_wakeup_tokens_prevented": False}
+    app["execution_interval_policy"] = policy
+    app["guarantee"] = guarantee
+    envelope = build_turn_envelope(source)
+    projected = envelope["scheduler"]["codex_app"]
+    assert projected["execution_interval_policy"] == policy
+    assert projected["guarantee"] == guarantee

@@ -122,16 +122,10 @@ def compact_autonomous_replan_ack(run: dict[str, Any] | None) -> dict[str, Any] 
         isinstance(outcomes, list)
         and "fresh_vision_path_outcome" in outcomes
     ):
-        agent_vision = (
-            run.get("agent_vision")
-            if isinstance(run.get("agent_vision"), dict)
-            else {}
-        )
-        path_delta = (
-            agent_vision.get("path_delta")
-            if isinstance(agent_vision.get("path_delta"), dict)
-            else {}
-        )
+        raw_vision = run.get("agent_vision")
+        agent_vision = raw_vision if isinstance(raw_vision, dict) else {}
+        raw_path = agent_vision.get("path_delta")
+        path_delta = raw_path if isinstance(raw_path, dict) else {}
         path_disposition = str(path_delta.get("outcome") or "").strip()
         if path_disposition in FRESH_VISION_PATH_DISPOSITIONS:
             result["path_disposition"] = path_disposition
@@ -211,11 +205,8 @@ def _latest_monitor_replan_frontier_identity(
     for run in latest_runs or []:
         if not isinstance(run, dict):
             continue
-        target = (
-            run.get("monitor_target")
-            if isinstance(run.get("monitor_target"), dict)
-            else {}
-        )
+        raw_target = run.get("monitor_target")
+        target = raw_target if isinstance(raw_target, dict) else {}
         if normalized_agent_id:
             run_agent_id = str(run.get("agent_id") or "").strip()
             target_agent_id = str(target.get("agent_id") or "").strip()

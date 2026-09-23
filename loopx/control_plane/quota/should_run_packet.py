@@ -1,5 +1,6 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
+from ..effect_runtime import effect_runtime_result
 from .effect_program import ReceiptBoundReplayPhase
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -1392,6 +1393,15 @@ def _build_quota_should_run_payload(
         payload = _build_active_quota_payload(
             prepared, route, include_agent_todo_detail=include_agent_todo_detail,
         )
+    cadence_root = _interaction_runtime_root(runtime_root, prepared.status_payload)
+    if cadence_root:
+        cadence = effect_runtime_result("quota.automation_cadence.manage", {
+            "runtime_root": str(cadence_root), "goal_id": prepared.safe_goal_id,
+            "agent_id": quota_decision_agent_id(payload) or prepared.requested_agent_id,
+            "automation_id": prepared.codex_app_automation_id, "operation": "read",
+        })
+        if cadence["enabled"]:
+            payload["automation_cadence"] = cadence
     payload["automation_liveness"] = build_automation_liveness(payload)
     payload["interaction_contract"] = build_interaction_contract(
         payload,

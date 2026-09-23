@@ -385,7 +385,7 @@ function scheduler(payload: JsonObject, turn: ReturnType<typeof interpretQuotaSh
   const app: JsonObject = {};
   for (const field of [
     "host_surface", "apply", "host_action", "recommended_rrule",
-    "no_spend_for_cadence_change",
+    "no_spend_for_cadence_change", "execution_interval_policy", "guarantee",
   ]) {
     if (sourceApp[field] !== null && sourceApp[field] !== undefined) app[field] = sourceApp[field];
   }

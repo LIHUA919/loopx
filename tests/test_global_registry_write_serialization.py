@@ -80,7 +80,7 @@ def test_sync_reads_and_writes_inside_the_global_registry_lock(
     held: list[Path] = []
     locked_paths: list[Path] = []
     events: list[str] = []
-    real_load = global_registry.load_registry
+    real_load = global_registry._load_global_registry
     real_write = global_registry.write_json
 
     @contextmanager
@@ -105,7 +105,7 @@ def test_sync_reads_and_writes_inside_the_global_registry_lock(
         real_write(path, payload)
 
     monkeypatch.setattr(global_registry, "exclusive_file_lock", recording_lock)
-    monkeypatch.setattr(global_registry, "load_registry", recording_load)
+    monkeypatch.setattr(global_registry, "_load_global_registry", recording_load)
     monkeypatch.setattr(global_registry, "write_json", recording_write)
 
     result = sync_project_registry_to_global(
@@ -173,7 +173,7 @@ def test_retire_reads_and_writes_inside_the_global_registry_lock(
     held: list[Path] = []
     events: list[str] = []
     real_write = global_registry.write_json
-    real_load = global_registry.load_registry
+    real_load = global_registry._load_global_registry
 
     @contextmanager
     def recording_lock(path: Path, **kwargs: Any) -> Iterator[Path]:
@@ -196,7 +196,7 @@ def test_retire_reads_and_writes_inside_the_global_registry_lock(
         real_write(path, payload)
 
     monkeypatch.setattr(global_registry, "exclusive_file_lock", recording_lock)
-    monkeypatch.setattr(global_registry, "load_registry", recording_load)
+    monkeypatch.setattr(global_registry, "_load_global_registry", recording_load)
     monkeypatch.setattr(global_registry, "write_json", recording_write)
 
     result = retire_global_registry_goals(

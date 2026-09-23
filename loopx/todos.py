@@ -205,7 +205,11 @@ def list_goal_todos(
     if goal is None:
         raise ValueError(f"goal {goal_id!r} is not present in the registry")
 
-    runtime_root = resolve_runtime_root(registry, runtime_root_arg)
+    runtime_root = resolve_runtime_root(
+        registry,
+        runtime_root_arg,
+        registry_path=registry_path,
+    )
     rollout_events = load_rollout_events(
         rollout_event_log_path(runtime_root, goal_id),
         limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,

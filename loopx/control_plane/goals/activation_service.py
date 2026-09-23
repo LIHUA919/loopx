@@ -7,10 +7,10 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ...file_lock import exclusive_file_lock
+from ..projects.registry_codec import project_registry_transaction
 from ...global_registry import sync_project_registry_to_global
 from ...history import load_registry
-from ...registry import atomic_write_json, registry_goals
+from ...registry import registry_goals
 from ...registry_writability import probe_registry_write_path
 from ..actor_identity import normalize_owner_controller_actor
 from ..runtime.time import now_local_iso
@@ -319,11 +319,11 @@ def set_goal_activation_state(
             return payload
 
     if changed:
-        with exclusive_file_lock(
+        with project_registry_transaction(
             source_registry,
             operation="set_goal_activation_state",
-        ):
-            source_payload = load_registry(source_registry)
+        ) as transaction:
+            source_payload = transaction.payload_copy()
             locked_fingerprint = hashlib.sha256(source_registry.read_bytes()).hexdigest()
             if (
                 normalized_fingerprint is not None
@@ -356,7 +356,7 @@ def set_goal_activation_state(
                 return payload
             locked_goal.pop("activation_state", None)
             locked_goal["activation"] = proposed_activation
-            atomic_write_json(source_registry, source_payload, preserve_mode=True)
+            transaction.commit(source_payload)
             payload["written"] = True
 
     sync_payload: dict[str, Any] | None = None

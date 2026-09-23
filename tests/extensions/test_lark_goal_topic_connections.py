@@ -2822,9 +2822,9 @@ def test_ambiguous_manager_does_not_fan_out(tmp_path: Path) -> None:
 def test_manager_upgrade_restores_old_route_after_any_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    import loopx.configure_goal as configure
     import loopx.global_registry as global_registry
     import loopx.extensions.lark.goal_topic_connections as connections
+    from loopx.control_plane.projects import registry_codec
 
     kwargs, state = _upgrade_fixture(tmp_path, agent_id="agent-alpha")
     assert connect_lark_goal_topic(**kwargs)["ok"]
@@ -2837,7 +2837,7 @@ def test_manager_upgrade_restores_old_route_after_any_write_failure(
     assert "agent-alpha" in old_inbox
     fired = False
     original_save = connections.save_goal_connection
-    original_source_write = configure.atomic_write_json
+    original_source_write = registry_codec.ProjectRegistryTransaction.commit
     original_global_write = global_registry.write_json
 
     def fail_once() -> None:
@@ -2876,7 +2876,11 @@ def test_manager_upgrade_restores_old_route_after_any_write_failure(
             fail_once()
         return result
 
-    monkeypatch.setattr(configure, "atomic_write_json", source_write)
+    monkeypatch.setattr(
+        registry_codec.ProjectRegistryTransaction,
+        "commit",
+        source_write,
+    )
     monkeypatch.setattr(global_registry, "write_json", global_write)
     monkeypatch.setattr(connections, "save_goal_connection", save)
     result = connect_lark_goal_topic(
@@ -2913,7 +2917,7 @@ def test_manager_upgrade_does_not_claim_preserved_route_when_compensation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import loopx.extensions.lark.goal_topic_connections as connections
-    import loopx.extensions.lark.goal_topic_edit as edit
+    from loopx.control_plane.projects import registry_codec
 
     kwargs, _ = _upgrade_fixture(tmp_path, agent_id="agent-alpha")
     assert connect_lark_goal_topic(**kwargs)["ok"]
@@ -2922,7 +2926,11 @@ def test_manager_upgrade_does_not_claim_preserved_route_when_compensation_fails(
         raise OSError("persistent storage failure")
 
     monkeypatch.setattr(connections, "save_goal_connection", fail)
-    monkeypatch.setattr(edit, "atomic_write_json", fail)
+    monkeypatch.setattr(
+        registry_codec.ProjectRegistryTransaction,
+        "restore",
+        fail,
+    )
     result = connect_lark_goal_topic(
         **kwargs, conversation_kind="manager", session_id="manager-session"
     )

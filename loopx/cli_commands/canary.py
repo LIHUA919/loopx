@@ -40,8 +40,8 @@ from ..canary.smoke_health import (
 from ..control_plane.testing.release_commit_qualification import (
     render_exact_release_commit_qualification_markdown,
 )
+from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..registry import read_json
 from .canary_release_qualification import (
     build_canary_release_qualification_payload,
     register_canary_release_qualification_command,
@@ -678,7 +678,7 @@ def handle_canary_command(
         if goal_id:
             if registry_path is None:
                 raise ValueError("--goal-id receipt verification requires a registry path")
-            registry = read_json(registry_path)
+            registry = load_registry(registry_path)
             runtime_root = resolve_runtime_root(
                 registry,
                 runtime_root_arg,

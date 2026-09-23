@@ -1131,6 +1131,18 @@ debit. This closes the demonstrated T3 consumer gap, not D1–D3, provider
 promotion, or the remaining Python transaction adapters. See the
 [operating contract](../../quota-allocation.md#receipt-backed-settlement-progress).
 
+**Long-history transport boundary.** Replan history still has one TS decision
+owner. Small requests retain the inline codec; larger complete fact snapshots
+travel through a private, digest-bound local file reference. The same reducer
+checks all rows, lane-scoped ACKs and retry identities; neither the RPC budget
+nor a display window permits history truncation. Missing, altered or malformed
+snapshots fail before a decision, and the adapter removes temporary files on
+return or rejection. This repairs a T3/S2 settlement blocker and supplies S7/R7
+wire-growth evidence; it does not make full-history parsing constant-memory or
+qualify distributed execution. Cursor/checkpoint reduction remains a measured
+follow-up with complete-source parity, not a second Python policy. See the
+[history decision evidence](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.md).
+
 **Recovery boundary (2026-09-22).** The
 [authority archive command](../../reference/authority-archive.md) places retained
 history validation, delta reconstruction and resumable restore in the existing

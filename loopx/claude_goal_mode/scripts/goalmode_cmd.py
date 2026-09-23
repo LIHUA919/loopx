@@ -41,6 +41,7 @@ from loopx.control_plane.heartbeat.rules import (  # noqa: E402
     RUNTIME_REPAIR_ROUTING_RULE,
     SCOPE_BOUNDED_WORK_RULE,
 )
+from loopx.history import load_registry  # noqa: E402
 
 
 def gh_prefix():
@@ -128,7 +129,7 @@ def goal_detail(ctx):
     if reg:
         try:
             regp = Path(reg)
-            data = json.loads(regp.read_text(encoding="utf-8"))
+            data = load_registry(regp)
             entry = next((g for g in data.get("goals", []) if g.get("id") == gid), None)
             sf = (entry or {}).get("state_file")
             if sf:

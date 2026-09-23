@@ -253,6 +253,12 @@ node --no-warnings --experimental-sqlite --experimental-strip-types \
 node --no-warnings --experimental-sqlite --experimental-strip-types \
   examples/coordination/sqlite-capacity.ts --profile matched-64k --cli \
   --output .local/sqlite-matched-64k.json
+node --no-warnings --experimental-sqlite --experimental-strip-types \
+  examples/coordination/sqlite-capacity.ts --profile matched-1m --cli \
+  --output .local/sqlite-matched-1m.json
+node --no-warnings --experimental-sqlite --experimental-strip-types \
+  examples/coordination/sqlite-capacity.ts --profile headroom-64k --cli \
+  --output .local/sqlite-headroom-64k.json
 ```
 
 For an already promoted Goal, [canonical lease renewal](canonical-lease-renew.md)
@@ -270,6 +276,18 @@ reads and two indexed historical receipt reads. Both formal groups sample the
 last 1,000 commits and their corresponding reads, plus 200 scan-100 samples.
 This one-Todo storage axis isolates history growth; it is not the complete
 multi-agent/lease/capture workload.
+
+Two dedicated headroom profiles extend the same workload to RFC 7.2's other
+axes with an unchanged budget matrix: `matched-1m` runs the identical 10k/100k
+shape with a 1 MiB live projection (rows prefixed `one_mib_`), and
+`headroom-64k` runs 100k/300k databases at 64 KiB (rows prefixed
+`headroom_300k_`, cumulative-growth budgets evaluated against the 3x depth
+ratio). The per-axis fill wall budget is an operational guard — floored at
+2,400 s and scaled by commits and payload bytes beyond the 64 KiB 100k
+workload — never a qualification budget; the p95 and growth budgets do not
+move with it. A dedicated axis clears its coverage row only after its measured
+payload and both exact commit depths match the selected profile. Other axes
+remain explicit `missing` rows (`payload_one_mib`, `headroom_300k`, `burst_60s`).
 
 `--cli` adds 20 formal samples (three in rehearsal) for complete CLI mutation,
 status and quota, using fresh Python processes and a newly started managed
@@ -362,12 +380,14 @@ command, migration manifest and reverse export remain separate deliverables.
 
 The report's `passed` rows apply only to their named axis and sample counts.
 `failed` measurements remain failed. The split storage-write rows —
-`logical_write_growth`, `wal_traffic_growth` and `lock_wait_observed` — carry
+`logical_write_growth`, `wal_traffic_growth` and `lock_wait_observed`, prefixed
+`one_mib_`/`headroom_300k_` in the dedicated headroom profiles — carry
 the <=15x cumulative-growth budget as per-commit traffic measured at both
 depths, and an invalidated window or missing probe is missing evidence, never a
 pass from the surviving columns. `missing` rows still include whole-run WAL
 totals, pure busy-handler time, physical device writes, steady-state RSS proof,
-the full domain profile, 1 MiB and 300k headroom, 24-hour consumer lag,
+the full domain profile, the headroom axes a report did not itself run
+(`payload_one_mib`, `headroom_300k`, `burst_60s`), 24-hour consumer lag,
 large-history recovery, fenced backup/restore, supported upgrades/rollback,
 OS/runtime coverage and a real >=10-day soak. Those holds still block profile
 promotion. Accelerated volume never substitutes for elapsed time, and running

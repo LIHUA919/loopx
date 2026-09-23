@@ -12,7 +12,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from loopx.file_lock import exclusive_file_lock
+from loopx.control_plane.projects.registry_codec import (
+    load_project_registry,
+    mutate_project_registry,
+)
 from loopx.goal_mode_context import registered_agent_ids
 from loopx.kunluncode_goal_mode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
 from loopx.kunluncode_goal_mode.app_server import build_app_server_command
@@ -22,7 +25,6 @@ from loopx.kunluncode_goal_mode.runtime import (
     read_runtime_state,
     run_native_goal,
 )
-from loopx.registry import atomic_write_json
 
 
 # Single source for the adapter's `mcp` pin. It is an exact pin, not a range:
@@ -290,8 +292,7 @@ def _registry_path(project: Path) -> Path:
 
 
 def _annotate_registry(registry: Path, *, goal_id: str, agent_id: str) -> None:
-    with exclusive_file_lock(registry, operation="kunluncode_registry_annotate"):
-        payload = json.loads(registry.read_text(encoding="utf-8"))
+    def reduce(payload: dict[str, Any]) -> None:
         goals = payload.get("goals") or []
         if not any(
             str(goal.get("id") or "") == goal_id
@@ -302,12 +303,17 @@ def _annotate_registry(registry: Path, *, goal_id: str, agent_id: str) -> None:
         backends = payload.setdefault("agent_backends", [])
         if "kunluncode" not in backends:
             backends.append("kunluncode")
-        atomic_write_json(registry, payload, preserve_mode=True)
+
+    mutate_project_registry(
+        registry,
+        operation="kunluncode_registry_annotate",
+        reducer=reduce,
+    )
     write_binding(registry.parent.parent, goal_id=goal_id, agent_id=agent_id)
 
 
 def _registered_agents_for_goal(registry: Path, goal_id: str) -> list[str]:
-    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload = load_project_registry(registry)
     goal = next(
         (
             item

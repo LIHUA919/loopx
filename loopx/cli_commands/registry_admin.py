@@ -14,7 +14,8 @@ from ..configure_goal import configure_goal, render_configure_goal_markdown
 from ..control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
 )
-from ..file_lock import exclusive_file_lock, lock_timeout_error_fields
+from ..control_plane.projects.registry_codec import project_registry_transaction
+from ..file_lock import lock_timeout_error_fields
 from ..global_registry import sync_project_registry_to_global
 from ..history import load_registry
 from ..registry import registry_goals
@@ -212,12 +213,24 @@ def register_agent_via_source_registry(
         "verified": False,
     }
     if execute:
-        with exclusive_file_lock(
+        with project_registry_transaction(
             source_registry_path,
             agent_id=requested_agents[0] if len(requested_agents) == 1 else None,
             operation="register_agent",
-        ):
-            source_goal = _registry_goal(source_registry_path, goal_id)
+        ) as registry_transaction:
+            source_goal = next(
+                (
+                    item
+                    for item in registry_goals(registry_transaction.payload_copy())
+                    if item.get("id") == goal_id
+                ),
+                None,
+            )
+            if source_goal is None:
+                raise ValueError(
+                    f"{goal_id}: registry does not contain the goal: "
+                    f"{source_registry_path}"
+                )
             existing_agents = _goal_registered_agents(source_goal)
             collisions = [
                 agent_id for agent_id in requested_agents if agent_id in existing_agents
@@ -242,6 +255,7 @@ def register_agent_via_source_registry(
                 registered_agents=merged_agents,
                 agent_model="peer_v1",
                 execute=True,
+                _registry_transaction=registry_transaction,
             )
             if configure_payload.get("written"):
                 sync_payload = sync_project_registry_to_global(

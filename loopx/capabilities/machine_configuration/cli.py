@@ -7,8 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ...history import load_registry
 from ...paths import resolve_runtime_root
-from ...registry import read_json
 from .builtins import build_builtin_machine_configuration_registry
 from .contract import (
     merge_machine_configuration_namespace,
@@ -223,7 +223,7 @@ def handle_machine_configuration_command(
         return None
     registry = build_builtin_machine_configuration_registry()
     runtime_root = resolve_runtime_root(
-        read_json(registry_path),
+        load_registry(registry_path),
         runtime_root_arg,
         registry_path=registry_path,
     )

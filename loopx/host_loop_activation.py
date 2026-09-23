@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import shlex
 
 from .agent_registry import normalize_registered_agents
 from .agy_goal_mode import AGY_ACCEPTED_INPUTS
@@ -778,7 +779,9 @@ def _codex_app_activation(commands: dict[str, str]) -> dict[str, Any]:
         "activation_steps": [
             "Run the heartbeat-prompt JSON command after project state and todos are written.",
             "Require ok=true; save the v2 bootstrap task_body through automation_update.",
-            "New heartbeat: 3 minutes. Existing: preserve schedule and task binding; read back both and prompt.",
+            "Read commands.automation_cadence_json before choosing a schedule; for an existing automation also read its automation-id scope.",
+            "New heartbeat: use max(3 minutes, configured minimum). Existing: preserve schedule unless it violates the configured minimum; preserve status, prompt and task binding.",
+            "Apply through automation_update, then view the automation and verify its actual RRULE. If the host rejects the required interval, hold the affected automation; never shorten the owner minimum.",
             "On later ticks, follow quota should-run scheduler_hint for backoff, reset, and scheduler-ack.",
         ],
         "success_criteria": [
@@ -1257,6 +1260,14 @@ def build_host_loop_activation_packet(
             "visible_goal_prompt_json": None,
         }
     )
+    if canonical == "codex-app" and activation_allowed:
+        cadence_args = [cli_bin, "--format", "json"]
+        if runtime_root:
+            cadence_args.extend(["--runtime-root", runtime_root])
+        cadence_args.extend(["automation-cadence", "--goal-id", goal_id])
+        if selected_agent_id:
+            cadence_args.extend(["--agent-id", str(selected_agent_id)])
+        commands["automation_cadence_json"] = shlex.join(cadence_args)
     if canonical == "ark-managed-agent":
         surface = _ark_managed_agent_activation(commands)
     elif canonical == "codex-app":

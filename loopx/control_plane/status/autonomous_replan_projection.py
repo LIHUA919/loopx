@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+
 from typing import Any
+
+from ..work_items.replan_history_codec import (
+    REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS as AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS,
+)
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..work_items.autonomous_replan_ack import (
@@ -23,11 +28,6 @@ DEAD_MONITOR_REPEAT_THRESHOLD = 6
 DEAD_MONITOR_REPEAT_SCHEMA_VERSION = "dead_monitor_repeat_v0"
 AUTONOMOUS_REPLAN_SCHEMA_VERSION = "autonomous_replan_obligation_v0"
 AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD = AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW
-AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
-    "quota_slot_spent",
-    "quota_slot_voided",
-    "delivery_completion_spend_accounted_v0",
-}
 
 
 def build_autonomous_replan_obligation(

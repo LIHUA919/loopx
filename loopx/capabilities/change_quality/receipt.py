@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ...history import validate_goal_id_path_segment
+from ...history import load_registry, validate_goal_id_path_segment
 from ...registry import read_json, registry_goals
 from .context import build_change_quality_repository_context
 from .policy import change_quality_goal_policy
@@ -79,7 +79,7 @@ def _goal_from_registry(
     *,
     runtime_root: Path | None = None,
 ) -> dict[str, Any]:
-    registry = read_json(registry_path)
+    registry = load_registry(registry_path)
     goal = next(
         (
             item

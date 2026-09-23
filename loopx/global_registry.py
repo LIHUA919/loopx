@@ -10,11 +10,11 @@ from typing import Any, Callable
 
 from .authority import compact_authority_registry
 from .control_plane.projects.contract import validate_project_record_bindings
+from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.time import now_local_iso
 from .file_lock import exclusive_file_lock
-from .history import load_registry
 from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
-from .registry import registry_goals
+from .registry import read_json, registry_goals
 from .registry_writability import is_write_denied_error, probe_registry_write_path
 
 
@@ -42,6 +42,10 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     temp_path.replace(path)
 
 
+def _load_global_registry(path: Path) -> dict[str, Any]:
+    return read_json(path) if path.exists() else {}
+
+
 @dataclass(frozen=True, slots=True)
 class GlobalRegistryReduction:
     payload: dict[str, Any]
@@ -62,7 +66,7 @@ def mutate_global_registry(
     """Apply one authoritative global-registry read-modify-write transaction."""
 
     with exclusive_file_lock(global_path, operation=operation):
-        current = load_registry(global_path)
+        current = _load_global_registry(global_path)
         reduction = reducer(copy.deepcopy(current))
         if not isinstance(reduction, GlobalRegistryReduction):
             raise TypeError(
@@ -535,7 +539,7 @@ def retire_global_registry_goals(
 
     updated_at = now_local()
     preview = _retire_global_registry_reduction(
-        load_registry(global_path),
+        _load_global_registry(global_path),
         requested_ids=requested_ids,
         global_path=global_path,
         updated_at=updated_at,
@@ -687,7 +691,7 @@ def sync_project_registry_to_global(
         "synced_at": synced_at,
     }
     preview = _sync_global_registry_reduction(
-        load_registry(global_path),
+        _load_global_registry(global_path),
         incoming,
         incoming_projects,
         **merge_kwargs,

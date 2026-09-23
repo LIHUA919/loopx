@@ -11,9 +11,13 @@ import shutil
 from typing import Any
 import uuid
 
+from ..projects.registry_codec import (
+    ProjectRegistryTransaction,
+    project_registry_transaction,
+)
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
-from ...registry import atomic_write_json
+from ...registry import atomic_write_json, read_json
 from ...registry_writability import probe_registry_write_path
 from ..runtime.time import now_local_iso
 from .activation import GoalActivationState, goal_activation_state
@@ -104,7 +108,7 @@ def _resolve_route(goal_id: str, registry_path: Path) -> dict[str, Any]:
     )
     source_available = route.mode is not GoalActivationAuthorityRouteMode.ORPHANED_GLOBAL_STOP_FALLBACK
     source_payload = load_registry(route.source_registry) if source_available else None
-    target_payload = load_registry(route.target_registry)
+    target_payload = read_json(route.target_registry)
     source_goal = _goal_or_none(source_payload, goal_id) if source_payload else None
     target_goal = _goal_or_none(target_payload, goal_id)
     goal = source_goal or target_goal
@@ -148,8 +152,14 @@ def _load_locked_payloads(
     expected_state_fingerprint: str | None,
     payload: dict[str, Any],
 ) -> dict[Path, dict[str, Any]] | None:
-    current_source = load_registry(source_registry) if source_available else None
-    current_target = load_registry(target_registry)
+    current_source = (
+        read_json(source_registry)
+        if source_available and same_registry
+        else load_registry(source_registry)
+        if source_available
+        else None
+    )
+    current_target = read_json(target_registry)
     if expected_state_fingerprint is not None:
         current_fingerprint = _registry_fingerprint(target_registry)
         if current_fingerprint != expected_state_fingerprint:
@@ -198,6 +208,7 @@ def _write_deletion(
     source_available: bool,
     goal_id: str,
     payload: dict[str, Any],
+    source_transaction: ProjectRegistryTransaction | None,
 ) -> None:
     written_paths: list[Path] = []
     try:
@@ -206,10 +217,15 @@ def _write_deletion(
             backup = _create_backup(path, timestamp=timestamp)
             payload["backup_paths"].append(str(backup))
         for path in sorted(updated_payloads, key=lambda item: str(item)):
-            atomic_write_json(path, updated_payloads[path], preserve_mode=True)
+            _write_locked_registry(
+                path=path,
+                updated=updated_payloads[path],
+                source_registry=source_registry,
+                source_transaction=source_transaction,
+            )
             written_paths.append(path)
         source_after = load_registry(source_registry) if source_available else None
-        target_after = load_registry(target_registry)
+        target_after = read_json(target_registry)
         source_missing = not source_after or _goal_or_none(source_after, goal_id) is None
         global_missing = _goal_or_none(target_after, goal_id) is None
         payload["readback"] = {
@@ -223,9 +239,40 @@ def _write_deletion(
         if not payload["ok"]:
             payload["error"] = "Goal deletion readback did not verify"
     except Exception:
-        for path in written_paths:
-            atomic_write_json(path, current_payloads[path], preserve_mode=True)
+        for path in reversed(written_paths):
+            _restore_locked_registry(
+                path=path,
+                current=current_payloads[path],
+                source_registry=source_registry,
+                source_transaction=source_transaction,
+            )
         raise
+
+
+def _write_locked_registry(
+    *,
+    path: Path,
+    updated: dict[str, Any],
+    source_registry: Path,
+    source_transaction: ProjectRegistryTransaction | None,
+) -> None:
+    if source_transaction is not None and _same_path(path, source_registry):
+        source_transaction.commit(updated)
+        return
+    atomic_write_json(path, updated, preserve_mode=True)
+
+
+def _restore_locked_registry(
+    *,
+    path: Path,
+    current: dict[str, Any],
+    source_registry: Path,
+    source_transaction: ProjectRegistryTransaction | None,
+) -> None:
+    if source_transaction is not None and _same_path(path, source_registry):
+        source_transaction.restore()
+        return
+    atomic_write_json(path, current, preserve_mode=True)
 
 
 def _execute_deletion(
@@ -242,10 +289,23 @@ def _execute_deletion(
 
     paths = _registry_paths(source_registry, target_registry, same_registry)
     with ExitStack() as stack:
+        source_transaction = None
         for path in paths:
-            stack.enter_context(
-                exclusive_file_lock(path, operation="delete_stopped_goal")
-            )
+            if (
+                source_available
+                and not same_registry
+                and _same_path(path, source_registry)
+            ):
+                source_transaction = stack.enter_context(
+                    project_registry_transaction(
+                        path,
+                        operation="delete_stopped_goal",
+                    )
+                )
+            else:
+                stack.enter_context(
+                    exclusive_file_lock(path, operation="delete_stopped_goal")
+                )
         current_payloads = _load_locked_payloads(
             source_registry=source_registry,
             target_registry=target_registry,
@@ -265,6 +325,7 @@ def _execute_deletion(
             source_available=source_available,
             goal_id=goal_id,
             payload=payload,
+            source_transaction=source_transaction,
         )
 
 

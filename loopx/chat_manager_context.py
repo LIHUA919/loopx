@@ -14,6 +14,7 @@ from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_manager_details import read_manager_goal_details
 from .chat_manager_history import read_manager_delivery_history
+from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
@@ -467,7 +468,7 @@ def manager_turn_context(
             portfolio.get("inventory_revision")
             == "sha256:" + hashlib.sha256(raw).hexdigest()
         ):
-            for goal in json.loads(raw).get("goals", []):
+            for goal in decode_registry_snapshot(registry_path, raw).get("goals", []):
                 if isinstance(goal, dict) and (
                     scope is None or goal.get("id") in scope
                 ):

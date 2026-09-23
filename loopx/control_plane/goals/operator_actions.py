@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...history import decode_registry_snapshot
 from ...registry import registry_goals
 from .activation import GoalActivationState, goal_activation_state
 from .activation_service import _source_and_target
@@ -44,7 +44,11 @@ def build_goal_action_catalog(
     if not normalized_goal_id:
         raise ValueError("goal id is required")
     requested_registry = Path(registry_path).expanduser().resolve()
-    requested_payload = json.loads(requested_registry.read_text(encoding="utf-8"))
+    requested_bytes = requested_registry.read_bytes()
+    requested_payload = decode_registry_snapshot(
+        requested_registry,
+        requested_bytes,
+    )
     requested_goal = _goal(requested_payload, normalized_goal_id)
     current_state = goal_activation_state(requested_goal)
     target_state = (
@@ -59,7 +63,10 @@ def build_goal_action_catalog(
         runtime_root_override=runtime_root_override,
     )
     source_bytes = authority_route.source_registry.read_bytes()
-    source_payload = json.loads(source_bytes)
+    source_payload = decode_registry_snapshot(
+        authority_route.source_registry,
+        source_bytes,
+    )
     source_state = goal_activation_state(_goal(source_payload, normalized_goal_id))
     fingerprint = hashlib.sha256(source_bytes).hexdigest()
     try:
