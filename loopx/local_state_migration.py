@@ -40,31 +40,56 @@ def _within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
 
 
+def _is_redirected_path(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", lambda: False)()
+    # Python 3.11 lacks Path.is_junction; Windows exposes reparse-point
+    # attributes through lstat, so reject those as well.
+    reparse_point = False
+    if os.name == "nt":
+        try:
+            attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        except FileNotFoundError:
+            attributes = 0
+        reparse_point = bool(
+            attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+    return path.is_symlink() or is_junction or reparse_point
+
+
+def _require_unlinked_directory_chain(path: Path, *, label: str) -> None:
+    """Reject any existing directory ancestor that redirects an I/O route."""
+
+    for ancestor in (path, *path.parents):
+        if _is_redirected_path(ancestor):
+            raise ValueError(f"{label} has a symlink or junction ancestor: {ancestor}")
+        if ancestor.exists() and not ancestor.is_dir():
+            raise ValueError(f"{label} ancestor is not a directory: {ancestor}")
+
+
 def _require_backup_path(path: Path, *, must_be_absent: bool = False) -> None:
     """Keep private backup writes on the declared, unlinked directory route."""
 
-    for ancestor in (path, *path.parents):
-        is_junction = getattr(ancestor, "is_junction", lambda: False)()
-        # Python 3.11 lacks Path.is_junction; Windows exposes reparse-point
-        # attributes through lstat, so reject those as well.
-        reparse_point = False
-        if os.name == "nt":
-            try:
-                attributes = getattr(ancestor.lstat(), "st_file_attributes", 0)
-            except FileNotFoundError:
-                attributes = 0
-            reparse_point = bool(
-                attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            )
-        if ancestor.is_symlink() or is_junction or reparse_point:
-            raise ValueError(f"backup path has a symlink or junction ancestor: {ancestor}")
-        if ancestor != path and ancestor.exists() and not ancestor.is_dir():
-            raise ValueError(f"backup path ancestor is not a directory: {ancestor}")
+    _require_unlinked_directory_chain(path.parent, label="backup path")
+    if _is_redirected_path(path):
+        raise ValueError(f"backup path has a symlink or junction ancestor: {path}")
     if path.exists():
         if must_be_absent:
             raise FileExistsError(f"backup directory already exists: {path}")
         if not path.is_dir():
             raise ValueError(f"backup path is not a directory: {path}")
+
+
+def _require_project_registry_path(path: Path) -> None:
+    """Keep project registry reads and writes inside their declared project."""
+
+    _require_unlinked_directory_chain(path.parent, label="project registry path")
+    if _is_redirected_path(path):
+        raise ValueError(f"project registry path has a symlink or junction leaf: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"registered project registry is missing: {path}; "
+            "restore the project route or retire its global Goal before migration"
+        )
 
 
 def _read_registry(path: Path) -> dict[str, Any]:
@@ -203,13 +228,7 @@ def plan_local_state_migration(
         if registry != project / ".loopx" / "registry.json":
             raise ValueError(f"noncanonical project registry requires manual review: {registry}")
         if registry not in project_registries:
-            if registry.is_symlink():
-                raise ValueError(f"project registry is a symlink: {registry}")
-            if not registry.is_file():
-                raise FileNotFoundError(
-                    f"registered project registry is missing: {registry}; "
-                    "restore the project route or retire its global Goal before migration"
-                )
+            _require_project_registry_path(registry)
             project_registries[registry] = _read_registry(registry)
 
     moves: dict[Path, Path] = {}
@@ -309,6 +328,8 @@ def migrate_local_state(
         for index, entry in enumerate(entries):
             _require_backup_path(backup)
             original = Path(entry["source"])
+            if entry["kind"] == "registry":
+                _require_project_registry_path(original)
             copied = backup / "snapshot" / str(index)
             _copy(original, copied)
             if _digest(copied) != entry["digest"]:
@@ -326,7 +347,10 @@ def migrate_local_state(
     expected_global_registry: dict[str, Any] | None = None
     try:
         for entry in entries:
-            if _digest(Path(entry["source"])) != entry["digest"]:
+            original = Path(entry["source"])
+            if entry["kind"] == "registry":
+                _require_project_registry_path(original)
+            if _digest(original) != entry["digest"]:
                 raise ValueError(f"source changed during backup: {entry['source']}")
         for entry in entries:
             if entry["kind"] != "goal":
@@ -342,6 +366,7 @@ def migrate_local_state(
             if entry["kind"] != "registry":
                 continue
             registry_path = Path(entry["source"])
+            _require_project_registry_path(registry_path)
             registry = _read_registry(registry_path)
             updated = _rewrite_registry(
                 registry,
@@ -349,6 +374,7 @@ def migrate_local_state(
                 source_root=source,
                 target_root=target,
             )
+            _require_project_registry_path(registry_path)
             _write_project_registry(registry_path, updated)
             modified.append(registry_path)
             expected_project_registries[registry_path] = updated
@@ -364,6 +390,7 @@ def migrate_local_state(
         if _read_registry(global_path) != updated_global:
             raise ValueError("global registry changed during migration")
         for registry_path, expected in expected_project_registries.items():
+            _require_project_registry_path(registry_path)
             if _read_registry(registry_path) != expected:
                 raise ValueError(f"project registry changed during migration: {registry_path}")
         for entry in entries:
@@ -407,9 +434,11 @@ def migrate_local_state(
             if entry["kind"] == "registry" and Path(entry["source"]) in modified:
                 try:
                     registry_path = Path(entry["source"])
+                    _require_project_registry_path(registry_path)
                     if _read_registry(registry_path) != expected_project_registries[registry_path]:
                         rollback_errors.append(f"project registry changed; kept for manual recovery: {registry_path}")
                         continue
+                    _require_project_registry_path(registry_path)
                     shutil.copy2(backup / "snapshot" / str(index), registry_path)
                 except (OSError, ValueError) as rollback_exc:
                     rollback_errors.append(str(rollback_exc))
@@ -444,6 +473,8 @@ def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False)
     backup = receipt_path.parent
     for index, entry in enumerate(entries):
         old, new = Path(entry["source"]), Path(entry["target"])
+        if entry["kind"] == "registry":
+            _require_project_registry_path(new)
         if entry["kind"] != "registry" and (old.exists() or old.is_symlink()):
             raise FileExistsError(f"legacy path has reappeared: {old}")
         if _digest(new) != entry["after_digest"]:
@@ -461,6 +492,7 @@ def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False)
             Path(entry["target"]).rename(entry["source"])
     for index, entry in enumerate(entries):
         if entry["kind"] == "registry":
+            _require_project_registry_path(Path(entry["source"]))
             shutil.copy2(backup / "snapshot" / str(index), entry["source"])
     shutil.copy2(backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME, Path(receipt["source_runtime_root"]) / GLOBAL_REGISTRY_FILENAME)
     result["dry_run"] = False
