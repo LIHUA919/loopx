@@ -27,6 +27,10 @@ registered project, state file, source registry, symlink boundary, and target
 collision without writing. It stops if a registered legacy route is missing or
 different from the default. Repair or retire stale registrations separately;
 do not copy a guessed state directory into the target.
+An explicitly configured Goal `state_file` stays where its owner placed it, but
+its project `.loopx/registry.json` must still have no symlink or junction in
+the directory route. Execution rechecks that route before copying, rewriting,
+and restoring the registry.
 The default backup parent and any explicit `--backup-dir` must have no symlink
 or junction in their existing ancestors. Preview rejects such a route, and
 execution checks it again before creating and copying the private backup.
