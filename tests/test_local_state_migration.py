@@ -50,6 +50,20 @@ def _fixture(tmp_path: Path, *, projects: int = 2) -> tuple[Path, Path, list[Pat
     return source, target, project_roots
 
 
+def _custom_state_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    source, target, projects = _fixture(tmp_path, projects=1)
+    project = projects[0]
+    custom = project / "custom" / "STATE.md"
+    custom.parent.mkdir()
+    custom.write_text("custom state\n", encoding="utf-8")
+    local_registry = project / ".loopx" / "registry.json"
+    for path in (local_registry, source / "registry.global.json"):
+        payload = _read(path)
+        payload["goals"][0]["state_file"] = str(custom.relative_to(project))
+        _write_json(path, payload)
+    return source, target, project, custom
+
+
 def test_default_route_keeps_one_existing_legacy_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source, target, projects = _fixture(tmp_path, projects=1)
     monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
@@ -498,6 +512,109 @@ def test_explicit_real_backup_path_supports_execute_and_rollback(tmp_path: Path)
     assert (backup / RECEIPT_NAME).is_file()
     assert target.exists() and not source.exists()
     rollback_local_state_migration(backup / RECEIPT_NAME, execute=True)
+    assert source.exists() and not target.exists()
+
+
+def test_custom_state_keeps_its_declared_file_through_migration_and_rollback(
+    tmp_path: Path,
+) -> None:
+    source, target, project, custom = _custom_state_fixture(tmp_path)
+    local_registry = project / ".loopx" / "registry.json"
+    before = local_registry.read_bytes()
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    assert preview["goal_directory_count"] == 0
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    migrated = load_project_registry(local_registry)
+    assert migrated["common_runtime_root"] == str(target)
+    assert migrated["goals"][0]["state_file"] == "custom/STATE.md"
+    assert custom.read_text(encoding="utf-8") == "custom state\n"
+    rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)
+    assert local_registry.read_bytes() == before
+    assert custom.read_text(encoding="utf-8") == "custom state\n"
+    assert source.exists() and not target.exists()
+
+
+def test_custom_state_cannot_bypass_project_registry_ancestor_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, project, _custom = _custom_state_fixture(tmp_path)
+    local_registry = project / ".loopx" / "registry.json"
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_registry = outside / "registry.json"
+    outside_registry.write_bytes(local_registry.read_bytes())
+    original_outside = outside_registry.read_bytes()
+    project_loopx = project / ".loopx"
+    parked = project / ".loopx-original"
+
+    project_loopx.rename(parked)
+    project_loopx.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="project registry.*symlink"):
+        migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    assert outside_registry.read_bytes() == original_outside
+    assert list(outside.iterdir()) == [outside_registry]
+    assert source.exists() and not target.exists()
+
+    project_loopx.unlink()
+    parked.rename(project_loopx)
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    assert preview["goal_directory_count"] == 0
+    original_plan = migration.plan_local_state_migration
+
+    def redirect_after_plan(**kwargs: object) -> dict[str, object]:
+        plan = original_plan(**kwargs)
+        project_loopx.rename(parked)
+        project_loopx.symlink_to(outside, target_is_directory=True)
+        return plan
+
+    monkeypatch.setattr(migration, "plan_local_state_migration", redirect_after_plan)
+    with pytest.raises(ValueError, match="project registry.*symlink"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert outside_registry.read_bytes() == original_outside
+    assert list(outside.iterdir()) == [outside_registry]
+    assert source.exists() and not target.exists()
+
+
+def test_project_registry_redirect_after_backup_cannot_write_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, project, _custom = _custom_state_fixture(tmp_path)
+    local_registry = project / ".loopx" / "registry.json"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_registry = outside / "registry.json"
+    outside_registry.write_bytes(local_registry.read_bytes())
+    original_outside = outside_registry.read_bytes()
+    preview = migration.migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+    )
+    original_copy = migration._copy
+
+    def redirect_after_registry_copy(original: Path, copied: Path) -> None:
+        original_copy(original, copied)
+        if original == local_registry:
+            (project / ".loopx").rename(project / ".loopx-original")
+            (project / ".loopx").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(migration, "_copy", redirect_after_registry_copy)
+    with pytest.raises(RuntimeError, match="project registry.*symlink"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert outside_registry.read_bytes() == original_outside
+    assert list(outside.iterdir()) == [outside_registry]
     assert source.exists() and not target.exists()
 
 
