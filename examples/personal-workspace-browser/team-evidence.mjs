@@ -22,6 +22,7 @@ export const teamEvidenceScenario = {
       const results = page.getByRole("region", {name: "团队成果", exact: true});
       // Accepted report opens in the original conversation without an extra click.
       await results.getByRole("table").waitFor();
+      await results.getByText("尚无采用记录 · 查看验收与版本依据", {exact: true}).waitFor();
       assert.equal(await results.getByLabel("当前报告").evaluate(el => el === document.activeElement), false, "Automatic readback must not steal focus");
       const reads = api.loopxModeRequests.filter(row => row.operation === "read").length;
       await results.getByRole("button", {name: "刷新成果", exact: true}).click();
@@ -66,6 +67,21 @@ export const teamEvidenceScenario = {
       assert.equal(await results.getByRole("table").count(), 0);
       assert.equal(await results.getByText("newer unverified report").count(), 0);
       await page.unroute("**/api/chat/sessions/*/loopx", changedReport);
+      mode.fixtureAdoptionState = "current";
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByText("已记录采用 · 查看后续结果", {exact: true}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "team-adoption-source.png"), animations: "disabled"});
+      await results.getByText("已记录采用 · 查看后续结果", {exact: true}).click();
+      await results.getByRole("button", {name: "查看后续结果", exact: true}).click();
+      await results.getByText("Reviewed cash allocation").waitFor();
+      await results.getByText("此结果关联来源版本 · 查看依据", {exact: true}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "team-adoption-return.png"), animations: "disabled"});
+      assert.equal(api.turnRequests.length, 0, "Following adopted results must not start a model");
+      await results.getByRole("button", {name: /local-analyst · report.md/}).click();
+      mode.fixtureAdoptionState = "unavailable";
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByText("采用证据无法核验 · 查看版本依据", {exact: true}).waitFor();
+      delete mode.fixtureAdoptionState;
       await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
       const dialog = page.getByRole("dialog", {name: "团队执行情况"});
       const openEvidence = dialog.getByRole("button", {name: "查看证据与反馈", exact: true});

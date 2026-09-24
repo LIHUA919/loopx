@@ -42,6 +42,7 @@ class AttentionQueueContext:
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None]
     source_registry_shadow_findings: AbstractSet[str]
     monitor_signal_waiting_on: str
+    external_progress_review_context: Optional[Callable[..., dict[str, Any] | None]] = None
 
 
 def merge_global_registry_findings(
@@ -252,11 +253,17 @@ def build_attention_queue(
                     active_state_fields = context.active_state_todo_fields(goal, runtime_root=runtime_root)
                 item.update(active_state_fields)
                 context.sync_connected_attention_action_from_todos(item)
+                external_progress_review = (
+                    context.external_progress_review_context(goal, runtime_root)
+                    if context.external_progress_review_context is not None
+                    else None
+                )
                 context.attach_active_state_project_asset_fields(
                     item,
                     latest_runs=goal_latest_runs,
                     next_action_projection_warning=context.next_action_projection_warning,
                     autonomous_replan_obligation_from_runs=context.autonomous_replan_obligation_from_runs,
+                    external_progress_review=external_progress_review,
                 )
                 item["quota"] = context.quota_status(
                     goal,

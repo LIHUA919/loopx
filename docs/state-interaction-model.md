@@ -771,8 +771,18 @@ For an accountable, Turn-bound refresh, a successful writeback and a satisfied
 vision checkpoint are separate facts. `ok=true` does not imply that an omitted
 vision decision was supplied. Inspect `vision_checkpoint.satisfied`.
 
-If the checkpoint is `missing_required`, submit a checkpoint-only refresh with
-the **same** Goal, Agent, Todo/obligation, Turn, and delivery fields. Preserve
+If the checkpoint is `missing_required`, first run `checkpoint-context` for the
+**same** Goal, Agent, Todo/obligation and Turn. Read its returned decision basis
+and judge again. Echo its `read_context_id` as `--checkpoint-read-context` in a
+checkpoint-only refresh with the original identity and delivery fields. Include
+additional used upstream Todos with repeatable `--dependency-todo-id` on the read.
+The control plane now rejects supplements with missing, replaced, or stale read
+receipts. Reread and rejudge on conflict; do not repeat completed work or attach a
+fresh token to an old judgment. A new read replaces the old receipt for that Turn,
+so checkpoint confirmations within one Turn must be serial. An exact committed
+retry remains idempotent, including when state changed after its commit. See the
+[read-basis contract](reference/protocols/goal-vision-replan-contract-v0.md#read-basis-for-checkpoint-only-recovery)
+for covered versions and concurrency boundaries. Preserve
 the original working directory and explicit target (`--registry`, `--runtime-root`,
 `--project`, `--state-file`), scope (`--progress-scope`, `--agent-lane`), and
 isolation (`--no-global-sync`, `--suppress-external-sinks`) options, with their
@@ -822,7 +832,7 @@ without them. Repeating mutations is rejected as
 `checkpoint_supplement_must_not_repeat_mutations`; do not simply append vision
 arguments to an original command that contains these options.
 
-Add only one vision decision:
+Add the read receipt and only one vision decision:
 
 - `--vision-unchanged-reason 'Existing scope and acceptance still apply.'` when
   a persisted vision genuinely remains applicable;

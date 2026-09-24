@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from .todo_semantics import todo_blocker_reason
+
 AGENT_LANE_TODO_LIST_PROJECTION_SCHEMA_VERSION = "agent_lane_todo_list_projection_v0"
 AGENT_LANE_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
     "agent_lane_todo_list_summary_compaction_v0"
@@ -143,11 +145,16 @@ def _project_item_fields(
 
 
 def _compact_item(value: Any) -> Any:
-    return _project_item_fields(
+    compact = _project_item_fields(
         value,
         fields=_ITEM_FIELDS,
         text_fields=_COMPACT_ITEM_TEXT_FIELDS,
     )
+    if isinstance(value, dict) and isinstance(compact, dict):
+        reason = todo_blocker_reason(value)
+        if reason:
+            compact["reason"] = reason
+    return compact
 
 
 def _compact_thin_item(value: Any) -> Any:

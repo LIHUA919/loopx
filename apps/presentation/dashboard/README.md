@@ -450,3 +450,7 @@ The throttled smoke protects the "quiet scheduling state" first screen. The
 operator-gate smoke protects planned high-complexity goals: they should appear
 as controller/user actions, not Codex-ready work. Those older browser smokes
 still use the local Playwright CLI wrapper.
+
+## Packaged frontend delivery
+
+Generated Chat assets are not committed. See [frontend delivery](../../../docs/development/frontend-delivery.md) for source rebuilds, SHA-bound CI artifacts, package validation and the one-delivery upgrade window.

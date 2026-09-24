@@ -15,6 +15,7 @@ from typing import Any
 from loopx.control_plane.projects.registry_codec import (
     load_project_registry,
     mutate_project_registry,
+    require_runtime_compatible_project_registry,
 )
 from loopx.goal_mode_context import registered_agent_ids
 from loopx.kunluncode_goal_mode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
@@ -314,6 +315,10 @@ def _annotate_registry(registry: Path, *, goal_id: str, agent_id: str) -> None:
 
 def _registered_agents_for_goal(registry: Path, goal_id: str) -> list[str]:
     payload = load_project_registry(registry)
+    require_runtime_compatible_project_registry(
+        payload,
+        operation="KunlunCode Goal adapter",
+    )
     goal = next(
         (
             item

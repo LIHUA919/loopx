@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import nullcontext
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from heapq import merge
 from itertools import islice
 from pathlib import Path
 from typing import Any
 
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_run_index_lock
 from .authority import goal_authority_registry_summary
 from .control_plane import compact_control_plane_policy
 from .control_plane.goals.activation import (
@@ -47,7 +47,7 @@ from .control_plane.runtime.run_index_rebuild import (
     collision_review_groups,
     validate_reviewed_collision_plan,
 )
-from .control_plane.runtime.time import now_local_iso, parse_timestamp
+from .control_plane.runtime.time import chronology_key, now_local_iso
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
@@ -125,26 +125,18 @@ class StatusHistoryCollection:
     contract_audit: RunHistoryAudit
 
 
+@dataclass(frozen=True, slots=True)
+class RunIndexSnapshot:
+    records: list[dict[str, Any]]
+    raw_count: int
+    digest: str | None
+
+
 def now_local() -> str:
     return now_local_iso()
 
 
-_MIN_TIMESTAMP = datetime.min.replace(tzinfo=timezone.utc)
-
-
-def _chronology_key(value: Any) -> tuple[int, datetime, str]:
-    """Return a UTC-aware ordering key while keeping legacy rows deterministic."""
-
-    raw = str(value or "")
-    try:
-        parsed = parse_timestamp(value)
-    except OverflowError:
-        # UTC conversion can overflow at datetime's representable boundaries.
-        parsed = None
-    if parsed is None:
-        # Malformed or missing legacy rows must never outrank valid timestamps.
-        return (0, _MIN_TIMESTAMP, raw)
-    return (1, parsed, raw)
+_chronology_key = chronology_key
 
 
 def unique_run_paths(runs_dir: Path, generated_at: str) -> tuple[Path, Path]:
@@ -179,7 +171,7 @@ def write_reserved_run_artifacts(
     ingest_usage_into_run_record(record, index_record=index_record)
     # GH-C07: one lock per goal history index, shared with the repair path.
     index_path = runs_dir / "index.jsonl"
-    with exclusive_file_lock(index_path, operation="history_run_append"):
+    with exclusive_run_index_lock(index_path, operation="history_run_append"):
         json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)
         index_record["json_path"] = str(json_path)
         index_record["markdown_path"] = str(markdown_path)
@@ -235,18 +227,21 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     return path.exists()
 
 
-def load_index(
+def load_index_snapshot(
     path: Path,
     *,
     artifact_root: Path | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    if not path.exists():
-        return [], 0
+) -> RunIndexSnapshot:
+    try:
+        stream = path.open("rb")
+    except FileNotFoundError:
+        return RunIndexSnapshot(records=[], raw_count=0, digest=None)
 
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
     artifact_exists: dict[tuple[str, str], bool] = {}
     raw_count = 0
+    digest = hashlib.sha256()
 
     def artifact_is_present(value: Any) -> bool:
         text = str(value or "").strip()
@@ -258,8 +253,10 @@ def load_index(
             )
         return artifact_exists[cache_key]
 
-    with path.open(encoding="utf-8") as f:
-        for line in f:
+    with stream:
+        for encoded_line in stream:
+            digest.update(encoded_line)
+            line = encoded_line.decode("utf-8")
             if not line.strip():
                 continue
             raw_count += 1
@@ -283,7 +280,20 @@ def load_index(
             else:
                 positions[key] = len(records)
                 records.append(item)
-    return records, raw_count
+    return RunIndexSnapshot(
+        records=records,
+        raw_count=raw_count,
+        digest=f"sha256:{digest.hexdigest()}",
+    )
+
+
+def load_index(
+    path: Path,
+    *,
+    artifact_root: Path | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    snapshot = load_index_snapshot(path, artifact_root=artifact_root)
+    return snapshot.records, snapshot.raw_count
 
 
 def latest_status_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -351,10 +361,12 @@ def collect_history(
         if activation_filter is not None and activation_state is not activation_filter:
             continue
         index_path = runtime_root / "goals" / current_goal_id / "runs" / "index.jsonl"
-        runs, raw_count = load_index(
+        index_snapshot = load_index_snapshot(
             index_path,
             artifact_root=registry_project_root(registry_path),
         )
+        runs = index_snapshot.records
+        raw_count = index_snapshot.raw_count
         runs = [
             run
             for _, run in sorted(
@@ -407,6 +419,7 @@ def collect_history(
             "authority_registry": goal_authority_registry_summary(meta) if registry_member else None,
             "quota": quota,
             "index_path": str(index_path),
+            "index_digest": index_snapshot.digest,
             "index_exists": index_path.exists(),
             "raw_index_records": raw_count,
             "unique_runs": len(runs),
@@ -681,7 +694,7 @@ def repair_index_duplicates(
         # GH-C07: read and rewrite the index under the same lock the append
         # path takes. A dry run only reports, so it must not block writers.
         lock = (
-            exclusive_file_lock(index_path, operation="history_index_repair")
+            exclusive_run_index_lock(index_path, operation="history_index_repair")
             if execute
             else nullcontext()
         )

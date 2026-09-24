@@ -15,6 +15,7 @@ import {
 } from "./coordination_projection.ts";
 
 import {planMonitorCycleTransition} from "./todo_monitor_cycle.ts";
+import {isDeferredReopen, planDeferredReopen} from "./todo_deferred_reopen.ts";
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { CoordinationCommandReceipt } from "./command_receipt.ts";
 import {canonicalTodoRecord} from "./todo_presentation.ts";
@@ -68,7 +69,9 @@ function updateReceipt(input: CoordinationTodoUpdateInput, requestSha: string) {
         ...(input.monitor_observation === undefined ? {} : {
           monitor_poll_transition: canonicalAuthorityObject(original.monitor_poll_transition, "Monitor update receipt transition")}),
         ...(original.monitor_lifecycle_transition === undefined ? {} : {monitor_lifecycle_transition:
-          canonicalAuthorityObject(original.monitor_lifecycle_transition, "Monitor lifecycle receipt transition")})}, changed: original.changed};
+          canonicalAuthorityObject(original.monitor_lifecycle_transition, "Monitor lifecycle receipt transition")}),
+        ...(original.deferred_resume_transition === undefined ? {} : {deferred_resume_transition:
+          canonicalAuthorityObject(original.deferred_resume_transition, "Deferred resume receipt transition")})}, changed: original.changed};
     }});
 }
 
@@ -129,7 +132,7 @@ export async function executeCoordinationTodoUpdate(
       goal_id: input.goal_id, todo_id: input.todo_id, expected_role: input.expected_role as "user" | "agent" | null,
       command: "complete", actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
       lifecycle_grants: input.lifecycle_grants ?? [], authority_reason: input.authority_reason ?? null,
-      decision_outcome: null, operation_id: input.operation_id,
+      decision_outcome: null, operation_identity: {kind: "explicit", operation_id: input.operation_id},
       lease_idempotency_key: input.lease_idempotency_key ?? null, lease_expected_version: input.lease_expected_version ?? null,
       allow_user_gate_auto_acquire: input.lease_idempotency_key == null && input.lease_expected_version == null, requested_no_followup: intent.no_followup === true,
       requested_completion_turn_key: null, requested_completion_identity_source: null,
@@ -218,16 +221,22 @@ export async function executeCoordinationTodoUpdate(
     }
   }
   let cycle: ReturnType<typeof planMonitorCycleTransition>;
+  let deferredCycle: ReturnType<typeof planDeferredReopen> | null = null;
   try {
     cycle = planMonitorCycleTransition({goal_id: input.goal_id, before: target.todo, after: next,
       lease: target.leases.get(input.todo_id), handoff_mode: head.head.handoff_mode, now: input.now});
+    if (head.head.handoff_mode === "hard_lease" && isDeferredReopen(input, target.todo)) {
+      deferredCycle = planDeferredReopen({goal_id: input.goal_id, before: target.todo, after: next,
+        lease: target.leases.get(input.todo_id), now: input.now});
+    }
   } catch (error) {
     return failure("invalid_coordination_projection", error instanceof Error ? error.message : "invalid retained lease");
   }
   const commit: AuthorityStoreCommit = changed ? prepareCoordinationProjectionCommit({
     goal_id: input.goal_id, operation_id: input.operation_id,
     expected_provider_revision: head.provider_revision, projection: head.head,
-    mutations: [{kind: "todo_upsert", todo: next, clear_fields: clearFields}, ...cycle.mutations],
+    mutations: [{kind: "todo_upsert", todo: next, clear_fields: clearFields},
+      ...cycle.mutations, ...(deferredCycle?.mutations ?? [])],
   }) : {operation_id: input.operation_id,
     expected_provider_revision: head.provider_revision, next_projection: head.head,
     events: [], receipts: []};
@@ -249,13 +258,15 @@ export async function executeCoordinationTodoUpdate(
     ...(prepared.monitorTransition ? {monitor_poll_transition: prepared.monitorTransition} : {}),
     ...(completionValidationRevisionReceipt === null ? {} :
       {completion_validation_revision: completionValidationRevisionReceipt}),
-    ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition})};
+    ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition}),
+    ...(deferredCycle?.transition == null ? {} : {deferred_resume_transition: deferredCycle.transition})};
   commit.receipts = [{schema_version: COORDINATION_TODO_UPDATE_RECEIPT_SCHEMA,
     operation_id: input.operation_id, goal_id: input.goal_id,
     todo_id: input.todo_id, request_sha256: requestSha, changed,
     ...(prepared.monitorTransition ? {monitor_poll_transition: prepared.monitorTransition} : {}),
     ...(completionValidationRevisionReceipt === null ? {} :
       {completion_validation_revision: completionValidationRevisionReceipt}),
-    ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition})}];
+    ...(cycle.transition === null ? {} : {monitor_lifecycle_transition: cycle.transition}),
+    ...(deferredCycle?.transition == null ? {} : {deferred_resume_transition: deferredCycle.transition})}];
   return receipt.commit(store, commit);
 }

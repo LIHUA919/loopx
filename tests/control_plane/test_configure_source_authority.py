@@ -6,6 +6,8 @@ import sys
 
 import pytest
 
+from loopx.chat_action_store import ChatActionStore
+from loopx.chat_actions import ChatActionService
 from loopx.configuration_transaction import goal_capability_configuration_revision
 from loopx.configure_goal import configure_goal
 from loopx.control_plane.goals.configure_goal_service import (
@@ -31,6 +33,9 @@ def mirrored_goal(tmp_path):
                         "id": "example",
                         "repo": str(tmp_path / "project"),
                         "status": "active",
+                        "coordination": {
+                            "registered_agents": ["agent-a"],
+                        },
                         "spawn_policy": {
                             "mode": "default",
                             "allowed": False,
@@ -52,6 +57,32 @@ def mirrored_goal(tmp_path):
 
 def policy(path):
     return json.loads(path.read_text())["goals"][0]["spawn_policy"]
+
+
+def registered_agents(path):
+    return json.loads(path.read_text())["goals"][0]["coordination"][
+        "registered_agents"
+    ]
+
+
+def preview_agent_binding(tmp_path, mirror):
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"),
+        registry_path=mirror,
+    )
+    proposal = service.preview(
+        {
+            "action_kind": "agent.bind",
+            "summary": "Bind agent-b to the Goal",
+            "normalized_parameters": {
+                "goal_id": "example",
+                "agent_id": "agent-b",
+            },
+            "context": {},
+            "idempotency_key": "bind-agent-b",
+        }
+    )
+    return service, proposal
 
 
 def test_global_cli_change_survives_source_resync(mirrored_goal):
@@ -216,3 +247,108 @@ def test_browser_settings_read_and_apply_use_source(mirrored_goal):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_chat_agent_binding_survives_source_resync(tmp_path, mirrored_goal):
+    source, mirror, runtime = mirrored_goal
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+
+    applied = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert applied["status"] == "applied"
+    assert applied["receipt"]["outcome"] == "agent_bound"
+    assert registered_agents(source) == ["agent-a", "agent-b"]
+    assert registered_agents(mirror) == ["agent-a", "agent-b"]
+    sync_project_registry_to_global(
+        registry_path=source,
+        runtime_root_override=str(runtime),
+        goal_id="example",
+        dry_run=False,
+    )
+    assert registered_agents(mirror) == ["agent-a", "agent-b"]
+
+
+def test_chat_agent_binding_rejects_stale_source_agents(tmp_path, mirrored_goal):
+    source, mirror, _runtime = mirrored_goal
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+    payload = json.loads(source.read_text())
+    payload["goals"][0]["coordination"]["registered_agents"].append("agent-c")
+    source.write_text(json.dumps(payload))
+    before = source.read_bytes(), mirror.read_bytes()
+
+    stale = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert stale["status"] == "stale"
+    assert stale["receipt"] is None
+    assert (source.read_bytes(), mirror.read_bytes()) == before
+
+
+def test_chat_agent_binding_rejects_equal_peer_set_after_source_route_change(
+    tmp_path, mirrored_goal
+):
+    source_a, mirror, _runtime = mirrored_goal
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+    source_b = tmp_path / "project-b" / ".loopx" / "registry.json"
+    source_b.parent.mkdir(parents=True)
+    source_b.write_bytes(source_a.read_bytes())
+    mirror_payload = json.loads(mirror.read_text())
+    mirror_payload["goals"][0]["source_registry"] = str(source_b)
+    mirror.write_text(json.dumps(mirror_payload))
+    before = source_a.read_bytes(), source_b.read_bytes(), mirror.read_bytes()
+
+    stale = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert stale["status"] == "stale"
+    assert stale["receipt"] is None
+    assert (source_a.read_bytes(), source_b.read_bytes(), mirror.read_bytes()) == before
+
+
+def test_chat_agent_binding_does_not_recover_across_source_route_change(
+    tmp_path, mirrored_goal
+):
+    source_a, mirror, _runtime = mirrored_goal
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+    source_b = tmp_path / "project-b" / ".loopx" / "registry.json"
+    source_b.parent.mkdir(parents=True)
+    source_b_payload = json.loads(source_a.read_text())
+    source_b_payload["goals"][0]["coordination"]["registered_agents"].append("agent-b")
+    source_b.write_text(json.dumps(source_b_payload))
+    mirror_payload = json.loads(mirror.read_text())
+    mirror_payload["goals"][0]["source_registry"] = str(source_b)
+    mirror.write_text(json.dumps(mirror_payload))
+    before = source_a.read_bytes(), source_b.read_bytes(), mirror.read_bytes()
+
+    stale = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert stale["status"] == "stale"
+    assert stale["receipt"] is None
+    assert (source_a.read_bytes(), source_b.read_bytes(), mirror.read_bytes()) == before
+
+
+def test_chat_agent_binding_recovers_after_receipt_loss(
+    tmp_path, mirrored_goal, monkeypatch
+):
+    source, mirror, _runtime = mirrored_goal
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+    persist_receipt = service.store.apply
+
+    def lose_receipt(*args, **kwargs):
+        raise ConnectionError("simulated receipt loss")
+
+    monkeypatch.setattr(service.store, "apply", lose_receipt)
+
+    with pytest.raises(ConnectionError, match="receipt loss"):
+        service.apply(proposal["proposal_id"])
+    assert registered_agents(source) == ["agent-a", "agent-b"]
+    assert registered_agents(mirror) == ["agent-a", "agent-b"]
+
+    mirror_payload = json.loads(mirror.read_text())
+    mirror_payload["goals"][0]["coordination"]["registered_agents"] = ["agent-a"]
+    mirror.write_text(json.dumps(mirror_payload))
+
+    monkeypatch.setattr(service.store, "apply", persist_receipt)
+    recovered = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert recovered["status"] == "applied"
+    assert recovered["receipt"]["outcome"] == "agent_already_bound"
+    assert registered_agents(mirror) == ["agent-a", "agent-b"]

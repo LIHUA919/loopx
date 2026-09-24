@@ -195,6 +195,7 @@ export async function openLocalAuthorityStoreHandle(
   root: string,
   goalId: string,
   dependencies: LocalAuthorityProviderDependencies = {},
+  options: {existingOnly?: boolean} = {},
 ): Promise<LocalAuthorityStoreHandle> {
   const p = paths(root, goalId);
   let raw: string;
@@ -207,7 +208,7 @@ export async function openLocalAuthorityStoreHandle(
     try { await stat(sqliteAuthorityPath(p.sqlite, goalId)); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return {store: new FileAuthorityStore(p.file, goalId), provider: DEFAULT_LOCAL_AUTHORITY_PROVIDER,
+        return {store: new FileAuthorityStore(p.file, goalId, options), provider: DEFAULT_LOCAL_AUTHORITY_PROVIDER,
           sourceAuthority: sourceFor(DEFAULT_LOCAL_AUTHORITY_PROVIDER)};
       }
       throw new LocalAuthorityProviderOpenError(null, "local_authority_selector_unavailable", "Local authority selection could not be resolved");
@@ -238,8 +239,9 @@ export async function openLocalAuthorityStore(
   root: string,
   goalId: string,
   dependencies: LocalAuthorityProviderDependencies = {},
+  options: {existingOnly?: boolean} = {},
 ): Promise<AuthorityStore> {
-  return (await openLocalAuthorityStoreHandle(root, goalId, dependencies)).store;
+  return (await openLocalAuthorityStoreHandle(root, goalId, dependencies, options)).store;
 }
 
 /** Administrative opt-in for an empty, unpromoted goal; no implicit migration. */
@@ -272,11 +274,12 @@ export async function openRuntimeAuthorityStore(
   root: string,
   goalId: string,
   dependencies: LocalAuthorityProviderDependencies,
+  options: {existingOnly?: boolean} = {},
 ): Promise<AuthorityStore> {
   if (dependencies.createStore !== undefined) {
     return dependencies.createStore(join(root, "authority", "file-v0"), goalId);
   }
-  return await openLocalAuthorityStore(root, goalId, dependencies);
+  return await openLocalAuthorityStore(root, goalId, dependencies, options);
 }
 
 export function requireLocalAuthorityRuntimeRoot(value: unknown): string {

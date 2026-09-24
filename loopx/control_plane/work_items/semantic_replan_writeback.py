@@ -197,6 +197,7 @@ def qualify_replan_writeback(
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
     todo_fields: dict[str, Any] | None = None,
+    external_progress_review: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -252,6 +253,7 @@ def qualify_replan_writeback(
         newest_first_runs,
         agent_todos=agent_todos,
         agent_id=safe_agent_id,
+        external_progress_review=external_progress_review,
     )
     status_payload = {
         "run_history": {
@@ -348,6 +350,7 @@ def enforce_open_replan_writeback(
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
     todo_fields: dict[str, Any] | None = None,
+    external_progress_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Fail closed unless concrete typed evidence satisfies the selected replan.
 
@@ -365,6 +368,7 @@ def enforce_open_replan_writeback(
         goal_id=goal_id,
         progress_observation=progress_observation,
         registry_goal=registry_goal,
+        external_progress_review=external_progress_review,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,
@@ -419,6 +423,7 @@ def qualify_refresh_replan_writeback(
     goal_id: str,
     progress_observation: dict[str, Any] | None,
     registry_goal: dict[str, Any] | None,
+    external_progress_review: Mapping[str, Any] | None = None,
     completion_todo_id: str | None,
     completion_turn_key: str | None,
     classification: str,
@@ -481,6 +486,7 @@ def qualify_refresh_replan_writeback(
         goal_id=goal_id,
         progress_observation=progress_observation,
         registry_goal=registry_goal,
+        external_progress_review=external_progress_review,
         agent_vision=agent_vision,
         completion_todo_id=completion_todo_id,
         completion_turn_key=completion_turn_key,

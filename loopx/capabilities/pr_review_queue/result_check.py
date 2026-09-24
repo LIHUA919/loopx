@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .review_contract import (
+    COMPATIBILITY_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
     build_review_execution_contract,
     build_review_plan,
@@ -93,6 +94,28 @@ def _required_validation_case_ids(
     return required
 
 
+def _check_compatibility_assessment(blockers: list[str], value: object) -> None:
+    key = "code_volume:compatibility_assessment"
+    contract = COMPATIBILITY_ASSESSMENT
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["fields"])
+    if not isinstance(value, Mapping):
+        return
+    decision = value.get("decision")
+    if decision not in contract["decision_values"]:
+        blockers.append(f"{key}:invalid_decision")
+        return
+    if decision in contract["blocking_decisions"]:
+        blockers.append(f"{key}:blocking_decision")
+    if decision == "not_applicable":
+        return
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["applicable_fields"])
+    boundary = value.get("deployment_boundary")
+    if boundary not in contract["deployment_boundary_values"]:
+        blockers.append(f"{key}:invalid_deployment_boundary")
+    if boundary == "unknown" and decision != "not_yet_proven":
+        blockers.append(f"{key}:unknown_boundary_cannot_justify_decision")
+
+
 def check_review_result(
     packet: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -154,6 +177,8 @@ def check_review_result(
             blockers.append(f"{key}:missing_evidence_detail")
         if status == "verified":
             requirement = requirements[key]
+            if key == "code_volume":
+                _check_compatibility_assessment(blockers, row.get("compatibility_assessment"))
             if key == "semantic_alignment":
                 decision = row.get("candidate_decision")
                 verdict = row.get("verdict")

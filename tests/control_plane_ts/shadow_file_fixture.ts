@@ -89,7 +89,7 @@ export async function pendingEntry(f: ShadowFixture, seq: number, part: JsonObje
   if (marker) await writeFile(join(directory, `${stem}.committed.json`), markerBytes);
   const resolution = options.resolution ?? "committed";
   const noOp = resolution === "abandoned" || resolution === "unproved";
-  return { schema_version: schemas.LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA, runtime_root: f.root, goal_id: "goal-a",
+  return { runtime_root: f.root, goal_id: "goal-a",
     entry: { capture_lineage_id: binding.capture_lineage_id, entry_id: entryId, partition, seq, writer, source,
       source_root_digest: binding.source_root_digest, prepared_at: preparedAt, committed_at: marker ? committedAt : null,
       prepared_sha256: sha(preparedBytes), committed_sha256: marker ? sha(markerBytes) : null, resolution },
@@ -108,4 +108,13 @@ export async function settleFiles(f: ShadowFixture, request: JsonObject, result:
   }));
   await rm(join(directory, `${stem}.prepared.json`));
   await rm(join(directory, `${stem}.committed.json`), { force: true });
+}
+
+/** Production delivery sends identity and byte witnesses, not a second projection. */
+export function entrySelection(request: JsonObject): JsonObject {
+  const entry = request.entry as JsonObject;
+  return {schema_version: schemas.LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
+    runtime_root: request.runtime_root, goal_id: request.goal_id,
+    ...Object.fromEntries(["partition", "seq", "entry_id", "capture_lineage_id", "prepared_sha256", "committed_sha256"]
+      .map(key => [key, entry[key]]))};
 }

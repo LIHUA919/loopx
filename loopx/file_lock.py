@@ -886,8 +886,20 @@ def release_cross_runtime_mutation_lock(path: Path, *, token: str) -> bool:
     )
 
 
+def cross_runtime_lock_witness(path: Path) -> dict[str, object]:
+    """Internal handoff of a lock held by this process, never an Agent token.
+
+    The native effect must claim and recheck it before using adapted facts.
+    Its final save owns release; Python's later release is token-checked.
+    """
+    owner = _read_effect_mutation_owner(_effect_mutation_lock_path(path))
+    if owner is None or owner.get("pid") != os.getpid():
+        raise RuntimeError("checkpoint handoff requires the caller's held mutation lock")
+    return {"target": str(path.resolve()), **owner}
+
+
 @contextmanager
-def exclusive_cross_runtime_file_lock(
+def exclusive_mutation_file_lock(
     path: Path,
     *,
     policy: LockAcquisitionPolicy | str = LockAcquisitionPolicy.MUTATION,
@@ -896,13 +908,7 @@ def exclusive_cross_runtime_file_lock(
     agent_id: str | None = None,
     operation: str | None = None,
 ) -> Iterator[Path]:
-    """Hold the TypeScript mutation lock, then the existing Python lock.
-
-    This is a bounded migration lock for state whose writers span both
-    runtimes. TypeScript coordinates through exclusive creation of
-    ``<target>.ts-effect.lock``; Python keeps its kernel lock underneath so
-    existing diagnostics and Python-to-Python exclusion remain unchanged.
-    """
+    """Hold the existing TypeScript mutation marker and its token/claim protocol."""
 
     selected_policy = _policy(policy)
     defaults = LOCK_POLICIES[selected_policy]
@@ -966,15 +972,7 @@ def exclusive_cross_runtime_file_lock(
         break
 
     try:
-        with exclusive_file_lock(
-            path,
-            policy=selected_policy,
-            timeout_seconds=timeout,
-            poll_interval_seconds=poll_interval,
-            agent_id=agent_id,
-            operation=operation,
-        ) as lock_path:
-            yield lock_path
+        yield effect_lock_path
     finally:
         _release_effect_mutation_lock(
             effect_lock_path,
@@ -984,3 +982,39 @@ def exclusive_cross_runtime_file_lock(
             # original exception; stale-owner recovery handles a later retry.
             suppress_errors=True,
         )
+
+
+@contextmanager
+def exclusive_cross_runtime_file_lock(
+    path: Path,
+    *,
+    policy: LockAcquisitionPolicy | str = LockAcquisitionPolicy.MUTATION,
+    timeout_seconds: float | None = None,
+    poll_interval_seconds: float | None = None,
+    agent_id: str | None = None,
+    operation: str | None = None,
+) -> Iterator[Path]:
+    """Source writers retain their existing order: mutation marker, then kernel."""
+    with exclusive_mutation_file_lock(
+        path, policy=policy, timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds, agent_id=agent_id, operation=operation,
+    ):
+        with exclusive_file_lock(
+            path, policy=policy, timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds, agent_id=agent_id, operation=operation,
+        ) as lock_path:
+            yield lock_path
+
+
+@contextmanager
+def exclusive_run_index_lock(path: Path, *, operation: str) -> Iterator[Path]:
+    """Goal indexes use kernel then marker, matching existing quota adapters.
+
+    Native writers take only the marker, never the kernel lock. Python callers
+    must enter here before any source lock; no index path may use the reverse
+    order from exclusive_cross_runtime_file_lock. A native checkpoint effect
+    claims the marker until append completes, including after caller exit.
+    """
+    with exclusive_file_lock(path, operation=operation) as lock_path:
+        with exclusive_mutation_file_lock(path, operation=operation):
+            yield lock_path

@@ -4,9 +4,10 @@ from ..control_plane.quota.effective_action import EffectiveAction
 import argparse
 import json
 import shlex
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..cli_rollout import append_cli_rollout_event
 from ..capabilities.explore.composition_frontier import (
@@ -20,6 +21,7 @@ from ..capabilities.reward_memory import (
 )
 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
+from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
@@ -87,6 +89,86 @@ PrintPayload = Callable[
     None,
 ]
 FormatSelector = Callable[..., str]
+
+
+class ManagedCadenceStart(NamedTuple):
+    """Owner-cadence callbacks for one managed Turn start.
+
+    `admit` reserves (or resumes) the interval slot before any host or journal
+    attempt; `confirm` marks that reservation as a real host attempt once the
+    Turn journal is durable. Keeping them separate means a crash in between
+    leaves a resumable reservation rather than a permanently rejected Turn.
+    """
+
+    admit: Callable[[Mapping[str, Any]], dict[str, Any]]
+    confirm: Callable[[], None]
+
+
+def managed_cadence_start(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str | None,
+    automation_id: str | None,
+    manual_reason: str | None,
+    on_admitted: Callable[[], None] | None = None,
+) -> ManagedCadenceStart:
+    """Bind one managed Turn start to the TypeScript owner-cadence store."""
+
+    admitted_request: dict[str, Any] = {}
+
+    def admit(identity: Mapping[str, Any]) -> dict[str, Any]:
+        now_ms = time.time_ns() // 1_000_000
+        request_id = f"{identity['turn_key']}:{identity['attempt']}"
+        admission = effect_runtime_result(
+            "quota.automation_cadence.admit",
+            {
+                "runtime_root": str(runtime_root),
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "automation_id": automation_id,
+                "request_id": request_id,
+                "trigger_at_ms": now_ms,
+                "now_ms": now_ms,
+                "manual_reason": manual_reason,
+            },
+            retry_safe=False,
+        )
+        admitted_request.clear()
+        if admission.get("admitted") is True:
+            admitted_request["request_id"] = request_id
+            admitted_request["reserved"] = admission.get("reserved") is True
+            if on_admitted is not None:
+                on_admitted()
+        return {
+            key: admission.get(key)
+            for key in (
+                "admitted", "reserved", "resumed", "reason", "next_eligible_at_ms",
+                "min_interval_minutes", "pre_model_admission",
+            )
+        }
+
+    def confirm() -> None:
+        request_id = admitted_request.get("request_id")
+        if admitted_request.get("reserved") is not True or not isinstance(request_id, str):
+            return
+        confirmation = effect_runtime_result(
+            "quota.automation_cadence.confirm_start",
+            {
+                "runtime_root": str(runtime_root),
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "automation_id": automation_id,
+                "request_id": request_id,
+            },
+            retry_safe=True,
+        )
+        if confirmation.get("confirmed") is not True:
+            raise ValueError(
+                "managed Turn start could not be confirmed against the owner cadence store"
+            )
+
+    return ManagedCadenceStart(admit=admit, confirm=confirm)
 
 
 
@@ -395,22 +477,14 @@ def handle_turn_command(
                 and persisted_effect_id != settlement_identity.effect_id
             ):
                 raise ValueError("Turn settlement identity effect_id is inconsistent")
-            if args.execute:
-                ensure_turn_heartbeat_settlement_receipt(
-                    runtime_root,
-                    settlement_identity,
-                    semantic_replan_guard_scoped=(
-                        "replan_action_packet" in envelope
-                    ),
-                    semantic_replan_obligation_id=(
-                        replan_obligation_id_from_packet(
-                            envelope.get("replan_action_packet")
-                        )
-                        if "replan_action_packet" in envelope
-                        else None
-                    ),
-                )
-
+            stable_envelope: Mapping[str, Any] = (
+                envelope if isinstance(envelope, Mapping) else {}
+            )
+            replan_guard_scoped = "replan_action_packet" in stable_envelope
+            replan_obligation_id = (
+                replan_obligation_id_from_packet(stable_envelope.get("replan_action_packet"))
+                if replan_guard_scoped else None
+            )
             def require_effect_ref(
                 effect_ref: str,
                 step_kind: SettlementStepKind,
@@ -1049,6 +1123,23 @@ def handle_turn_command(
                     settlement_evidence=settlement_evidence,
                 )
 
+            def on_managed_start_admitted() -> None:
+                ensure_turn_heartbeat_settlement_receipt(
+                    runtime_root,
+                    settlement_identity,
+                    semantic_replan_guard_scoped=replan_guard_scoped,
+                    semantic_replan_obligation_id=replan_obligation_id,
+                )
+
+            managed_cadence = managed_cadence_start(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                automation_id=args.automation_id,
+                manual_reason=args.manual_interval_bypass_reason,
+                on_admitted=on_managed_start_admitted,
+            )
+
             payload = run_loopx_turn_once(
                 payload,
                 host_argv=raw_argv,
@@ -1077,6 +1168,8 @@ def handle_turn_command(
                     if args.execute and args.host == "codex-cli"
                     else None
                 ),
+                admit_start=managed_cadence.admit if args.execute else None,
+                confirm_start=managed_cadence.confirm if args.execute else None,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

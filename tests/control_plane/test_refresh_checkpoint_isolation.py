@@ -181,6 +181,10 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
         if baseline else ["--vision-summary", "Validate the scoped change.",
                           "--vision-acceptance", "Focused validation passes."]
     )
+    assert "loopx checkpoint-context" in stdout
+    context = run([*prefix, "checkpoint-context", *binding,
+                   "--project", str(project), "--state-file", str(state_path)])
+    vision += ["--checkpoint-read-context", context["read_context_id"]]
     recovery = _recovery_argv(stdout, original, vision)
     # Independent oracle: recovery retains every fixture argument except this mutation.
     position = original.index("--next-action")

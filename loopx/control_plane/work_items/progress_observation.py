@@ -220,12 +220,35 @@ def _has_new_terminal_coverage(
     return False
 
 
+def _normalized_window(
+    window: Iterable[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Normalize the typed observations an obligation window already holds."""
+
+    normalized: list[dict[str, Any]] = []
+    for item in window or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            normalized.append(normalize_progress_observation(item))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return normalized
+
+
 def semantic_progress_delta(
     observation: Mapping[str, Any] | None,
     *,
     baseline: Mapping[str, Any] | None,
+    window: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Qualify a typed observation as a replan-closing semantic delta."""
+    """Qualify a typed observation as a replan-closing semantic delta.
+
+    `baseline` is the observation the delta kinds are computed against.
+    `window` lists every typed observation already claimed while the
+    obligation formed; the codec reports novelty facts against the whole
+    window so an outcome owner can refuse a replayed claim.
+    """
 
     if not isinstance(observation, Mapping):
         return {"accepted": False, "reason": "typed progress observation missing"}
@@ -235,6 +258,7 @@ def semantic_progress_delta(
         if isinstance(baseline, Mapping)
         else None
     )
+    claimed = _normalized_window(window)
     result_class = current["result_class"]
     delta_kinds: list[str] = []
     if result_class == ProgressResultClass.ADVANCED.value:
@@ -271,10 +295,24 @@ def semantic_progress_delta(
             and _has_new_terminal_coverage(current, prior)
         ):
             delta_kinds.append("coverage_backed_no_followup")
+    # Novelty facts are computed here against the baseline and every claim in
+    # the obligation window; which obligation sources require them behind a
+    # renamed surface, hypothesis or probe family is decided by the TypeScript
+    # outcome owner (work_item.replan_semantics).
+    known_evidence: set[str] = set(prior.get("evidence_ids") or []) if prior else set()
+    known_fingerprints: set[str] = {prior["fingerprint"]} if prior else set()
+    for item in claimed:
+        known_evidence.update(item.get("evidence_ids") or [])
+        known_fingerprints.add(item["fingerprint"])
+    evidence_novel = bool(set(current.get("evidence_ids") or []) - known_evidence)
+    observation_repeated = current["fingerprint"] in known_fingerprints
     return {
         "schema_version": "replan_semantic_delta_v0",
         "accepted": bool(delta_kinds),
         "delta_kinds": delta_kinds,
+        "evidence_novel": evidence_novel,
+        "observation_repeated": observation_repeated,
+        "window_size": len(claimed),
         "observation_fingerprint": current["fingerprint"],
         "baseline_fingerprint": prior.get("fingerprint") if prior else None,
         "reason": (
@@ -360,9 +398,21 @@ def semantic_delta_from_writeback(
             ),
             None,
         )
+    window = obligation.get("progress_window")
+    if not isinstance(window, list):
+        window = next(
+            (
+                trigger.get("progress_window")
+                for trigger in (obligation.get("triggers") or [])
+                if isinstance(trigger, Mapping)
+                and isinstance(trigger.get("progress_window"), list)
+            ),
+            None,
+        )
     observation_delta = semantic_progress_delta(
         progress_observation,
         baseline=baseline if isinstance(baseline, Mapping) else None,
+        window=window if isinstance(window, list) else None,
     )
     vision = dict(agent_vision) if isinstance(agent_vision, Mapping) else {}
     if vision:

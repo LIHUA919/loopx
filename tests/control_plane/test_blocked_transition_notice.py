@@ -21,6 +21,8 @@ from loopx.control_plane.quota.blocked_transition_notice import (
     build_blocked_transition_notice,
 )
 from loopx.control_plane.quota.should_run_prepare import _blocked_priority_fallback
+from loopx.control_plane.todos.summary_item import compact_todo_summary_item
+from loopx.control_plane.todos.todo_summary import project_asset_todo_summary
 from loopx.control_plane.work_items.interaction_contract import (
     _blocked_priority_fallback_user_reason,
 )
@@ -180,6 +182,56 @@ def test_blocked_primary_with_running_fallback_carries_the_notice() -> None:
     assert "Prepare independent documentation" in notices[0]["impact"]
     # The fallback keeps running; the notice does not gate delivery.
     assert fallback["selected_executable"]["todo_id"] == FALLBACK_TODO_ID
+
+
+def test_compact_blocked_advancement_keeps_cause_for_fallback_notice() -> None:
+    blocked = compact_todo_summary_item(
+        {**_agent_owned_blocker(), "note": "private detail", "evidence": "private path"}
+    )
+    selected = compact_todo_summary_item(_fallback())
+
+    assert blocked["reason"] == "Required input has not arrived"
+    assert "note" not in blocked
+    assert "evidence" not in blocked
+    fallback = _blocked_priority_fallback(
+        {"first_open_items": [blocked, selected], "first_executable_items": [selected]}
+    )
+    assert fallback is not None
+    assert fallback["blocked_transition_notices"][0]["cause"] == blocked["reason"]
+    assert "private detail" not in str(fallback)
+    assert "private path" not in str(fallback)
+
+
+def test_compact_open_advancement_does_not_project_unneeded_reason() -> None:
+    open_item = {**_fallback(), "reason": "not an active blocker"}
+
+    assert "reason" not in compact_todo_summary_item(open_item)
+
+
+def test_compact_blocked_advancement_omits_unsafe_reason() -> None:
+    blocked = {
+        **_agent_owned_blocker(),
+        "reason": "/" + "Users/example/private/plan.md",
+    }
+
+    assert "reason" not in compact_todo_summary_item(blocked)
+
+
+def test_project_asset_blocked_advancement_cause_is_public_safe() -> None:
+    blocked = _agent_owned_blocker()
+    summary = {"items": [blocked], "first_open_items": [blocked], "open_count": 1}
+
+    asset = project_asset_todo_summary(summary, role="agent")
+    assert asset is not None
+    assert asset["items"][0]["reason"] == "Required input has not arrived"
+
+    unsafe = {**blocked, "reason": "/" + "Users/example/private/plan.md"}
+    unsafe_asset = project_asset_todo_summary(
+        {"items": [unsafe], "first_open_items": [unsafe], "open_count": 1},
+        role="agent",
+    )
+    assert unsafe_asset is not None
+    assert "reason" not in unsafe_asset["items"][0]
 
 
 def test_owner_facing_reason_carries_the_typed_notice() -> None:

@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from loopx.cli_commands import turn as turn_command
+from loopx.cli_commands.turn import ManagedCadenceStart, managed_cadence_start
+from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.turn_driver import executor as turn_executor
 from loopx.control_plane.turn_driver import (
     LOOPX_TURN_RESULT_SCHEMA_VERSION,
@@ -904,6 +907,223 @@ def test_run_once_preview_has_no_host_or_journal_effects(tmp_path: Path) -> None
     assert not (tmp_path / "runtime").exists()
 
 
+def test_managed_start_waits_before_host_and_replay_needs_no_new_admission(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    def wait(_identity: object) -> dict[str, object]:
+        calls["admit"] += 1
+        return {"admitted": False, "reason": "minimum_interval_wait", "next_eligible_at_ms": 9000}
+
+    common = dict(
+        host_runner=host, project=tmp_path, runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal", timeout_seconds=5, execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback, spend=spend, scheduler=scheduler,
+    )
+    denied = run_loopx_turn_once(plan, admit_start=wait, **common)
+    assert denied["status"] == "interval_wait"
+    assert denied["admission"]["next_eligible_at_ms"] == 9000
+    assert denied["effects"]["host_invoked"] is False
+    assert calls == {"host": 0, "admit": 1, "writeback": 0, "spend": 0, "scheduler": 0}
+    assert not list((tmp_path / "runtime" / "goals" / "fixture-goal" / "turns").glob("*.json"))
+
+    def allow(_identity: object) -> dict[str, object]:
+        calls["admit"] += 1
+        return {"admitted": True, "reserved": True, "reason": "admitted"}
+
+    committed = run_loopx_turn_once(plan, admit_start=allow, **common)
+    assert committed["status"] == "committed"
+    assert calls["host"] == 1
+    replay = run_loopx_turn_once(plan, admit_start=wait, **common)
+    assert replay["replayed"] is True
+    assert calls["admit"] == 2
+    assert calls["host"] == 1
+
+
+def _configure_managed_floor(runtime_root: Path, *, minutes_value: int) -> None:
+    """Write the owner floor through the shipped TypeScript cadence store."""
+
+    configured = effect_runtime_result(
+        "quota.automation_cadence.manage",
+        {
+            "runtime_root": str(runtime_root),
+            "goal_id": "fixture-goal",
+            "agent_id": None,
+            "automation_id": None,
+            "operation": "configure",
+            "expected_revision": 0,
+            "min_interval_minutes": minutes_value,
+            "owner_reference": "fixture-owner",
+            "execute": True,
+        },
+    )
+    assert configured["min_interval_minutes"] == minutes_value, configured
+
+
+def _cadence_starts(runtime_root: Path) -> list[dict[str, object]]:
+    """Read the real TypeScript cadence store that admits managed starts."""
+
+    stores = []
+    for path in sorted(runtime_root.rglob("*.json")):
+        if path.name.endswith(".lock.holder.json"):
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            isinstance(payload, dict)
+            and str(payload.get("schema_version", "")).startswith("automation_cadence_store")
+            and payload.get("goal_id") == "fixture-goal"
+        ):
+            stores.append(payload)
+    assert len(stores) == 1, stores
+    return list(stores[0]["starts"])
+
+
+class _FrozenTurnClock:
+    """Freeze the managed-start clock so a test can cross the owner floor."""
+
+    def __init__(self, now_ms: int) -> None:
+        self._now_ns = now_ms * 1_000_000
+
+    def time_ns(self) -> int:
+        return self._now_ns
+
+
+def _managed_cadence(runtime_root: Path) -> ManagedCadenceStart:
+    return managed_cadence_start(
+        runtime_root=runtime_root,
+        goal_id="fixture-goal",
+        agent_id="codex-fixture",
+        automation_id=None,
+        manual_reason=None,
+    )
+
+
+def _managed_start_fixture(
+    tmp_path: Path,
+) -> tuple[dict[str, object], Path, dict[str, int], dict[str, object]]:
+    plan = _plan()
+    runtime_root = tmp_path / "runtime"
+    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return _host_result(plan)
+
+    _configure_managed_floor(runtime_root, minutes_value=1)
+    return (
+        plan,
+        runtime_root,
+        calls,
+        {
+            "host_runner": host,
+            "project": tmp_path,
+            "runtime_root": runtime_root,
+            "goal_id": "fixture-goal",
+            "timeout_seconds": 5,
+            "execute": True,
+            "task_validator": _passing_validator,
+            "writeback": writeback,
+            "spend": spend,
+            "scheduler": scheduler,
+        },
+    )
+
+
+def test_reserved_managed_start_recovers_after_death_before_the_first_journal_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash between the cadence reservation and the journal must not strand a Turn.
+
+    The reservation is written by the real TypeScript cadence store and the
+    process is interrupted before any Turn journal write, so the restart asks
+    with the same request identity.
+    """
+
+    plan, runtime_root, calls, common = _managed_start_fixture(tmp_path)
+    turn_key = str(plan["transaction"]["turn_key"])  # type: ignore[index]
+
+    def die_after_reservation(identity: Mapping[str, object]) -> dict[str, object]:
+        reservation = _managed_cadence(runtime_root).admit(identity)
+        assert reservation["admitted"] is True and reservation["reserved"] is True
+        raise RuntimeError("simulated process death after the cadence reservation")
+
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        run_loopx_turn_once(plan, admit_start=die_after_reservation, **common)
+
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("reserved", f"{turn_key}:1")
+    ]
+    assert not list((runtime_root / "goals" / "fixture-goal" / "turns").glob("*.json"))
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+
+    started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
+    monkeypatch.setattr(turn_command, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    restart = _managed_cadence(runtime_root)
+    recovered = run_loopx_turn_once(
+        plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
+    )
+
+    assert recovered["status"] == "committed", recovered
+    assert recovered["admission"]["resumed"] is True
+    assert calls == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("started", f"{turn_key}:1")
+    ]
+
+
+def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same recovery holds when the journal exists without an attempt."""
+
+    plan, runtime_root, calls, common = _managed_start_fixture(tmp_path)
+    turn_key = str(plan["transaction"]["turn_key"])  # type: ignore[index]
+    cadence = _managed_cadence(runtime_root)
+    journal_writes = turn_executor._write_journal
+
+    def die_before_attempt_record(path: Path, journal: dict[str, object]) -> None:
+        if "host_attempt_count" in journal:
+            raise RuntimeError("simulated process death before the attempt record")
+        journal_writes(path, journal)
+
+    monkeypatch.setattr(turn_executor, "_write_journal", die_before_attempt_record)
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        run_loopx_turn_once(
+            plan, admit_start=cadence.admit, confirm_start=cadence.confirm, **common
+        )
+    monkeypatch.setattr(turn_executor, "_write_journal", journal_writes)
+
+    journal = _journal(runtime_root)
+    assert "host_attempt_count" not in journal
+    assert journal["admission"]["reserved"] is True
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("reserved", f"{turn_key}:1")
+    ]
+    assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+
+    started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
+    monkeypatch.setattr(turn_command, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    restart = _managed_cadence(runtime_root)
+    recovered = run_loopx_turn_once(
+        plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
+    )
+
+    assert recovered["status"] == "committed", recovered
+    assert calls == {"host": 1, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert [(row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)] == [
+        ("started", f"{turn_key}:1")
+    ]
+
+
 def test_run_once_rejects_oversized_built_in_host_result(tmp_path: Path) -> None:
     plan = _plan()
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
@@ -933,7 +1153,7 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
     tmp_path: Path,
 ) -> None:
     plan = _plan()
-    calls = {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
     writeback, spend, scheduler = _callbacks(calls)
 
     def host(_request: dict[str, object]) -> dict[str, object]:
@@ -941,6 +1161,11 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
         if calls["host"] == 1:
             raise BuiltInHostError("codex_cli_model_requires_newer_codex")
         return _host_result(plan)
+
+    def admit(identity: dict[str, object]) -> dict[str, object]:
+        calls["admit"] += 1
+        assert identity["attempt"] == (1 if calls["admit"] == 1 else 2)
+        return {"admitted": calls["admit"] != 2, "reason": "minimum_interval_wait"}
 
     kwargs = {
         "host_runner": host,
@@ -953,9 +1178,11 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
         "writeback": writeback,
         "spend": spend,
         "scheduler": scheduler,
+        "admit_start": admit,
     }
     failed = run_loopx_turn_once(plan, **kwargs)
     replayed = run_loopx_turn_once(plan, **kwargs)
+    waiting = run_loopx_turn_once(plan, retry_failed=True, **kwargs)
     recovered = run_loopx_turn_once(plan, retry_failed=True, **kwargs)
 
     assert failed["reason"] == "codex_cli_model_requires_newer_codex"
@@ -963,8 +1190,38 @@ def test_run_once_explicitly_retries_failed_host_without_duplicate_effects(
     assert failed["receipt"]["result_kind"] == "host_failure"
     assert failed["receipt"]["failed_phase"] == "host_execute"
     assert replayed["replayed"] is True
+    assert waiting["status"] == "interval_wait"
+    assert waiting["effects"]["host_invoked"] is False
     assert recovered["status"] == "committed"
-    assert calls == {"host": 2, "writeback": 1, "spend": 1, "scheduler": 1}
+    assert calls == {"host": 2, "admit": 3, "writeback": 1, "spend": 1, "scheduler": 1}
+
+
+def test_invalid_host_result_reinvocation_reenters_admission(tmp_path: Path) -> None:
+    plan = _plan()
+    calls = {"host": 0, "admit": 0, "writeback": 0, "spend": 0, "scheduler": 0}
+    writeback, spend, scheduler = _callbacks(calls)
+
+    def host(_request: object) -> dict[str, object]:
+        calls["host"] += 1
+        return {"invalid": True} if calls["host"] == 1 else _host_result(plan)
+
+    def admit(identity: dict[str, object]) -> dict[str, object]:
+        calls["admit"] += 1
+        assert identity["attempt"] == (1 if calls["admit"] == 1 else 2)
+        return {"admitted": calls["admit"] != 2, "reason": "minimum_interval_wait"}
+
+    common = dict(host_runner=host, admit_start=admit, project=tmp_path,
+        runtime_root=tmp_path / "runtime", goal_id="fixture-goal", timeout_seconds=5,
+        execute=True, task_validator=_passing_validator, writeback=writeback,
+        spend=spend, scheduler=scheduler)
+    first = run_loopx_turn_once(plan, **common)
+    waiting = run_loopx_turn_once(plan, retry_failed=True, **common)
+    recovered = run_loopx_turn_once(plan, retry_failed=True, **common)
+
+    assert first["result_kind"] == "validation_failed"
+    assert waiting["status"] == "interval_wait" and waiting["effects"]["host_invoked"] is False
+    assert recovered["status"] == "committed"
+    assert calls == {"host": 2, "admit": 3, "writeback": 1, "spend": 1, "scheduler": 1}
 
 
 def test_run_once_bounds_provider_capacity_retries_without_spending_quota(

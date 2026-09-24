@@ -26,8 +26,11 @@ DEFAULT_UPDATE_REPO = "loopx-project/loopx"
 DEFAULT_UPDATE_REF = "stable"
 ROLLBACK_PREVIOUS_ALIAS = "previous"
 SOURCE_VERSION_CHECK_SCHEMA_VERSION = "loopx_source_version_check_v0"
+SOURCE_COMMIT_CHECK_SCHEMA_VERSION = "loopx_source_commit_check_v0"
 SOURCE_VERSION_CHECK_TIMEOUT_SECONDS = 3
 SOURCE_VERSION_READ_LIMIT_BYTES = 64 * 1024
+SOURCE_COMMIT_CHECK_TIMEOUT_SECONDS = 3
+SOURCE_COMMIT_READ_LIMIT_BYTES = 256
 PERSISTED_PYTHON_FILENAME = ".loopx-python"
 _PACKAGE_VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"$', re.MULTILINE)
 
@@ -213,6 +216,72 @@ def _source_version_check(source: dict[str, Any]) -> dict[str, Any]:
         "version_tag": f"v{version}",
         "source_url": source_url,
     }
+
+
+def _source_commit_check(
+    source: dict[str, Any], *, installed_commit: Any, allow_remote: bool
+) -> dict[str, Any]:
+    """Resolve the selected archive ref, not merely its package version.
+
+    A moving branch can change while ``__version__`` and the local install-age
+    window stay the same. The GitHub SHA media type keeps this read bounded;
+    an offline/invalid response remains unknown, never evidence of equality.
+    """
+
+    base = {
+        "schema_version": SOURCE_COMMIT_CHECK_SCHEMA_VERSION,
+        "attempted": False,
+        "status": "skipped",
+        "installed_commit": installed_commit,
+        "target_commit": None,
+        "matches_current": None,
+        "source_url": None,
+        "reason": None,
+    }
+    if source.get("channel") == "github_archive_url_override":
+        return {**base, "reason": "custom archive URL has no trusted GitHub ref identity"}
+    repo = str(source.get("repo") or "")
+    ref = str(source.get("ref") or "")
+    parts = repo.split("/")
+    if len(parts) != 2 or not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts) or not ref:
+        return {**base, "reason": "GitHub owner/name and ref are required"}
+    if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        target = ref.lower()
+        return {**base, "status": "available", "target_commit": target,
+                "matches_current": installed_commit.lower() == target
+                if isinstance(installed_commit, str) else None,
+                "reason": "immutable ref identifies its own commit"}
+    if not allow_remote:
+        return {**base, "status": "not_requested",
+                "reason": "source comparison omitted for an injected doctor snapshot"}
+
+    owner, name = parts
+    source_url = (
+        "https://api.github.com/repos/"
+        f"{quote(owner, safe='')}/{quote(name, safe='')}/commits/{quote(ref, safe='')}"
+    )
+    request = Request(
+        source_url,
+        headers={"Accept": "application/vnd.github.sha", "User-Agent": "LoopX-update-check"},
+    )
+    try:
+        with urlopen(  # noqa: S310 - repo/ref are validated and the host is fixed.
+            request, timeout=SOURCE_COMMIT_CHECK_TIMEOUT_SECONDS
+        ) as response:
+            body = response.read(SOURCE_COMMIT_READ_LIMIT_BYTES).decode("ascii").strip()
+    except Exception as exc:  # Remote comparison is advisory and must degrade offline.
+        return {**base, "attempted": True, "status": "unavailable",
+                "source_url": source_url,
+                "reason": f"remote commit check unavailable ({type(exc).__name__})"}
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", body):
+        return {**base, "attempted": True, "status": "unavailable",
+                "source_url": source_url, "reason": "remote commit response was not a full SHA"}
+    target = body.lower()
+    return {**base, "attempted": True, "status": "available",
+            "target_commit": target,
+            "matches_current": installed_commit.lower() == target
+            if isinstance(installed_commit, str) else None,
+            "source_url": source_url}
 
 
 def _release_root_from_doctor(doctor_payload: dict[str, Any]) -> str | None:
@@ -564,10 +633,32 @@ def build_update_plan(
             if isinstance(current_version, str) and current_version
             else None
         )
+    source_commit_check = (
+        _source_commit_check(
+            source,
+            installed_commit=install_freshness.get("manifest_source_git_commit"),
+            allow_remote=doctor_payload is None,
+        )
+        if not execute and lifecycle["owner"] == "loopx_release_snapshot"
+        else {"schema_version": SOURCE_COMMIT_CHECK_SCHEMA_VERSION,
+              "attempted": False, "status": "not_requested",
+              "installed_commit": install_freshness.get("manifest_source_git_commit"),
+              "target_commit": None, "matches_current": None, "source_url": None,
+              "reason": "source commit comparison applies to snapshot check/plan"}
+    )
     runtime_activation = (
         runtime_activation_qualification(
             install_freshness=install_freshness,
             source=source,
+            resolved_source_commit=(
+                source_commit_check.get("target_commit")
+                if source_commit_check.get("status") == "available"
+                else None
+            ),
+            selected_source_unresolved=(
+                not execute
+                and source_commit_check.get("status") in {"unavailable", "not_requested"}
+            ),
         )
         if lifecycle["owner"] == "loopx_release_snapshot"
         else {
@@ -649,6 +740,17 @@ def build_update_plan(
             "installed runtime activation is not proven; refresh trusted source lineage "
             "before claiming the merged behavior is active"
         )
+    elif source_commit_check.get("matches_current") is False:
+        recommended_action = (
+            "selected source commit differs from the installed release; compare its "
+            "lineage or run `loopx update apply` to install the selected source"
+        )
+    elif runtime_activation.get("decision") == "activation_qualification_required":
+        recommended_action = (
+            "selected source activation is unproven; do not treat matching package "
+            "version or install age as current. Retry online or select an immutable "
+            "commit with `--ref` before deciding whether to update"
+        )
     elif (
         check_only
         and source_version_check.get("matches_current") is True
@@ -723,6 +825,7 @@ def build_update_plan(
         "next_action": next_action,
         "source": source,
         "source_version_check": source_version_check,
+        "source_commit_check": source_commit_check,
         "runtime_activation_qualification": runtime_activation,
         "current": {
             "loopx_command": path.get("loopx"),
@@ -1269,6 +1372,11 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
         if isinstance(payload.get("source_version_check"), dict)
         else {}
     )
+    source_commit_check = (
+        payload.get("source_commit_check")
+        if isinstance(payload.get("source_commit_check"), dict)
+        else {}
+    )
     runtime_activation = (
         payload.get("runtime_activation_qualification")
         if isinstance(payload.get("runtime_activation_qualification"), dict)
@@ -1331,6 +1439,9 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
             f"- Source version tag: `{source_version_check.get('version_tag')}`",
             f"- Source version matches current: `{source_version_check.get('matches_current')}`",
             f"- Source version check reason: {source_version_check.get('reason')}",
+            f"- Source commit check: `{source_commit_check.get('status')}`",
+            f"- Source commit matches current: `{source_commit_check.get('matches_current')}`",
+            f"- Source commit check reason: {source_commit_check.get('reason')}",
             f"- Runtime activation decision: `{runtime_activation.get('decision')}`",
             f"- Runtime active: `{runtime_activation.get('runtime_active')}`",
             f"- Installed source commit: `{runtime_activation.get('installed_source_commit')}`",

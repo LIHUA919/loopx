@@ -9,6 +9,7 @@ from .control_plane.coordination.runtime_shadow_writer_adapter import require_ru
 from .control_plane.projects.registry_codec import (
     load_project_registry,
     project_registry_transaction,
+    require_runtime_compatible_project_registry,
 )
 from typing import Any
 
@@ -75,7 +76,12 @@ def now_iso() -> str:
 def read_json_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return load_project_registry(path)
+    payload = load_project_registry(path)
+    require_runtime_compatible_project_registry(
+        payload,
+        operation="bootstrap",
+    )
+    return payload
 
 
 def resolve_project_path(project: Path, path: Path | None) -> Path | None:

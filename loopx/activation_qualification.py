@@ -35,23 +35,24 @@ def runtime_activation_qualification(
     *,
     install_freshness: dict[str, Any],
     source: dict[str, Any],
+    resolved_source_commit: str | None = None,
+    selected_source_unresolved: bool = False,
 ) -> dict[str, Any]:
     """Return the typed activation qualification for an archive-snapshot install."""
 
     installed_commit = install_freshness.get("manifest_source_git_commit")
     target_commit = install_freshness.get("freshness_source_git_commit")
     revision_relation = install_freshness.get("manifest_source_freshness_relation")
-    selected_commit = _immutable_source_commit(source)
-    if selected_commit and not target_commit:
-        # An immutable ref names its own commit, so the qualification resolves it
-        # the same way the installer does instead of reporting that the
-        # installed-versus-target lineage is unavailable.
+    selected_commit = _immutable_source_commit(source) or resolved_source_commit
+    if selected_commit and target_commit != selected_commit:
+        # A selected immutable ref or freshly resolved remote ref supersedes a
+        # doctor comparison for a different or older source. Its commit can
+        # prove equality, but not ancestry when the object graph is absent.
         target_commit = selected_commit
-        if (
-            isinstance(installed_commit, str)
-            and installed_commit.lower() == selected_commit
-        ):
-            revision_relation = "same"
+        revision_relation = (
+            "same" if isinstance(installed_commit, str)
+            and installed_commit.lower() == selected_commit else None
+        )
     qualified_repo = install_freshness.get("manifest_source_repo")
     qualified_ref = install_freshness.get("manifest_source_ref")
     selected_repo = source.get("repo")
@@ -64,21 +65,37 @@ def runtime_activation_qualification(
         isinstance(commit, str) and bool(commit)
         for commit in (installed_commit, target_commit)
     )
-    source_identity_matches = all(
+    repo_matches = all(
         isinstance(value, str) and bool(value)
-        for value in (qualified_repo, qualified_ref, selected_repo, selected_ref)
+        for value in (qualified_repo, selected_repo)
     ) and (
         str(qualified_repo).removesuffix(".git").lower()
         == str(selected_repo).removesuffix(".git").lower()
-        and str(qualified_ref).removeprefix("refs/heads/")
+    )
+    ref_matches = all(
+        isinstance(value, str) and bool(value)
+        for value in (qualified_ref, selected_ref)
+    ) and (
+        str(qualified_ref).removeprefix("refs/heads/")
         == str(selected_ref).removeprefix("refs/heads/")
     )
+    source_identity_matches = repo_matches and (ref_matches or bool(selected_commit))
 
     if package_matches_runtime is False:
         decision = "release_or_install_successor_required"
         runtime_active: bool | None = False
         successor_kind = "release_or_install"
         reason = "release manifest package version does not match the active runtime"
+    elif source.get("channel") == "github_archive_url_override":
+        decision = "activation_qualification_required"
+        runtime_active = None
+        successor_kind = "activation_qualification"
+        reason = "custom archive URL is not identified by the selected GitHub ref"
+    elif selected_source_unresolved:
+        decision = "activation_qualification_required"
+        runtime_active = None
+        successor_kind = "activation_qualification"
+        reason = "selected mutable source ref could not be resolved to a current commit"
     elif not source_identity_matches:
         decision = "activation_qualification_required"
         runtime_active = None

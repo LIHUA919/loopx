@@ -110,6 +110,7 @@
 .goal-team-result-check { margin-left: auto; visibility: hidden; }
 .goal-team-result-list button[aria-pressed="true"] .goal-team-result-check { visibility: visible; }
 .goal-team-result-reader { min-width: 0; border-left: 1px solid var(--pw-line); padding-left: 24px; }
+.goal-team-result-reader > details:first-child summary { font-size: 14px; font-weight: 500; }
 .goal-team-results .goal-team-report { padding: 24px 0; }
 .goal-team-result-reader > label { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
 .goal-team-result-reader select { max-width: 100%; }

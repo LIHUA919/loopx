@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Callable
 
 from ..runtime.public_safety import (
@@ -8,6 +9,7 @@ from ..runtime.public_safety import (
     compact_text as _compact_text,
     public_safe_compact_text as _runtime_public_safe_compact_text,
 )
+from ..todos.todo_semantics import todo_blocker_reason
 from .autonomous_replan_obligation import run_history_agent_id
 
 
@@ -259,12 +261,24 @@ def attach_active_state_project_asset_fields(
     latest_runs: list[dict[str, Any]] | None = None,
     next_action_projection_warning: Callable[..., dict[str, Any] | None] | None = None,
     autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None] | None = None,
+    external_progress_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
         return {}
 
     attached: dict[str, Any] = {}
+    if isinstance(external_progress_review, dict):
+        review_summary = external_progress_review.get("summary")
+        if isinstance(review_summary, dict):
+            item["external_progress_review"] = review_summary
+            project_asset["external_progress_review"] = review_summary
+            attached["external_progress_review"] = review_summary
+        if autonomous_replan_obligation_from_runs is not None:
+            autonomous_replan_obligation_from_runs = partial(
+                autonomous_replan_obligation_from_runs,
+                external_progress_review=external_progress_review,
+            )
     active_next_action = item.get("active_state_next_action")
     if active_next_action:
         project_asset["active_state_next_action"] = active_next_action
@@ -547,6 +561,9 @@ def _project_asset_display_todo_item(item: dict[str, Any]) -> dict[str, Any]:
     title = _compact_text(str(item.get("title") or ""), limit=220)
     if title:
         display["title"] = title
+    reason = todo_blocker_reason(item)
+    if reason:
+        display["reason"] = reason
     return display
 
 

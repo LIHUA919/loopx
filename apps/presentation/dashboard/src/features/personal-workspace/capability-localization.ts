@@ -25,6 +25,10 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "Change quality qualification",
       description: "Prepares a provider-neutral review packet, allows at most one policy-authorized safe-fix pass, and can require an exact-diff receipt.",
     },
+    progress_review: {
+      displayName: "Progress-review sentinel",
+      description: "Records typed drift receipts from an external bounded review of scoped file deltas; assist may raise the existing autonomous replan obligation.",
+    },
     explore_graph: {
       displayName: "Explore Graph",
       description: "Organizes bounded exploration as a typed evidence graph so branches, findings, and synthesis remain inspectable.",
@@ -84,6 +88,10 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     change_quality_qualification: {
       displayName: "变更质量验证",
       description: "生成与 Provider 无关的审阅包，最多允许一次策略授权的安全修复，并可要求精确 diff 回执。",
+    },
+    progress_review: {
+      displayName: "进展评估哨兵",
+      description: "记录外部有界评估对限定文件变化给出的类型化漂移回执；assist 模式可触发已有的自主重规划义务。",
     },
     explore_graph: {
       displayName: "探索图谱",

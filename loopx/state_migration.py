@@ -16,6 +16,7 @@ from .control_plane.projects.registry_codec import (
     ProjectRegistryTransaction,
     load_project_registry,
     project_registry_transaction,
+    require_runtime_compatible_project_registry,
 )
 from .control_plane.todos.active_state_editing import atomic_write_state_text
 from .control_plane.coordination.legacy_writer_fence import legacy_coordination_todo_lock_path, require_legacy_state_replacement_allowed
@@ -406,6 +407,10 @@ def migrate_legacy_state(
             else load_project_registry(target_registry_path)
             if target_registry_path.exists()
             else {}
+        )
+        require_runtime_compatible_project_registry(
+            existing_registry,
+            operation="state migration",
         )
         existing_goals = existing_registry.get("goals")
         if not isinstance(existing_goals, list):

@@ -28,8 +28,8 @@ TARGET_COMMIT = "2" * 40
 
 
 class FakeVersionResponse:
-    def __init__(self) -> None:
-        self.body = f'__version__ = "{__version__}"\n'.encode()
+    def __init__(self, body: bytes | None = None) -> None:
+        self.body = body if body is not None else f'__version__ = "{__version__}"\n'.encode()
 
     def __enter__(self) -> FakeVersionResponse:
         return self
@@ -91,6 +91,90 @@ def build_check(doctor: dict[str, object], *, ref: str = "main") -> dict[str, ob
             check_only=True,
             doctor_payload=doctor,
         )
+
+
+def build_live_check(
+    doctor: dict[str, object], *, remote_commit: str
+) -> dict[str, object]:
+    def response(request: object, **_kwargs: object) -> FakeVersionResponse:
+        url = getattr(request, "full_url", "")
+        return FakeVersionResponse(
+            remote_commit.encode()
+            if "/commits/main" in url
+            else f'__version__ = "{__version__}"\n'.encode()
+        )
+
+    with mock.patch("loopx.self_update.collect_doctor", return_value=doctor), mock.patch(
+        "loopx.self_update.urlopen", side_effect=response
+    ):
+        return build_update_plan(
+            repo="example/loopx", ref="main", check_only=True
+        )
+
+
+def test_update_plan_resolves_mutable_ref_commit_before_claiming_no_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    doctor = doctor_payload(target_commit=None, relation="same")
+    freshness = doctor["install_freshness"]
+    assert isinstance(freshness, dict)
+    freshness["requires_upgrade"] = False
+    monkeypatch.setattr("loopx.self_update.collect_doctor", lambda: doctor)
+    monkeypatch.setattr(
+        "loopx.self_update.urlopen",
+        lambda request, **_kwargs: FakeVersionResponse(
+            TARGET_COMMIT.encode()
+            if "/commits/main" in request.full_url
+            else f'__version__ = "{__version__}"\n'.encode()
+        ),
+    )
+
+    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    commit_check = payload["source_commit_check"]
+    assert commit_check["status"] == "available"
+    assert commit_check["matches_current"] is False
+    assert commit_check["target_commit"] == TARGET_COMMIT
+    assert payload["runtime_activation_qualification"]["runtime_active"] is not True
+    assert "no update needed" not in payload["recommended_action"]
+
+
+def test_update_plan_accepts_exact_commit_under_pinned_install_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    doctor = doctor_payload(
+        target_commit=None, relation="same", source_ref=INSTALLED_COMMIT
+    )
+    freshness = doctor["install_freshness"]
+    assert isinstance(freshness, dict)
+    freshness["requires_upgrade"] = False
+    monkeypatch.setattr("loopx.self_update.collect_doctor", lambda: doctor)
+    monkeypatch.setattr(
+        "loopx.self_update.urlopen",
+        lambda *_args, **_kwargs: FakeVersionResponse(INSTALLED_COMMIT.encode()),
+    )
+
+    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    assert payload["source_commit_check"]["matches_current"] is True
+    assert payload["runtime_activation_qualification"]["decision"] == "runtime_active"
+    assert "no update needed" in payload["recommended_action"]
+
+
+def test_update_plan_offline_never_calls_unqualified_source_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Even an equal *locally cached* ref cannot prove the moving remote ref
+    # has not advanced while the source lookup is offline.
+    doctor = doctor_payload(target_commit=INSTALLED_COMMIT, relation="same")
+    freshness = doctor["install_freshness"]
+    assert isinstance(freshness, dict)
+    freshness["requires_upgrade"] = False
+    monkeypatch.setattr("loopx.self_update.collect_doctor", lambda: doctor)
+    monkeypatch.setattr("loopx.self_update.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")))
+
+    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    assert payload["source_commit_check"]["status"] == "unavailable"
+    assert payload["runtime_activation_qualification"]["decision"] == "activation_qualification_required"
+    assert "no update needed" not in payload["recommended_action"]
 
 
 @pytest.mark.parametrize("action", ["check", "plan"])
@@ -168,7 +252,7 @@ def test_update_readiness_remains_bounded_when_one_source_registry_stalls(
 
 
 def test_same_version_older_commit_requires_release_or_install_successor() -> None:
-    payload = build_check(doctor_payload())
+    payload = build_live_check(doctor_payload(), remote_commit=TARGET_COMMIT)
 
     assert payload["source_version_check"]["matches_current"] is True
     activation = payload["runtime_activation_qualification"]
@@ -184,8 +268,9 @@ def test_same_version_older_commit_requires_release_or_install_successor() -> No
 
 
 def test_equal_commit_proves_runtime_active() -> None:
-    payload = build_check(
-        doctor_payload(target_commit=INSTALLED_COMMIT, relation="same")
+    payload = build_live_check(
+        doctor_payload(target_commit=INSTALLED_COMMIT, relation="same"),
+        remote_commit=INSTALLED_COMMIT,
     )
 
     activation = payload["runtime_activation_qualification"]
@@ -193,6 +278,17 @@ def test_equal_commit_proves_runtime_active() -> None:
     assert activation["runtime_active"] is True
     assert activation["source_identity_matches"] is True
     assert activation["successor"] == {"required": False, "kind": None}
+
+
+def test_injected_doctor_snapshot_does_not_prove_current_mutable_ref() -> None:
+    payload = build_check(
+        doctor_payload(target_commit=INSTALLED_COMMIT, relation="same")
+    )
+    assert payload["source_commit_check"]["status"] == "not_requested"
+    assert payload["runtime_activation_qualification"]["decision"] == (
+        "activation_qualification_required"
+    )
+    assert "no update needed" not in payload["recommended_action"]
 
 
 def test_missing_commit_lineage_never_proves_runtime_active() -> None:
@@ -296,9 +392,10 @@ def test_cli_check_qualifies_explicit_installed_doctor_snapshot(tmp_path: Path) 
     payload = json.loads(result.stdout)
     assert payload["installed_doctor_source"] == "explicit_json"
     activation = payload["runtime_activation_qualification"]
-    assert activation["decision"] == "release_or_install_successor_required"
+    assert activation["decision"] == "activation_qualification_required"
     assert activation["installed_source_commit"] == INSTALLED_COMMIT
     assert activation["target_source_commit"] == TARGET_COMMIT
+    assert activation["reason"] == "custom archive URL is not identified by the selected GitHub ref"
 
 
 def test_update_actions_are_explicit_and_legacy_flags_remain_compatible() -> None:

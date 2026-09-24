@@ -88,8 +88,9 @@ def test_heartbeat_envelope_and_body_overflow_are_both_rejected() -> None:
         agent_scopes=["implementation", "review"],
     )
     check("heartbeat_prompt_json", payload)
-    # Passing the inner body check cannot hide extra envelope metadata.
-    envelope = {**payload, "extra": ""}
+    # Check the envelope boundary independently of the real prompt's remaining
+    # headroom: adding a metadata key can already put a valid prompt over budget.
+    envelope = {"interface_budget": payload["interface_budget"], "extra": ""}
     envelope["extra"] = "x" * (4800 - smoke["json_size"](envelope))
     check("heartbeat_prompt_json", envelope)
     envelope["extra"] += "x"

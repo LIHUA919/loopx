@@ -4,7 +4,7 @@ import {
   isStaleActionFailure,
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
-import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes } from "./team-plan-preview";
+import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from "react";
 import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
 
@@ -635,6 +635,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       : proposalStatus(proposal.status),
     teamPlanOutcome: proposal.action_kind === "team.plan" ? teamPlanAppliedOutcome(proposal.receipt) ?? undefined : undefined,
     teamPlanAssignments: proposal.action_kind === "team.plan" ? teamPlanAssignments(proposal.receipt, proposal.normalized_parameters) : undefined,
+    teamPlanTodoIds: proposal.action_kind === "team.plan" ? teamPlanTodoIds(proposal.receipt) : undefined,
     teamPlanGapLanes: proposal.action_kind === "team.plan"
       ? teamPlanReceiptGapLanes(proposal.receipt, proposal.normalized_parameters)
       : undefined,
@@ -1102,6 +1103,7 @@ export function PersonalWorkspacePage({
         const restoreable = stored
           .filter((proposal) => ["preview_ready", "gated", "deferred", "applying"].includes(proposal.status)
             || compileActionReviewPlan(proposal).retryOriginal === true
+            || (proposal.action_kind === "team.plan" && proposal.status === "applied")
             || (proposal.action_kind === "operation.execute" && proposal.status === "applied"))
           .map((proposal) => workspaceProposal(proposal, t));
         const restored = Object.fromEntries(restoreable.map((proposal) => [proposal.previewId, proposal]));
@@ -1890,7 +1892,7 @@ export function PersonalWorkspacePage({
       drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections} onClose={() => {
         if (drawerSelection.kind === "proposal"
           && ["applied", "rejected"].includes(drawerSelection.item.status)
-          && !(drawerSelection.item.actionKind === "heartbeat.bind" && drawerSelection.item.status === "applied")) {
+          && !(drawerSelection.item.status === "applied" && ["heartbeat.bind", "team.plan"].includes(drawerSelection.item.actionKind))) {
           setProposals((current) => {
             const next = { ...current };
             delete next[drawerSelection.item.previewId];
@@ -2009,7 +2011,8 @@ export function PersonalWorkspacePage({
             ) : !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.()} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
             ) : (
-              <ChannelTimeline items={managerChatItems} onSelect={setSelection} selectedGoal={null} />
+              <ChannelTimeline items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
+                onOpenGoalEvidence={(goalId) => { selectGoal(goalId); openGoalConversation(); }} />
             )}
           </div>
           <div className="personal-composer-wrap">

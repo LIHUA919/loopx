@@ -17,8 +17,10 @@ import sys
 from pathlib import Path
 
 from loopx.control_plane.projects.registry_codec import (
+    ProjectRegistryProtocolError,
     add_project_registry_backend,
     load_project_registry,
+    require_runtime_compatible_project_registry,
 )
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -70,10 +72,17 @@ def main():
             reg = proj / ".goal-harness" / "registry.json"
     if reg.exists():
         try:
-            load_project_registry(reg)
+            payload = load_project_registry(reg)
+            require_runtime_compatible_project_registry(
+                payload,
+                operation="Claude Goal adapter",
+            )
             print(f"[registry] mark agent_backends += claude  ({reg})")
             if not dry:
                 add_project_registry_backend(reg, "claude")
+        except ProjectRegistryProtocolError as e:
+            print(f"[registry] FAILED: {e}")
+            sys.exit(1)
         except Exception as e:
             print("  (registry annotate skipped:", e, ")")
     else:

@@ -1594,6 +1594,59 @@ export async function fetchGoalConfiguration(goalId: string) {
   );
 }
 
+const automationCadenceSourceSchema = z.object({
+  agent_id: z.string().nullable(),
+  automation_id: z.string().nullable(),
+  min_interval_minutes: z.number().int().nonnegative(),
+});
+
+export const automationCadenceSchema = z.object({
+  ok: z.literal(true),
+  schema_version: z.literal("chat_automation_cadence_v0"),
+  goal_id: z.string(),
+  agent_id: z.string().nullable(),
+  automation_id: z.string().nullable(),
+  configuration_revision: z.number().int().nonnegative(),
+  min_interval_minutes: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  enforcement: z.string(),
+  pre_model_admission: z.string(),
+  sources: z.array(automationCadenceSourceSchema),
+  preview_revision: z.string().optional(),
+  written: z.boolean().optional(),
+  readback_verified: z.boolean().optional(),
+});
+
+export type AutomationCadence = z.infer<typeof automationCadenceSchema>;
+export type AutomationCadenceChange = {
+  goal_id: string;
+  agent_id: string | null;
+  automation_id: string | null;
+  min_interval_minutes: number;
+  expected_revision: number;
+  owner_reference: string;
+  approve_reduction: boolean;
+};
+
+export async function fetchAutomationCadence(goalId: string, agentId: string | null, automationId: string | null) {
+  const query = new URLSearchParams({ goal_id: goalId });
+  if (agentId) query.set("agent_id", agentId);
+  if (automationId) query.set("automation_id", automationId);
+  return automationCadenceSchema.parse(await requestJson<unknown>(`/api/chat/automation-cadence?${query}`));
+}
+
+export async function previewAutomationCadence(change: AutomationCadenceChange) {
+  return automationCadenceSchema.parse(await requestJson<unknown>("/api/chat/automation-cadence/preview", {
+    method: "POST", body: JSON.stringify(change),
+  }));
+}
+
+export async function applyAutomationCadence(change: AutomationCadenceChange, previewRevision: string) {
+  return automationCadenceSchema.parse(await requestJson<unknown>("/api/chat/automation-cadence/apply", {
+    method: "POST", body: JSON.stringify({ ...change, preview_revision: previewRevision }),
+  }));
+}
+
 export async function previewGoalConfiguration(
   goalId: string,
   capabilityId: string,

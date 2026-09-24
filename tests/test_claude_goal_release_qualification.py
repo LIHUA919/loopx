@@ -156,6 +156,9 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 assert "successor_todo_ids" in complete.inputSchema["properties"]
                 assert "agent_vision" in complete.inputSchema["properties"]
                 assert "review_task_vision" in {t.name for t in tools.tools}
+                review = next(t for t in tools.tools if t.name == "review_task_vision")
+                assert review.inputSchema["required"] == ["todo_id", "agent_id"]
+                assert "read_context_id" in review.inputSchema["properties"]
                 guard = await session.call_tool("should_run", {})
                 payload = json.loads(guard.content[0].text)
                 assert payload["ok"] is True and payload["selected_todo"]["todo_id"] == "todo_reducer"

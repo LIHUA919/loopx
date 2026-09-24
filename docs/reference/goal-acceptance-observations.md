@@ -136,12 +136,38 @@ and retains the existing claim, lease/fence, permission and continuation gates.
 A prior verification receipt or a confirmed association cannot complete a task.
 Use `loopx todo claim --help` and `loopx todo complete --help` for the existing
 task arguments; this contract adds no bypass flags.
+When a fresh completion criterion fails, `todo complete` keeps the Todo open
+and returns `goal_acceptance_validation_failure_v0` with the criterion ID,
+privacy-safe validation status, exit code when available, and a bounded next
+action. A dirty or mismatched delivery worktree is diagnosed as a workspace
+failure, not as a stale owner association. Commands, output, local paths and
+arbitrary runner summaries are not projected. Retry under the same Turn and
+current lease after repairing the indicated execution context.
 
 Terminal observations, including `no_followup`, do not change the work digest:
 finishing a task must not stale the binding that just admitted its completion.
-Text, validation requirements and unknown future work fields still invalidate
-the association. Existing enabled contracts configured with a persisted
-`no_followup` field under the earlier digest rule require owner inspection and
+The v0 binding matcher also accepts a prior digest when the only intervening
+changes are a valid append-only completion-validator revision history or added
+successor links, or when a previously absent `resume_when` scheduling condition
+is added. It checks reconstructible prior states rather than rewriting
+owner bindings, so existing ready contracts retain their stored digests.
+Revised validators still undergo their own fresh completion check; Goal
+acceptance criteria remain separately configured and checked. Text, whether
+completion validation is required, repository/write-scope declarations, and
+unknown future work fields still invalidate the association. Replacing an
+existing `resume_when` is not reconstructible from the latest Todo and remains
+`stale`. When the agent's applicable Todo is genuinely stale, the existing
+Goal frontier projects its exact Todo ID as an agent-scoped replan trigger if
+no advancement Todo is selectable. The agent inspects the binding and work
+delta, restores an unintended edit or records an evidence-linked path change.
+The original Turn/Todo identity remains intact; a successor has its own identity.
+The agent cannot rebind
+owner-confirmed criteria, complete held work, or settle a different Todo under
+the old Turn; a true change to owner-owned criteria or scope still needs owner
+review. Only an evidence-linked runnable successor or concrete blocker receipt
+for this stale-binding trigger, recorded after the Todo update, quiets repeated
+wakeups until another material change. Existing enabled contracts configured
+with a persisted `no_followup` field under the earlier digest rule require owner inspection and
 reconfiguration; no historical receipt is rewritten or automatically accepted.
 Disabled/absent acceptance retains its existing behavior.
 
@@ -279,6 +305,23 @@ status 同时在独立的 `run_history.goals[].artifact_lifecycle` 和 Markdown 
 所有者通过重新配置确认当前关联；完成任务必须执行当前绑定的产物检查，并继续满足原有
 claim、lease/fence、权限和后续工作要求。既有验证回执或已确认的关联不能代替本次任务完成验证。
 任务参数沿用 `loopx todo claim --help`、`loopx todo complete --help`，没有绕过门禁的新参数。
+本次完成验收失败时，`todo complete` 保持 Todo 未完成，返回
+`goal_acceptance_validation_failure_v0`：验收项 ID、脱敏的验证状态、可得的退出码和有界
+下一步动作。工作区不干净或不匹配会明确归类为工作区失败，而非所有者关联过期；命令、输出、
+本地路径和执行器任意摘要不会投影。修复执行环境后沿原 Turn 和当前 lease 重试。
+
+终态观察不会让刚完成的任务关联过期。对既有 v0 绑定，若差异仅来自可校验的完成验证命令
+修订历史追加、后继任务链接追加，或此前不存在的 `resume_when` 调度条件新增，读出会比对
+可重建的旧状态并自动保留 `ready`，无需所有者
+重复确认，也不改写已保存的绑定摘要。修订后的命令仍须在完成时重新验证，Goal 验收条件
+也仍独立执行。任务文本、是否要求完成验证、仓库与写入范围等实质工作声明变化仍使关联
+过期；未知的新工作字段默认按实质变化处理。已有 `resume_when` 被替换时，当前 Todo
+无法证明旧值，仍保持 `stale`。适用的 Agent Todo 确实过期、且无可选推进任务时，现有
+Goal frontier 以原 Todo ID 产生 Agent 范围的重规划触发。Agent 核查关联与工作变化，
+恢复误改或记录有依据的路径变化。原 Turn/Todo 身份保持不变，后继有独立身份；Agent 不能自行重绑所有者确认
+的条件、完成受阻任务，或用原 Turn 结算另一条 Todo。真正改变所有者验收条件或范围的
+情况仍交所有者审阅。只有绑定该过期触发项、发生于 Todo 更新之后，并证明有依据的可运行
+后继或具体阻塞的回执，才会消解重复唤醒，直到再次出现实质变化。
 
 `loopx goal-acceptance verify --goal-id example-goal` 仅预览；加 `--execute` 执行全部配置条件，
 再运行 inspect 读回。进入 **概览 → 交付与依据**，刷新并展开交付链下方的 **Goal 验收合同**。

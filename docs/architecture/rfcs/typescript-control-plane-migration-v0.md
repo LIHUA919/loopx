@@ -22,6 +22,18 @@ Retain T0 caller/parity inventory, T1/T2 transaction/effect convergence, T3 comp
 
 ## Current implementation checkpoint
 
+Canonical collection transport now uses snapshot-bound, byte-bounded TS pages.
+The same `canonicalTodoCollection` owner validates both the retained direct list
+and paged reads; Python assembles complete pages and preserves the caller shape.
+This replaces the one-shot cross-language read without raising its 2 MiB budget
+or duplicating Todo/acceptance semantics in Python. Concurrent revisions fail the
+whole read; File read opening cannot create a missing authority. See the
+[paging contract](../../reference/canonical-snapshot-pagination.md) for limits
+and cost, and the shared-authority implementation sequence for the current
+**7–9 PR plan including this slice (6–8 after it lands)**. The more explicit split supersedes the earlier broad-package
+estimate; it does not claim D1–D3 closure.
+
+
 Canonical command observation now has one typed receipt/head boundary. Team,
 Todo creation/edit/claim/terminal/archive, Monitor, lease maintenance and Goal
 acceptance recheck receipts after the head read before interpreting new state.
@@ -41,7 +53,7 @@ removed; its retained boundary is source projection/locking and capture IO.
 The legacy scan includes event-only claims, and canonical mode receipts reuse
 command recovery with strict historical decisions. Full-source snapshot and
 real-provider validation guard this T1/T2 replacement. This closes a rule and
-caller discrepancy, not a whole default-cutover package; the conditional 5–8
+caller discrepancy, not a whole default-cutover package; the conditional 7–9
 package estimate remains. [Changed behavior and recovery](../../reference/handoff-mode.md).
 
 Terminal review and validation now converge in the existing TS terminal owner.
@@ -845,7 +857,7 @@ explicit runtime-root applies to both intent and Todo IO. Frozen editorial
 requests retain their original basis. See [operation and boundaries](../../../loopx/capabilities/periodic_report/README.md#todo-authority-and-report-retries).
 This closes that T3/L5 consumer family, not D1 permanent display freshness,
 D2 durability, D3 whole-Goal qualification or default-provider selection. The
-conditional 5–8 remaining delivery-package estimate is unchanged.
+conditional 7–9 remaining delivery-package estimate is unchanged.
 
 Todo summary lanes and pre-limit work counts now share `todos/summary_lanes.ts`.
 Python's lane classification and hidden-work inference loops are removed; quota
@@ -1807,6 +1819,8 @@ cannot be silently relaxed.
 The migration must not ask users to manage a service. The Python-transition
 release requires Node.js 22.18.0 or newer, but installer and `loopx doctor`
 must detect it before normal control-plane work and provide exact remediation.
+The current source checkout raises that floor to Node.js 22.22.3 because this
+release embeds the WAL-reset-fixed SQLite driver.
 The wheel and sdist carry the TS source and versioned schemas.
 
 The runtime is healthy while idle-exited: `stopped` means the next
@@ -1869,8 +1883,11 @@ Canonical single-Todo and full-source reads now have one read-only TypeScript
 module, separate from mutation orchestration and sharing the provider opening
 boundary. Projection delivery composes a revision confirmation with the existing
 full-source read; ordinary callers retain their response shape. Python owns
-physical Markdown durability/retry, not the current-head comparison. Three-attempt
-recovery and pinned-intent preservation use the existing journal-backed path;
+physical Markdown durability and rendering. TS owns current-head comparison,
+latest/pinned intent and bounded retry. Committed refresh and same-Turn recovery
+reuse that path, with one complete planning snapshot also owning missing-work
+diagnostics. This removes Python retry/admission policy and the promoted record's
+second Markdown-based Todo diagnosis;
 no new RPC method, durable ACK or provider default. The stronger confirmation
 costs one additional read on a stable delivery. Full L5/D1 qualification, D2 and
 cutover remain open; see the [projection contract](../../reference/protocols/active-state-structured-projection-v0.md).

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+
 from ..presentation.renderers.turn_envelope_markdown import (
     turn_envelope_budget_warning_lines,
 )
@@ -33,6 +36,14 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
 
 def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
     effects = payload.get("effects") if isinstance(payload.get("effects"), dict) else {}
+    raw_admission = payload.get("admission")
+    admission: dict[str, Any] = raw_admission if isinstance(raw_admission, dict) else {}
+    next_ms = admission.get("next_eligible_at_ms")
+    next_at = (
+        datetime.fromtimestamp(next_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        if isinstance(next_ms, (int, float)) and not isinstance(next_ms, bool)
+        else None
+    )
     receipt = payload.get("receipt") if isinstance(payload.get("receipt"), dict) else {}
     validation = (
         payload.get("validation") if isinstance(payload.get("validation"), dict) else {}
@@ -68,6 +79,11 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             "# LoopX Turn Run Once",
             f"- status: {payload.get('status')}",
             f"- result_kind: {payload.get('result_kind')}",
+            *(
+                [f"- interval_reason: {admission.get('reason')}",
+                 *([f"- next_eligible_at: {next_at}"] if next_at else [])]
+                if payload.get("status") == "interval_wait" else []
+            ),
             *(
                 [f"- execution_profile: {managed_executor['execution_profile']}"]
                 if managed_executor.get("execution_profile") else []

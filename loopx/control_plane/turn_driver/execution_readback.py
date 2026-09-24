@@ -64,6 +64,8 @@ def execution_payload(
         "scheduler": journal.get("scheduler"),
         **subagent.subagent_execution_payload_projection(journal),
         "effects": dict(effects),
+        **({"admission": dict(journal["admission"])}
+           if isinstance(journal.get("admission"), Mapping) else {}),
         "quota_slot_spend_count": 1 if quota_spent else 0,
         **(
             {"settlement_result": journal["settlement_result"]}

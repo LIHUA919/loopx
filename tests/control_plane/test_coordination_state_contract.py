@@ -29,7 +29,7 @@ from loopx.control_plane.coordination.coordination_state_contract_generated impo
     LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA,
     LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA,
-    LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
+    LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
     LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA,
 )
 from loopx.control_plane.turn_driver import delivery_continuity
@@ -43,8 +43,8 @@ from loopx.control_plane.coordination.runtime_shadow import (
 from loopx.control_plane.coordination.legacy_writer_fence import (
     LEGACY_COORDINATION_WRITE_CHECK_REQUEST_SCHEMA as BRIDGE_WRITE_CHECK_REQUEST_SCHEMA,
 )
-from loopx.control_plane.coordination.local_authority import (
-    LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA as BRIDGE_LIST_REQUEST_SCHEMA,
+from loopx.control_plane.coordination.canonical_snapshot import (
+    REQUEST_SCHEMA as BRIDGE_LIST_REQUEST_SCHEMA,
 )
 
 
@@ -172,7 +172,7 @@ def test_domain_projection_split_keeps_archival_as_a_task_fact() -> None:
 
 
 def test_python_bridge_uses_generated_local_authority_protocol_schemas() -> None:
-    assert BRIDGE_LIST_REQUEST_SCHEMA == LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA
+    assert BRIDGE_LIST_REQUEST_SCHEMA == LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA
 
 
 def test_python_shadow_bridges_use_generated_protocol_schemas() -> None:

@@ -61,6 +61,7 @@ class HostTodoSettlementRequest:
     no_follow_up: bool = False
     vision_path: str | None = None
     vision_unchanged_reason: str | None = None
+    checkpoint_read_context_id: str | None = None
 
 
 class HostCliRunner(Protocol):
@@ -101,11 +102,12 @@ def _request_payload(
     }
     if provider_outcomes is not None:
         payload["provider_outcomes"] = provider_outcomes
-    if request.vision_path or request.vision_unchanged_reason or phase == "vision_refresh":
+    if request.vision_path or request.vision_unchanged_reason or phase in {"vision_refresh", "vision_context"}:
         payload.update(
             schema_version="loopx_host_todo_completion_transaction_v1",
             vision_path=request.vision_path,
             vision_unchanged_reason=request.vision_unchanged_reason,
+            checkpoint_read_context_id=request.checkpoint_read_context_id,
         )
     return payload
 
@@ -133,7 +135,10 @@ def host_vision_request(request: HostTodoSettlementRequest, vision: dict | None,
 
 def refresh_host_todo_vision(request: HostTodoSettlementRequest, *, run_cli: HostCliRunner) -> str:
     """Repair the original checkpoint; no lifecycle operation, new Turn or spend."""
-    plan = _runtime_reduction(_request_payload(request, phase="vision_refresh"), phase="vision_refresh")
+    phase = "vision_refresh" if (
+        request.vision_path or request.vision_unchanged_reason or request.checkpoint_read_context_id
+    ) else "vision_context"
+    plan = _runtime_reduction(_request_payload(request, phase=phase), phase=phase)
     _runtime_identity(plan.get("identity"))
     args = plan.get("args")
     if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):

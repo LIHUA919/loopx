@@ -25,7 +25,7 @@ export function registerUserCompletionFollowthroughConformance(provider: string,
         const before = await loaded(store);
         const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.source, expected_role: "user", command: "complete",
           actor_agent_id: "agent-a", registered_agents: fixture.registered_agents, lifecycle_grants: [],
-          authority_reason: null, decision_outcome: outcome, operation_id: "decide", lease_idempotency_key: null,
+          authority_reason: null, decision_outcome: outcome, operation_identity: {kind: "explicit" as const, operation_id: "decide"}, lease_idempotency_key: null,
           lease_expected_version: null, allow_user_gate_auto_acquire: true, requested_no_followup: false,
           requested_completion_turn_key: null, requested_completion_identity_source: null,
           linked_successor_todo_ids: [], successor_intents: [], note: null, evidence: "Synthetic exact owner decision",

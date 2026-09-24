@@ -17,7 +17,8 @@ import {
   executeReviewedCoordinationPromotion,
   LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
-import { commitLocalAuthorityShadowEntry } from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
+import {deliverShadowEntry} from "../../loopx/control_plane/coordination/shadow_entry_delivery.ts";
+import {entrySelection} from "./shadow_file_fixture.ts";
 import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { loadLegacyCoordinationWriterFence } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
@@ -56,7 +57,7 @@ export async function qualifiedPromotionSource(root: string, input: JsonObject) 
     { handoff_mode: "hard_lease", todos },
     { writeClass: "todo_update" },
   );
-  const mirrored = await commitLocalAuthorityShadowEntry(entry);
+  const mirrored = await deliverShadowEntry(entrySelection(entry));
   assert.equal(mirrored.outcome, "delivered", JSON.stringify(mirrored));
   await settleFiles(fixture, entry, mirrored);
   const loaded = await store.loadAuthority();

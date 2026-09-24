@@ -32,6 +32,7 @@ _PROJECT_ASSET_CANONICAL_FIELDS = (
     "autonomous_replan_obligation",
     "completed_todo_archive_warning",
     "control_plane",
+    "external_progress_review",
     "goal_frontier_projection",
     "latest_run_recommended_action",
     "latest_run_recommended_action_source",

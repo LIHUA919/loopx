@@ -31,6 +31,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/loopx-control-plane/src-tauri -> target
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - run: python3 scripts/desktop_runtime_bundle.py
       - run: python3 -m unittest discover -s tests/desktop -p 'test_*.py'
       - run: cargo test --locked && cargo clippy --all-targets --locked -- -D warnings

@@ -255,6 +255,35 @@ def test_agent_lane_default_is_bounded_and_keeps_active_identity(
     assert len(render_todo_markdown(payload)) < 8_500
 
 
+def test_agent_lane_retains_bounded_blocked_advancement_reason(
+    tmp_path: Path,
+) -> None:
+    registry_path, state_file = _write_fixture(tmp_path)
+    blocked = _todo_line(
+        todo_id="todo_agent_blocked",
+        text="[P0] Resume the blocked deliverable.",
+        status="blocked",
+        task_class="advancement_task",
+        metadata=(
+            f"claimed_by={AGENT_ID} reason="
+            + encode_metadata_value("A required dependency is unavailable")
+        ),
+    )
+    with state_file.open("a", encoding="utf-8") as stream:
+        stream.write("\n".join(blocked) + "\n")
+
+    payload = list_goal_todos(
+        registry_path=registry_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    projected = next(
+        item for item in payload["agent_todos"]["items"]
+        if item["todo_id"] == "todo_agent_blocked"
+    )
+    assert projected["reason"] == "A required dependency is unavailable"
+
+
 def test_explicit_done_filter_remains_a_full_detail_cold_path(
     tmp_path: Path,
 ) -> None:

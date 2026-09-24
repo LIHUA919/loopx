@@ -30,9 +30,7 @@ from typing import Any
 from .local_authority_shadow_projection import (
     PARTITIONS,
     TODO_PARTITION,
-    ProjectionValueError,
     canonical_value,
-    lease_partition_projection,
     partition_digest,
     sha256_digest,
     text_digest,
@@ -376,16 +374,21 @@ def raw_bytes_digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-def reclaim_verified_files(files: Iterable[tuple[Path, str]]) -> int:
-    """Remove only exact bytes proved against receipts under maintenance/primary locks.
-
-    Validate the complete batch before the first unlink. A watermark alone is
-    deliberately not accepted by this interface.
-    """
-    batch = list(files)
-    for path, expected_digest in batch:
+def verify_observed_files(files: Iterable[tuple[Path, str]]) -> None:
+    """Recheck the complete observed byte batch before checkpoint or unlink effects."""
+    for path, expected_digest in files:
         if raw_bytes_digest(path.read_bytes()) != expected_digest:
             raise OutboxError("outbox_file_changed", "verified outbox bytes changed")
+
+
+def reclaim_verified_files(files: Iterable[tuple[Path, str]]) -> int:
+    """Remove only exact receipt-proven bytes under maintenance/primary locks.
+
+    A watermark alone never authorizes deletion. Recheck the whole batch before
+    the first unlink, including when the caller just wrote its checkpoint.
+    """
+    batch = list(files)
+    verify_observed_files(batch)
     for path, _digest in batch:
         path.unlink()
         _fsync_directory(path.parent)
@@ -629,11 +632,12 @@ def next_seq(
 
 
 def runtime_root_digest(runtime_root: Path) -> str:
-    """Digest of the absolute, dot-normalized root; must match the TypeScript writer.
+    """Digest of the absolute, dot-normalized root as this process spells it.
 
-    Symlinks are deliberately not resolved: both runtimes normalize the string
-    they were given, so a root passed through the effect runtime hashes the
-    same on either side.
+    Diagnostic only (drain evidence). Outbox entries and receipts carry the
+    active binding's ``source_root_digest`` instead, which the TypeScript owner
+    derives from the resolved root, so a root reached through a symlink hashes
+    differently from this lexical spelling (#4892).
     """
 
     return text_digest(os.path.abspath(str(runtime_root)))
@@ -672,34 +676,6 @@ def read_lease_records(directory: Path) -> list[tuple[str, dict[str, Any]]]:
         if isinstance(raw, dict):
             records.append((path.stem, raw))
     return records
-
-
-def compact_lease_projection(
-    raw_projection: Mapping[str, Any], *, goal_id: str
-) -> dict[str, Any]:
-    """Compact the TypeScript-written lease partition (``{leases: [{file_stem, record}]}``)."""
-
-    raw_leases = raw_projection.get("leases")
-    if not isinstance(raw_leases, list):
-        raise OutboxError(
-            "outbox_file_invalid", "lease partition projection must list leases"
-        )
-    records: list[tuple[str, object]] = []
-    for item in raw_leases:
-        if not isinstance(item, dict):
-            raise OutboxError(
-                "outbox_file_invalid", "lease projection item must be an object"
-            )
-        stem = item.get("file_stem")
-        if not isinstance(stem, str) or not stem:
-            raise OutboxError(
-                "outbox_file_invalid", "lease projection item needs a file_stem"
-            )
-        records.append((stem, item.get("record")))
-    try:
-        return lease_partition_projection(records, goal_id=goal_id)
-    except ProjectionValueError as error:
-        raise OutboxError("outbox_file_invalid", str(error)) from error
 
 
 def _writer(
@@ -957,72 +933,6 @@ class TodoPartitionCapture:
             self._fail("outbox_commit_marker_failed", error)
 
 
-SourceProbe = Callable[[OutboxEntry], str]
-"""Return ``committed``, ``abandoned`` or ``unproved`` for a prepared-only entry."""
-
-
-def _resolve_markdown_source(
-    source: Mapping[str, Any], reader: Callable[[], str]
-) -> str:
-    current_digest = text_digest(reader())
-    if current_digest == source.get("bytes_digest"):
-        return "committed"
-    if current_digest == source.get("previous_bytes_digest"):
-        return "abandoned"
-    return "unproved"
-
-
-def _resolve_lease_source(
-    source: Mapping[str, Any],
-    reader: Callable[[str], bytes | None],
-) -> str:
-    planned = _as_object(source.get("lease"))
-    if not planned:
-        return "unproved"
-    current = reader(str(planned.get("todo_id") or ""))
-    digest = raw_bytes_digest(current) if current is not None else None
-    if digest is not None and digest == source.get("bytes_digest"):
-        return "committed"
-    if digest == source.get("previous_bytes_digest"):
-        return "abandoned"
-    return "unproved"
-
-
-def _resolve_event_source(
-    source: Mapping[str, Any], reader: Callable[[str], bool]
-) -> str:
-    event_id = source.get("event_id")
-    if isinstance(event_id, str) and event_id and reader(event_id):
-        # The append landed but the projection was never recorded; only a
-        # fresh full-partition capture can say what the state now is.
-        return "unproved"
-    return "abandoned"
-
-
-def resolve_prepared_only_entry(
-    entry: OutboxEntry,
-    *,
-    markdown_text_reader: Callable[[], str] | None,
-    lease_bytes_reader: Callable[[str], bytes | None] | None,
-    event_presence_reader: Callable[[str], bool] | None,
-) -> str:
-    """Decide what a prepared entry without a committed marker means.
-
-    The caller must hold the partition's primary lock (or have proven it free),
-    otherwise the source may still be mid-write.
-    """
-
-    source = _as_object(entry.prepared.get("source"))
-    kind = source.get("kind")
-    if kind == SOURCE_MARKDOWN and markdown_text_reader is not None:
-        return _resolve_markdown_source(source, markdown_text_reader)
-    if kind == SOURCE_TASK_LEASE and lease_bytes_reader is not None:
-        return _resolve_lease_source(source, lease_bytes_reader)
-    if kind == SOURCE_STATE_EVENT_LOG and event_presence_reader is not None:
-        return _resolve_event_source(source, event_presence_reader)
-    return "unproved"
-
-
 def entries_by_partition(
     runtime_root: Path, goal_id: str
 ) -> dict[str, list[OutboxEntry]]:
@@ -1079,7 +989,6 @@ __all__ = [
     "OutboxError",
     "TodoPartitionCapture",
     "TodoPartitionProjector",
-    "compact_lease_projection",
     "drain_lock_target",
     "durable_write_json",
     "entries_by_partition",
@@ -1097,7 +1006,6 @@ __all__ = [
     "reclaim_verified_files",
     "raw_bytes_digest",
     "record_source_ref",
-    "resolve_prepared_only_entry",
     "retired_residue",
     "runtime_root_digest",
     "utc_now_text",

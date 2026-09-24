@@ -350,6 +350,26 @@ def _configure_selectable_alternative(
     )
 
 
+def _configure_ready_deferred_priority_preemption(project: Path) -> None:
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_text = state_path.read_text(encoding="utf-8")
+    state_text = state_text.replace(
+        "[P1] Validate and settle the selected delivery.",
+        "[P0] Validate and settle the selected delivery.",
+    )
+    state_path.write_text(
+        state_text.rstrip()
+        + "\n- [x] [P0] Complete the prior dependency.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_prior status=done "
+        + f"task_class=advancement_task claimed_by={AGENT_ID} -->\n"
+        + "- [ ] [P0] Replan the ready deferred successor.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_ready_deferred "
+        + f"status=deferred task_class=advancement_task claimed_by={AGENT_ID} "
+        + "resume_when=todo_done:todo_fixture_prior -->\n",
+        encoding="utf-8",
+    )
+
+
 def _configure_runtime_capability_reentry_fixture(project: Path) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -3330,6 +3350,79 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
         ALTERNATIVE_TODO_ID
     )
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
+
+
+def test_ready_deferred_priority_is_not_an_eligible_alternative(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path / "portfolio")
+    _configure_selectable_alternative(project)
+    _configure_ready_deferred_priority_preemption(project)
+    turn_instance_id = "turn-ready-deferred-priority-selection"
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_instance_id,
+        "--scan-path", str(project),
+    )
+    first_rc, first = _run_cli(registry_path, runtime, *guard_args)
+    assert first_rc == 0, first
+    assert first["selected_todo"]["todo_id"] == TODO_ID
+    assert first["agent_todo_summary"]["current_agent_deferred_resume_count"] == 1
+    suggested = first.get("action_portfolio", {}).get("suggested_actions", [])
+    assert ALTERNATIVE_TODO_ID not in {item["todo_id"] for item in suggested}
+
+    project, runtime, registry_path = _write_fixture(tmp_path / "selection")
+    _configure_selectable_alternative(project)
+    _configure_ready_deferred_priority_preemption(project)
+    selection_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-ready-deferred-explicit-selection",
+        "--scan-path", str(project),
+    )
+    blocked_rc, blocked = _run_cli(
+        registry_path, runtime, *selection_args, "--todo-id", ALTERNATIVE_TODO_ID
+    )
+    assert blocked_rc == 1, blocked
+    assert blocked["error_code"] == "quota_action_selection_deferred"
+    assert blocked["action_selection_qualification"]["reason"] == (
+        "ready_deferred_successor_priority_preemption"
+    )
+    assert "settlement_identity" not in blocked["heartbeat_receipt"]
+
+    selected_rc, selected = _run_cli(
+        registry_path, runtime, *selection_args, "--todo-id", TODO_ID
+    )
+    assert selected_rc == 0, selected
+    assert selected["selected_todo"]["todo_id"] == TODO_ID
+    assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+
+
+def test_pending_deferred_p0_allows_independent_p1_selection(
+    tmp_path: Path,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").rstrip()
+        + "\n- [ ] [P0] Wait for the future resume condition.\n"
+        + "  <!-- loopx:todo todo_id=todo_fixture_future_p0 status=deferred "
+        + f"task_class=advancement_task claimed_by={AGENT_ID} "
+        + "resume_when=resume_at:2099-01-01T00:00:00Z -->\n",
+        encoding="utf-8",
+    )
+    rc, payload = _run_cli(
+        registry_path,
+        runtime,
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID,
+        "--turn-instance-id", "turn-pending-deferred-p0-p1-fallback",
+        "--scan-path", str(project), "--todo-id", ALTERNATIVE_TODO_ID,
+    )
+    assert rc == 0, payload
+    assert payload["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert payload["action_selection_qualification"]["state"] == "qualified"
 
 
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(

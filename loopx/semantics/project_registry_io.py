@@ -36,7 +36,12 @@ APPROVED_READ_APIS = frozenset(
     }
 )
 APPROVED_WRITE_APIS = frozenset({"mutate_project_registry"})
-APPROVED_TRANSACTION_APIS = frozenset({"project_registry_transaction"})
+APPROVED_TRANSACTION_APIS = frozenset(
+    {
+        "project_registry_transaction",
+        "source_session_registry_transaction",
+    }
+)
 DIRECT_READ_APIS = frozenset(
     {"read_json", "read_json_object", "_read_json", "parse_json_object"}
 )

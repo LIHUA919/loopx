@@ -1,7 +1,7 @@
 # RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）
 
 - **RFC status：** Draft；M0 **accepted-for-discussion（接受为讨论稿）**（[维护者决定](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)）。Q1–Q7 仍待决；研究/设计未获实施批准。
-- **Delivery maturity：** Proposal；仅文档，没有接入实现或模型质量验收。
+- **Delivery maturity：** 研究提案；附录 A 单独提出仅 D1 的可选 shadow 实现，没有建立模型质量资格或自动纠正效果。默认关闭的哨兵 capability 及其录制对照见 [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.zh-CN.md)；这些数字不改变本 Draft 的状态。
 - **Created：** 2026-09-19。**Last normative revision：** 2026-09-20。
 - **Implementation baseline：** `9f1916960306b3650d795895b89f331eeae2516e`；在 PR 版本 `27812bd0fb437f831a541b564bcb5be8a96ff77e` 重新核对源码归属与触发器行为。历史 upstream 检查记于附录 A，不构成全系统认证。
 - **Authors / owners：** 提案作者；被选方向由现有领域维护者负责。不新增运行时权威，也未指派实施 owner。
@@ -355,7 +355,17 @@ M0 不默认批准 D1 实施、自动 worker 采纳或隐藏的必需模型阶�
 - **增量：** D7/D8、暂定机会顺序、预期价值分解与有界排序比较；同步双语正文及索引。
 - **证据/剩余缺口：** 仅源码检查和文档。没有 live 提供方比较、生产 ranker 或新权限；Q1–Q7 仍待决。
 
+### 2026-09-21 — 任务进展旁路观察实现提案（RFC D1）
+
+- **基线：** upstream `62d18677c`；当前实现只包含可选 D1 命令，不引入 D2–D8 排序或选择器改动。
+- **提案：** 真实 refresh-state 前后限定检查点采集、独立推理、off/shadow 配置和历史读回。参见[操作指南](../../../packages/loopx-jev/DRIFT_SHADOW.zh-CN.md)。
+- **证据边界：** [讨论演进与当前实现的运行结果](../../../packages/loopx-jev/DESIGN_DECISIONS.zh-CN.md)；确定性集成检查不同于模型准确率或任务收益。没有自动干预或原生宿主 hook 推广。
+- **待决：** 维护者是否接受这个可选工具范围，以及独立评估的比较价值。不能将原 M0 收录倒推为实现已获批准。
+
 ## 附录 B：决策日志
+
+单独提出的 [任务进展旁路观察工具及决策记录](../../../packages/loopx-jev/DESIGN_DECISIONS.zh-CN.md)
+不改变历史 M0 决定，也不替代 Q1–Q7。维护者单独评审可选工具范围，实验结果不等于产品采用。
 
 | 日期 | 提案 / 决定 | owner / 批准状态 | 替代方案 | 章节 |
 | --- | --- | --- | --- | --- |
@@ -376,6 +386,7 @@ M0 不默认批准 D1 实施、自动 worker 采纳或隐藏的必需模型阶�
 | E4 | PR #4749 及链接的维护者评审 | 公开请求和请求修改理由，不是研究/采用已获接受 |
 | E5 | A/B/C 与 F01–F12 | 拟议实验/义务，该功能尚未执行 |
 | E6 | [Jev 外部证据补充 v0](../../research/agent-workflow-audits/jev-external-evidence-supplement-v0.zh-CN.md) | 截至 2026-09-21 的第三方质量与实现证据，不改变 Q1-Q7、研究或采用状态 |
+| E7 | [任务进展观察决策记录](../../../packages/loopx-jev/DESIGN_DECISIONS.zh-CN.md) | 公开论证摘要和当前实现的观察，不是独立资格、完整 A/B/C 或自动纠正证据 |
 
 ## 附录 D：延后机制与排除的捷径
 

@@ -246,7 +246,7 @@ def test_downlevel_runtime_cannot_acknowledge_delivery(
     def without_confirmation(method, payload, **kwargs):
         result = invoke(method, payload, **kwargs)
         if payload.get("projection_readback") is not None:
-            result.pop("projection_readback", None)
+            result.get("metadata", {}).pop("projection_readback", None)
         return result
 
     with monkeypatch.context() as patch:

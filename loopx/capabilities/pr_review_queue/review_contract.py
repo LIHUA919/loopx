@@ -1,10 +1,42 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 7
+REVIEW_POLICY_REVISION = 8
+
+# One bounded replacement for the former free-text compatibility justification.
+COMPATIBILITY_ASSESSMENT = {
+    "decision_values": ["not_applicable", "retain", "simplify_now", "follow_up", "not_yet_proven"],
+    "fields": ["decision", "reason"],
+    "applicable_fields": [
+        "consumer_inventory", "deployment_boundary", "persisted_contract",
+        "simpler_alternative", "validation_evidence",
+    ],
+    "deployment_boundary_values": ["co_deployed", "independent", "persisted_only", "mixed", "unknown"],
+    "blocking_decisions": ["simplify_now", "not_yet_proven"],
+    "rule": (
+        "Assess compatibility added, retained or removed at the touched boundary. "
+        "Name real callers/readers with source references and their upgrade boundary; "
+        "separate transient request decoding from persisted data/receipt/replay contracts. "
+        "Old receipts do not by themselves require an old request decoder; co-deployment "
+        "does not permit dropping persisted formats. Compare consolidation into one current "
+        "contract with explicit semantic variants against parallel version branches. "
+        "Check implicit null/absent/version-selected modes for a named typed alternative. "
+        "Re-review this tradeoff even after the previous correctness bug is fixed. "
+        "Retain compatibility for evidenced independent consumers or persisted obligations, "
+        "with its retirement/migration condition in reason. If a materially cheaper equivalent "
+        "design is required in this PR, choose simplify_now and request that bounded repair; "
+        "for a non-blocking improvement choose follow_up and name the concrete suggestion "
+        "and why deferral is safe. Do not require a new tracking task or delete versions "
+        "merely to reduce their count. Use not_yet_proven for a material unknown and "
+        "not_applicable plus a scoped reason when this boundary has no compatibility change. "
+        "Reuse walkthrough and validation references, including historical readback and "
+        "mixed-version cases where applicable; the checker validates declarations, not truth."
+    ),
+}
 
 REQUIRED_FINAL_SECTIONS = [
     "动机",
@@ -104,7 +136,7 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             _section(
                 "我的整体评价",
                 "按证据需要；无最低字数",
-                "Use `observable_semantics` to report baseline/head comparisons and remaining compatibility gaps; equal decision codes are insufficient. Use `code_volume`, `change_proportionality`, `default_off_isolation`, `authority_semantics`, validation results, residual risk, and exact-head freshness to state the verdict and the evidence needed for re-review. For semantic or constraint-related changes, state whether the PR reuses an existing vocabulary, extends one, creates one, stays local, or remains unknown, and link any required registry/RFC/CI repair.",
+                "Use `observable_semantics` to report baseline/head comparisons and remaining compatibility gaps; equal decision codes are insufficient. Use `code_volume` (including its compatibility assessment and bounded simplification decision), `change_proportionality`, `default_off_isolation`, `authority_semantics`, validation results, residual risk, and exact-head freshness to state the verdict and the evidence needed for re-review. For semantic or constraint-related changes, state whether the PR reuses an existing vocabulary, extends one, creates one, stays local, or remains unknown, and link any required registry/RFC/CI repair.",
             ),
         ],
         "review_order": _review_order(key_files),
@@ -149,7 +181,10 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "and capability/provider placement. A new CLI calling a new helper proves "
                 "reachability, not demand or correct ownership. Prefer derived state over "
                 "manual synchronization and deletion/relocation over a second authority. "
-                "Do not impose LoopX-specific architecture on other repositories."
+                "Use code_volume.compatibility_assessment to challenge assumed compatibility "
+                "needs before accepting additional protocol branches. Simplification includes "
+                "deletion and consolidation, not only helper extraction. Do not impose "
+                "LoopX-specific architecture on other repositories."
             ),
             "falsify_claims": (
                 "Choose the strongest material promise, not the easiest failing input. "
@@ -684,11 +719,12 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "changed_line_shape",
                     "largest_production_hotspots",
                     "active_call_site_evidence",
-                    "compatibility_or_migration_need",
+                    "compatibility_assessment",
                     "verdict",
                     "highest_value_simplification",
                     "behavior_preserving_validation",
                 ],
+                "compatibility_assessment": deepcopy(COMPATIBILITY_ASSESSMENT),
             },
             {
                 "evidence_id": "change_proportionality",
@@ -720,6 +756,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "mechanism is implemented. Compare verified frequency, severity, "
                     "blast radius, and recovery cost with production code, new state, "
                     "schema, CLI, caller, migration, and long-term maintenance surface. "
+                    "Reuse code_volume.compatibility_assessment rather than equating historical "
+                    "receipt recovery with a need to preserve every request version. "
                     "Correctness, green CI, and resolution of earlier review findings "
                     "are necessary but do not prove positive value. Treat "
                     "`disproportionate` and `not_yet_proven` as blocking; request the "

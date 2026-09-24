@@ -18,6 +18,10 @@ from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat_todo_actions import ChatTodoActionMixin
 from .configure_goal import configure_goal
+from .control_plane.goals.configure_goal_service import (
+    bind_goal_agent_with_global_sync,
+    read_goal_agent_binding_with_source_route,
+)
 from .control_plane.runtime.time import now_utc, parse_timestamp
 from .control_plane.scheduler.monitor_todo import monitor_next_due_at
 from .history import load_registry
@@ -864,58 +868,44 @@ class ChatActionService(
     def _apply_agent_bind(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        current_fingerprint = self._registry_fingerprint()
         goal_id = str(parameters["goal_id"])
         agent_id = str(parameters["agent_id"])
-        existing = registered_agent_ids_for_goal(self._goal(goal_id))
-        if agent_id in existing and current_fingerprint != proposal.get(
-            "expected_state_fingerprint"
-        ):
-            receipt = {
-                "receipt_id": _digest(
-                    {
-                        "proposal_id": proposal_id,
-                        "goal_id": goal_id,
-                        "agent_id": agent_id,
-                    }
-                )[:32],
-                "outcome": "agent_already_bound",
-                "projection_verified": True,
-                "resource_ids": {"goal_id": goal_id, "agent_id": agent_id},
-            }
-            stored = self.store.apply(
-                proposal_id,
-                current_state_fingerprint=str(proposal["expected_state_fingerprint"]),
-                receipt=receipt,
-            )
-            return {"proposal": stored, "turn": None}
-        if current_fingerprint != proposal.get("expected_state_fingerprint"):
-            stale = self.store.apply(
-                proposal_id, current_state_fingerprint=current_fingerprint, receipt={}
-            )
-            return {"proposal": stale, "turn": None}
-        registered = sorted({*existing, agent_id})
-        result = configure_goal(
+        expected_revision = str(proposal["expected_state_fingerprint"])
+        result = bind_goal_agent_with_global_sync(
             registry_path=self.registry_path,
             goal_id=goal_id,
-            registered_agents=registered,
+            agent_id=agent_id,
             execute=True,
+            expected_revision=expected_revision,
         )
-        projected = registered_agent_ids_for_goal(self._goal(goal_id))
-        if agent_id not in projected:
-            raise ValueError("Agent binding was not visible in the Goal projection")
+        if result.get("status") == "stale":
+            stale = self.store.apply(
+                proposal_id,
+                current_state_fingerprint=str(result["actual_revision"]),
+                receipt={},
+            )
+            return {"proposal": stale, "turn": None}
+        if not result.get("ok") or not result.get("projection_verified"):
+            raise ValueError(
+                str(
+                    result.get("error")
+                    or "Agent binding did not verify in source and shared registries"
+                )
+            )
         receipt = {
             "receipt_id": _digest(
                 {"proposal_id": proposal_id, "goal_id": goal_id, "agent_id": agent_id}
             )[:32],
             "outcome": "agent_bound"
-            if result.get("changed")
+            if result.get("status") == "bound"
             else "agent_already_bound",
             "projection_verified": True,
             "resource_ids": {"goal_id": goal_id, "agent_id": agent_id},
         }
         stored = self.store.apply(
-            proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt
+            proposal_id,
+            current_state_fingerprint=expected_revision,
+            receipt=receipt,
         )
         return {"proposal": stored, "turn": None}
 
@@ -1225,6 +1215,16 @@ class ChatActionService(
                 "Canonical LoopX Todo dry-run validated the requested transition."
                 if normalized.get("operation") != "run_now"
                 else "The monitor execution request is bound to the current Goal state."
+            ]
+            permission = "durable_write"
+        elif action_kind == "agent.bind":
+            binding = read_goal_agent_binding_with_source_route(
+                registry_path=self.registry_path,
+                goal_id=str(normalized["goal_id"]),
+            )
+            fingerprint = str(binding["revision"])
+            evidence = [
+                "The Agent binding was validated against the canonical source Goal peer set."
             ]
             permission = "durable_write"
         else:

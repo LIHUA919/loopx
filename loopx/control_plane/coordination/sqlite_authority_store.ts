@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
-  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure,
+  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
   AuthorityStoreReceiptResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
   canonicalAuthorityObjectList, canonicalAuthoritySha256, normalizeAuthorityStoreCommit,
@@ -420,6 +420,28 @@ export class SqliteAuthorityStore implements AuthorityStore {
         provider_revision: current.provider_revision, head: current.state.projection};
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
+  }
+
+  /** No await between BEGIN and ROLLBACK: another DatabaseSync request must not
+   * block this event loop while the transaction holder awaits filesystem I/O.
+   * The transaction excludes writers; it cannot roll back external run files. */
+  async withCheckpointHead(save: (head: AuthorityStoreHead, identity: string) => JsonObject): Promise<JsonObject> {
+    const db = this.open(true);
+    if (!db) throw new Error("checkpoint authority is missing");
+    let active = false;
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      active = true;
+      const current = this.current(db);
+      if (!current) throw new Error("checkpoint authority head is missing");
+      const result = save({head: current.state.projection,
+        provider_revision: current.provider_revision, cursor: current.state.cursor.toString()}, current.identity);
+      if (result instanceof Promise) throw new Error("checkpoint save must be synchronous");
+      return result;
+    } finally {
+      try { if (active) db.exec("ROLLBACK"); }
+      finally { db.close(); }
+    }
   }
 
   async commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult> {

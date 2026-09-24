@@ -16,6 +16,7 @@ from .control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
     PROMOTION_READINESS_RUNTIME_INDEX,
 )
+from .control_plane.runtime.time import chronology_key
 from .install_contract import NO_CLONE_INSTALL_URL
 from .paths import default_runtime_route, global_registry_path
 from .python_install_owner import PythonInstallOwner, python_distribution_upgrade_command, resolve_python_install_owner
@@ -678,7 +679,10 @@ def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = N
                 else "no canary promotion readiness run found"
             ),
         }
-    matches.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+    matches.sort(
+        key=lambda item: chronology_key(item.get("generated_at")),
+        reverse=True,
+    )
     latest = matches[0]
     latest["runtime_root"] = str(runtime_root)
     return latest

@@ -36,7 +36,7 @@ after promotion. Legacy event-only claims reject rather than disappear at a
 Markdown boundary; event append locks protect the observation through writeback.
 Canonical changes reuse durable command receipt recovery. This is an L2/L3
 compatibility correction with Python decision deletion, not cohort migration,
-SQLite D2 completion or a default flip. The remaining 5–8 packages still depend
+SQLite D2 completion or a default flip. The remaining 7–9 packages still depend
 on executor/consumer closure, qualification, integrated migration and onboarding.
 [Operation, repair and recovery](../../reference/handoff-mode.md).
 
@@ -45,7 +45,7 @@ source and recovers historical receipts independently of private argv. Agent
 completion and Monitor stop share current-head display acknowledgement with
 ordinary edits. [Caller and recovery contract](../../reference/canonical-terminal-review.md).
 This advances L2/L5 without closing executor-held fences, D1–D3 or default
-onboarding; the conditional 5–8-package estimate below remains unchanged.
+onboarding; the conditional 7–9-package estimate below remains unchanged.
 
 The local registry witness now spans canonical create/claim/update/Monitor poll
 and terminal mutations through one TS owner. File, SQLite and service-injected
@@ -1310,9 +1310,10 @@ large-history recovery, fenced backup/restore, supported upgrade/rollback,
 OS/runtime coverage and the >=10-day elapsed soak; runner completion cannot
 claim them. See the
 [SQLite qualification commands](../../reference/sqlite-authority-store.md#reproduce-validation).
-The public minimum remains Node 22.18 for File; SQLite additionally requires
-synchronous finalization and the WAL-reset fix, with Node 22.22.3/SQLite 3.51.3
-as the reference. Node 24 stays primary and Node 26 stays a non-blocking probe.
+The public minimum is now Node 22.22.3 for File and optional SQLite. SQLite
+still checks synchronous finalization and the actual WAL-reset-fixed driver;
+Node 22.22.3/SQLite 3.51.3 is the reference. Node 24 stays primary and Node 26
+stays a non-blocking probe.
 
 **Migration decision points.** Before the first existing-Goal cutover, freeze
 one exact source lineage/revision under the authority writer fence, import a
@@ -2569,6 +2570,29 @@ not started: the runtime still never reads the shadow for decisions, and the
 migration, rollback, parity, read-flip, and legacy-writer fencing gates above
 remain open.
 
+### Deferred hard-lease lifecycle clarification (2026-09-23)
+
+The blanket terminal-fence rule above applies to execution-bearing `open`
+Todos. A `deferred` Todo cannot acquire a hard lease while deferred, so requiring
+one to leave that state makes both owner recovery and retirement impossible.
+For a promoted `hard_lease` Goal, a registered, eligible owner may explicitly
+reopen its own deferred Agent Todo (`status=open` with `clear_resume_when`) or
+supersede that deferred wait without an execution lease, but only when no
+time-active lease exists and no old execution proof is supplied. The provider
+CAS retires any retained expired lease generation together with the Todo
+transition. Reopening grants no execution authority: the next worker must
+acquire a fresh lease. `complete`, active-lease displacement, foreign-owner
+edits, and bundled execution changes retain their existing fences.
+
+上述终态租约门禁适用于处于 `open` 的执行型 Todo。`deferred` Todo 在等待期间本就
+无法取得 hard lease，若仍要求先持有租约才能离开等待态，负责人既不能恢复也不能
+终止该等待。对于已晋级的 `hard_lease` Goal，已注册且具备该 Todo 所有权的 Agent
+可以显式执行 `status=open` 加 `clear_resume_when`，或将该 deferred 等待标记为
+superseded；前提是没有仍在有效期内的租约，也未提交旧执行租约凭证。Provider CAS
+会把遗留的过期租约代际与 Todo 状态一并更新。重新打开不授予执行权限，下一次
+执行必须重新获取租约。`complete`、挤占有效租约、跨负责人修改及混入执行内容的
+更新仍受原有门禁约束。
+
 ### Relation to Staged Delivery
 
 Mapped to the five-stage plan from the #2787 review: the characterization
@@ -3085,7 +3109,7 @@ explicit runtime-root applies to both intent and Todo IO. Frozen editorial
 requests retain their original basis. See [operation and boundaries](../../../loopx/capabilities/periodic_report/README.md#todo-authority-and-report-retries).
 This closes that T3/L5 consumer family, not D1 permanent display freshness,
 D2 durability, D3 whole-Goal qualification or default-provider selection. The
-conditional 5–8 remaining delivery-package estimate is unchanged.
+conditional 7–9 remaining delivery-package estimate is unchanged.
 
 Summary/work-lane counts now remain independent of display limits and retain incomplete-source knowledge through Agent scoping; canonical list acceptance holds match status. This closes one L5 read consumer, not permanent projection freshness or D1–D3. See [count semantics](../../reference/todo-work-counts.md).
 
@@ -3145,12 +3169,15 @@ provider conformance cover the consumer family. See [operation and semantic
 changes](../../reference/todo-continuation-readback.md). This closes a bounded
 L5/L7 gap; permanent projection delivery/recovery, D2 and D3 are still open.
 
-D1 delivery confirmation now follows durable Markdown readback with a typed
-canonical revision check. Unpinned settlement retries up to three times using
-the returned complete snapshot; pinned projection never silently retargets.
-Overlap, churn and confirmation outage remain pending without repeating business
-commits. This qualifies the bounded delivery/retry boundary, not permanent
-freshness, a background drainer, all L5 consumers or D2/D3. See the
+D1 delivery confirmation follows durable Markdown readback. The TS owner now
+owns latest/pinned intent and the three-attempt retry decision; Python retains
+file locks, durable publication and rendering. Committed `refresh-state` and
+same-Turn replay drain the existing projection path without repeating Todo or
+quota mutations. Planning, missing-work diagnosis and initial delivery share a
+complete canonical snapshot; the final confirmation still reads the provider.
+Authoritative emptiness never falls back to stale Markdown. Legacy and preview
+refresh remain unchanged. This closes the refresh recovery/diagnostic caller,
+not all L5 consumers, a background worker, D2 or D3; see the
 [projection contract](../../reference/protocols/active-state-structured-projection-v0.md).
 
 **D2 — qualify exactly one local profile; independent of PostgreSQL deployment.**
@@ -3178,7 +3205,7 @@ provenance across File/SQLite and service-owned PostgreSQL. Verified recovery
 copies do not select an authority, revive executors or roll back writer fences.
 This closes the portable recovery-artifact gap only; final source draining,
 fenced target adoption, later-write accounting and cohort cutover remain L8.
-The conditional **5–8 package** estimate below is unchanged until the remaining
+The conditional **7–9 package** estimate below is unchanged until the remaining
 caller, projection, D2, migration and default exits are qualified. Pending
 reviewed-promotion and command-recovery PRs must be integrated at their accepted
 heads rather than counted as merged prerequisites.
@@ -3243,39 +3270,50 @@ or moving a helper is not by itself a package exit.
 | C / L8: Whole-Goal rehearsal and cohort migration | Integrate one exact revision/profile after L2–L7; drain capture, fence old writers, verify canonical readback and projection, then rehearse fenced export/rollback. | D3 evidence packet binds lineage, cursor, source digest, command coverage and profile. Existing Goal migration requires explicit cohort approval; no per-command split authority or stale Markdown revival. |
 | D / L9: New-Goal default and bounded retirement | A dedicated default-change PR makes new-Goal creation/onboarding choose the qualified local profile, including settings/readback, installer and packaged clients. Retire old business writers only as their final callers and migration window close. | L8's integrated product/rollback qualification; distinguish new Goal default from existing Goal migration. Publish compatibility/disable guidance, keep explicit provider choice, permanent rendering and validated import/export. T4 can continue after the default ships. |
 
-**Cadence is evidence-based.** First reconcile the active stack, then deliver A
-packages as complete operations while L6/L7 progress independently. B integrates
-those contracts into complete user flows; C has one reproducible qualification
-checkpoint; D changes the default in its own reviewable PR. After the linked
-User completion slice, the 2026-09-20 planning estimate is **5–8 further cohesive
-PRs**, conditional on the caller audit finding no additional missing effects:
+**2026-09-24 reconciliation.** The count remains an estimate of complete
+packages, not a count of small fixes, and this refresh slice advances boundary 4
+(projection recovery and client closure) without claiming its other consumers
+are qualified. SQLite #4910 added the larger measurement axes; #4224 records
+failed 1 MiB receipt/scan budgets and still-missing recovery/soak evidence.
+#4931 is the in-review read-proof optimization, not proof that D2 passed.
+Snapshot pagination #4922 has merged and still must be qualified at its accepted
+head. None of these PR statuses grants cutover or changes the selected profile.
 
-| Remaining work package | Estimated PRs | Exit |
+**Cadence is evidence-based.** The 2026-09-23 decomposition separates bounded
+canonical reads from projection/client closure and separates caller admission
+from executor-held effects. This refines the older five broad packages into
+**seven concrete PR boundaries (up to nine if D2 and migration each split)**,
+including the snapshot-pagination PR. It is not a promise that a count of
+merges qualifies default-on; unresolved acceptance evidence keeps its hold.
+
+| Ordered PR boundary | Owner / content | Decisive exit |
 | --- | --- | --- |
-| Remaining L2/L3 caller and executor-effect fences | 1–2 | Actual CLI/Turn/Chat command inventory and external-effect boundary closure. |
-| L5 / D1 consumer and projection closure | 1 | Full consumer parity, lag/recovery and packaged client readback. |
-| L6 / SQLite D2 | 1–2, contributor-owned #4224 | Capacity, crash/restore and separately authorized elapsed-soak evidence on one profile. |
-| L7 capture plus L8 integrated migration | 1–2 | Mixed-writer continuity, fenced whole-Goal rehearsal, export/rollback and cohort evidence. |
-| L9 default and bounded retirement | 1 | New-Goal onboarding/settings/install choose the qualified profile; remove final obsolete callers. |
+| 1. Remaining canonical callers | L2/L4: inventory actual CLI/Turn/Chat callers, close retained leased metadata and delegated/effect-owned actions through existing typed transactions; remove replaced Python admission. | Each listed command succeeds or rejects coherently on legacy/File/SQLite, including authority and recovery negatives. |
+| 2. External-effect execution fence | L3: hold and revalidate current execution proof over the real external effect, including takeover, timeout, process death and uncertain completion. | A stale executor cannot perform/settle a fenced effect; active execution and business receipt recovery retain one owner. |
+| 3. Snapshot-bound canonical collection reads | T3/L5, this slice: paginate complete Todos, archives, leases and acceptance guards below the unchanged RPC limit; bind identity, revision, query and progress. | Real File/SQLite RPC/CLI and provider conformance preserve full populations; concurrent commits reject mixed reads. No active-Goal promotion is implied. |
+| 4. Projection recovery and client closure | L5/D1: audit Turn/quota/Dashboard/Chat/Lark reads and use the existing outbox for permanent display freshness and repair. | Missing/stale/empty/pending displays and packaged-client interactions are verified; final post-promotion fallback callers retire. |
+| 5. SQLite D2 qualification (1–2 PRs) | Contributor-owned #4224/#4328; reconcile the existing capacity PR before adding work. Complete crash/restore/upgrade/platform evidence on one exact profile. | Capacity ledger and separately authorized >=10-day elapsed synthetic soak pass; gaps remain holds. |
+| 6. Capture plus whole-Goal migration/rollback (1–2 PRs) | L7/L8: combine mixed-writer/event continuity, drain, old-writer fencing, canonical readback, fenced export/rollback and cohort migration. | One D3 packet binds exact profile, lineage, source digest and command inventory; existing-Goal cohort cutover remains explicit. |
+| 7. Default/onboarding and bounded Python retirement | L9/T4: make new-Goal creation, settings, installer and packaged clients choose the qualified local profile; publish migration/disable guidance and delete replaced final business writers. | Integrated L8 qualification, rollback and affected user-entrypoint readback. Preserve active rendering, host execution and import/export adapters. |
 
-The command-observation/current-proof closure removes a concrete L2/L3 concurrency hold.
-The retained-Monitor cycle and grouped executor closure remove concrete L4 holds, not an entire
-remaining package: the **5–8 PR planning range remains conditional**, rather than
-subtracting one for a lifecycle fix. Actual remaining executor/caller coverage,
-L5 consumers, contributor-owned D2, integrated migration and default onboarding
-still determine the count. Python host execution/rendering is retained; this
-slice removes duplicate TS admission knowledge without adding a Python twin.
+After boundary 3 lands, **six planned PRs remain, potentially eight** under those
+two named splits. Caller audit can expose additional missing effects, so this is
+an implementation estimate, not a guarantee. Small Python business-rule
+retirements accompany their TS owner; deleting all Python is neither the exit
+condition nor a prerequisite. PostgreSQL service, credential, tenant, restore
+and capacity qualification remains a separate medium-term lane; local default
+need not wait for it, and portable conformance does not declare it production-ready.
 
-This counts delivery boundaries, not guaranteed merges or all Python deletion.
-Scope may split only where a real effect/compatibility boundary warrants it.
-Small Python business-rule deletions can ship with each TS owner; rendering,
-private command execution and import/export keep their active adapters.
+The snapshot protocol is documented in [canonical snapshot pagination](../../reference/canonical-snapshot-pagination.md).
+It shares existing TS collection validation and acceptance ownership. Python
+only assembles/validates the transport and keeps the old public result shape.
+Per-page provider reads bound transmission, not database memory or total IO;
+concurrent writers may require an explicit full-read restart. D1–D3 holds remain.
 
-截至 2026-09-20，关联 User 完成链路补齐后，按以上五类完整交付边界估算还需 **5–8 个 PR**。
-Monitor #4732 已合并，SQLite D2 仍归 #4224 contributor；其余顺序是调用方/执行围栏、
-消费与投影、capture 与整 Goal 演练，最后独立切换默认值。该估算以未发现更多缺失
-effect 为前提，不是合并数承诺，也不要求先删完 Python。TS owner 每收敛一块即可
-删除对应旧规则；仍有真实调用方的渲染、私有命令执行和导入导出适配器继续保留。
+截至 2026-09-23，原五类粗粒度工作细化为七个具体 PR 边界：caller、executor fence、
+一致性分页、投影与客户端、D2、整 Goal 迁移回滚、默认与有界 Python 退役。
+D2 和迁移各可按独立验收拆成两批，因此含本批共 7–9 个，分页合入后计划 6–8 个。
+这不是按合并数量推进资格；未通过的证据仍是 hold。PostgreSQL 运维资格独立推进。
 
 Avoid concurrent edits to the same transaction owner; share
 fixture/contracts early and rebase after the owner lands.
@@ -3304,19 +3342,17 @@ The TS owner shares durable qualification and exact receipt proof between both
 paths. See [operation and acceptance](../../reference/reviewed-coordination-promotion.md).
 This stage does not authorize an active Goal migration or flip a default.
 
-For an existing claimed Goal, integrate the claim-preserving migration in #4870
-with this slice, qualify the exact combined head and resolve its existing CI and
-review holds. Preserve the registered owners, existing claims and leases; do not
+Claim-preserving migration #4870 and reviewed cutover #4888 are merged;
+shadow drain planning #4920 is also merged. Qualify their combined current head
+for an existing claimed Goal rather than treating an old PR hold as current. Preserve the registered owners, existing claims and leases; do not
 clear ownership to make storage migration appear ready. The saved-plan carrier
-must retain migration strategy, registered-agent facts and target digest when
-that extension is integrated.
+must retain migration strategy, registered-agent facts and target digest during
+combined qualification.
 
-The remaining default-on program is still approximately **5–8 cohesive PR
-packages**, with scope rather than line counts determining the split: caller /
-external-effect fencing (1–2), consumer/projection closure (1), contributor-owned
-SQLite D2 (#4224, 1–2), integrated capture/whole-Goal acceptance (1–2), then default
-onboarding plus bounded Python retirement (1). This slice contributes to the
-integrated migration package; it does not count an entire package complete.
+The current seven-boundary plan above separates caller admission, executor
+fences and snapshot reads; D2 and integrated migration may each split. This
+portable-recovery slice contributes to migration qualification, not an entire
+completed package. Use that single current plan instead of counting leaf fixes.
 Actual elapsed soak cannot be compressed into a promised number of PRs.
 PostgreSQL service admission and operations remain a separate medium-term lane.
 
@@ -3341,7 +3377,7 @@ source resume/succession and post-filter counts survive display limits. This is
 one L5 consumer closure, not D1 projection freshness or provider promotion. See
 [read semantics](../../reference/todo-work-counts.md). Remaining caller/executor,
 consumer recovery, contributor D2, capture/whole-Goal and default onboarding
-boundaries retain the conditional **5–8 cohesive PR** estimate.
+boundaries retain the conditional **7–9 cohesive PR** estimate.
 
 ## Appendix D: Execution ledger
 

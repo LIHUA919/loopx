@@ -10,6 +10,10 @@ from ..todos.contract import (
     normalize_todo_id,
     normalize_todo_replan_obligation_id,
 )
+from .external_progress_review import (
+    EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND,
+    external_progress_review_obligation,
+)
 from .progress_observation import replan_writeback_requirements
 from .replan_history_codec import project_replan_history
 from .replan_settlement import (
@@ -265,6 +269,33 @@ def run_history_agent_id(run: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _external_review_agent_runs(
+    latest_runs: list[dict[str, Any]] | None,
+    *,
+    neutral_classifications: set[str],
+    agent_id: str | None,
+) -> list[dict[str, Any]]:
+    """Scope receipt joins to the same newest attributable lane as history."""
+
+    accountable_agent_id = str(agent_id or "").strip() or next(
+        (
+            run_history_agent_id(run)
+            for run in latest_runs or []
+            if isinstance(run, dict)
+            and str(run.get("classification") or "").strip()
+            not in neutral_classifications
+            and run_history_agent_id(run)
+        ),
+        None,
+    )
+    return [
+        run
+        for run in latest_runs or []
+        if isinstance(run, dict)
+        and (not accountable_agent_id or run_history_agent_id(run) in {None, accountable_agent_id})
+    ]
+
+
 def run_history_monitor_target(run: Mapping[str, Any]) -> dict[str, Any] | None:
     target = run.get("monitor_target")
     if isinstance(target, dict):
@@ -356,6 +387,14 @@ def build_autonomous_replan_obligation(
         ),
         None,
     )
+    review_evidence = next(
+        (
+            item
+            for item in evidence
+            if item.get("kind") == EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND
+        ),
+        None,
+    )
     first_open: dict[str, Any] = {}
     if isinstance(agent_todos, dict):
         open_items = agent_todos.get("first_open_items")
@@ -399,6 +438,21 @@ def build_autonomous_replan_obligation(
                 "text": (
                     "resolve the repeated monitor target with watch-lane expiry, "
                     "a concrete blocker, todo supersede, or successor runnable todo"
+                ),
+            }
+        )
+    elif review_evidence:
+        todo_actions.append(
+            {
+                "action": "add",
+                "role": "agent",
+                "priority": "P1",
+                "text": (
+                    "select a slice whose next change serves a named acceptance "
+                    "criterion or adds evidence about it, or record with evidence why "
+                    "the current slice is a necessary prerequisite or why the plan "
+                    "stands; renamed, reordered or restated material and self-declared "
+                    "advancement are not progress"
                 ),
             }
         )
@@ -448,6 +502,14 @@ def build_autonomous_replan_obligation(
             "supersede, runnable successor, or coverage-backed terminal before another "
             "quiet monitor poll"
         )
+    elif review_evidence:
+        recommended_action = (
+            "run a bounded autonomous replan: the last "
+            f"{int(review_evidence.get('run_count') or 0)} observed changes were judged "
+            "not to serve an acceptance criterion or add evidence about one; name the "
+            "criterion the next slice serves and how it will be validated, or keep the "
+            "plan with a typed observation that carries new evidence"
+        )
     elif any(item.get("kind") in {"periodic_review", "periodic_review_due"} for item in evidence):
         recommended_action = (
             "run a bounded autonomous periodic review: keep, split, add, retire, or ask for "
@@ -488,6 +550,30 @@ def build_autonomous_replan_obligation(
             "progress:"
             + str(typed_progress_evidence.get("progress_fingerprint") or "")
         )
+    if review_evidence:
+        if review_evidence.get("frontier_identity"):
+            extra_fields["frontier_identity"] = review_evidence["frontier_identity"]
+        # The evaluated window's typed observation is the discharge baseline:
+        # the writeback semantics accept only a genuinely new surface,
+        # hypothesis, probe family, blocker or terminal coverage against it.
+        if isinstance(review_evidence.get("progress_baseline"), dict):
+            extra_fields["progress_baseline"] = review_evidence["progress_baseline"]
+        # Every typed claim made while the obligation formed travels with it, so
+        # the outcome owner can refuse a replay of any of them, not only the newest.
+        if isinstance(review_evidence.get("progress_window"), list):
+            extra_fields["progress_window"] = list(review_evidence["progress_window"])
+        extra_fields["external_progress_review"] = {
+            "schema_version": review_evidence.get("schema_version"),
+            "signal": review_evidence.get("signal"),
+            "run_count": review_evidence.get("run_count"),
+            "threshold": review_evidence.get("threshold"),
+            "evidence_ids": list(review_evidence.get("evidence_ids") or []),
+            "contract_revision": review_evidence.get("contract_revision"),
+            "consecutive_drift": review_evidence.get("consecutive_drift"),
+            "unevaluated_transitions": review_evidence.get("unevaluated_transitions"),
+            "model_authority": "none",
+            "effect": "required_obligation_under_goal_policy",
+        }
     result = build_autonomous_replan_obligation_payload(
         schema_version=autonomous_replan_schema_version,
         stall_threshold=(
@@ -581,6 +667,7 @@ def autonomous_replan_obligation_from_runs(
     dead_monitor_repeat_threshold: int,
     dead_monitor_repeat_schema_version: str,
     periodic_run_threshold: int,
+    external_progress_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     trigger = project_replan_history(
         latest_runs or [], agent_todos=agent_todos, agent_id=agent_id,
@@ -591,5 +678,30 @@ def autonomous_replan_obligation_from_runs(
         monitor_schema=dead_monitor_repeat_schema_version,
         periodic_threshold=periodic_run_threshold,
     )
-    return (build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
-            if trigger else None)
+    if trigger and trigger.get("kind") == "typed_progress_repeat":
+        return build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
+
+    # The TypeScript history owner keeps the established trigger rules. The
+    # optional receipt source only takes precedence over monitor/periodic review
+    # when a pinned assist policy has formed its own obligation.
+    if external_progress_review is not None:
+        review_obligation = external_progress_review_obligation(
+            _external_review_agent_runs(
+                latest_runs,
+                neutral_classifications=neutral_classifications,
+                agent_id=agent_id,
+            ),
+            external_progress_review=external_progress_review,
+            agent_id=agent_id,
+            ack_recorded=autonomous_replan_ack_recorded,
+            build_obligation=build_autonomous_replan_obligation,
+            agent_todos=agent_todos,
+            neutral_classifications=neutral_classifications,
+        )
+        if review_obligation:
+            return review_obligation
+
+    return (
+        build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
+        if trigger else None
+    )

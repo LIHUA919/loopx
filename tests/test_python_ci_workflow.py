@@ -62,14 +62,16 @@ def test_checks_aggregate_requires_both_parallel_lanes(
     assert (result.returncode == 0) == (kernel == dashboard == "success")
 
 
-def test_minimum_node_lane_keeps_full_coverage_with_runner_headroom() -> None:
+def test_minimum_node_lane_exercises_sqlite_without_a_skip_list() -> None:
     minimum = WORKFLOW.split("  node-minimum-compatibility:\n", 1)[1].split(
         "  node-forward-compatibility:\n", 1,
     )[0]
 
-    assert "timeout-minutes: 20" in minimum
-    assert "for test in tests/control_plane_ts/*.test.ts" in minimum
-    assert 'node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"' in minimum
+    assert 'node-version: "22.22.3"' in minimum
+    assert 'LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"' in minimum
+    assert "tests/control_plane_ts/sqlite_runtime_admission.test.ts" in minimum
+    assert "tests/control_plane_ts/deferred_hard_lease_lifecycle.test.ts" in minimum
+    assert "for test in tests/control_plane_ts/*.test.ts" not in minimum
     assert "--test-name-pattern" not in minimum
     assert "shard" not in minimum
 
@@ -195,15 +197,19 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
             assert "needs: [changes, kernel-static-checks, dashboard-acceptance]" in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
         else:
-            assert "needs: changes" in job
+            assert "needs: [changes, chat-bundle]" in job
             assert f"if: needs.changes.outputs.{output} == 'true'" in job
 
 
 def test_presentation_exemption_retains_real_frontend_checks_and_force_full() -> None:
     job = WORKFLOW.split("  presentation:\n", 1)[1].split("  merge-gate:\n", 1)[0]
-    assert "npm run build:chat" in job
-    assert "npm run smoke:personal-workspace-packaged" in job
-    assert "status --short --untracked-files=all -- loopx/web/chat" in job
+    assert "name: chat-bundle-${{ github.sha }}" in job
+    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
+    assert "npm run smoke:personal-workspace-packaged" in producer
+    assert "npm run smoke:chat-upgrade" in producer
+    assert producer.index("npm run smoke:personal-workspace-packaged") < producer.index("actions/upload-artifact")
+    assert "scripts/chat_bundle.py verify --source" in job
+    assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
     assert "labels.*.name, 'ci:full'" in WORKFLOW
     assert "labeled, unlabeled" in WORKFLOW
@@ -211,6 +217,23 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert "--force-full" in WORKFLOW
     assert "impact-shadow" not in WORKFLOW
     assert "matrix:\n        shard: [1, 2, 3, 4]" in WORKFLOW
+
+
+def test_windows_lane_rebuilds_the_frontend_without_a_usable_python3() -> None:
+    job = WORKFLOW.split("  windows-powershell:\n", 1)[1].split("  presentation:\n", 1)[0]
+    assert "timeout-minutes: 30" in job
+    assert "cache-dependency-path: apps/presentation/dashboard/package-lock.json" in job
+    assert "working-directory: apps/presentation/dashboard" in job
+    assert "npm ci --ignore-scripts" in job
+    assert "npm run build:chat" in job
+    assert "shell: pwsh" in job
+    # `python3` must be unusable, so a hardcoded POSIX name fails the lane.
+    assert 'Join-Path $shadow "python3.exe"' in job
+    assert "$env:PATH = \"$shadow;$env:PATH\"" in job
+    assert job.index("npm ci --ignore-scripts") < job.index("npm run build:chat")
+    assert job.index("npm run build:chat") < job.index(
+        "python scripts/chat_bundle.py verify --source"
+    )
 
 
 def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
@@ -299,3 +322,12 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
     assert re.search(r"shard: \[1, 2, 3, 4\]", WORKFLOW)
     assert "include-hidden-files: true" in WORKFLOW
     assert "--cov-fail-under" not in template
+
+
+def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
+    producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
+    assert "needs.changes.outputs.core_tests == 'true'" in producer
+    for name in ("kernel-static-checks", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+        job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
+        assert "needs: [changes, chat-bundle]" in job
+        assert "name: chat-bundle-${{ github.sha }}" in job

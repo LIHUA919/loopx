@@ -253,6 +253,7 @@ export type WorkspaceActionPreview = {
   teamPlanOutcome?: TeamPlanAppliedOutcome;
   teamPlanAssignments?: Array<{ laneId: string; agentId: string; task: string }>;
   teamPlanGapLanes?: Array<{ laneId: string; agentId: string; reasonCode: string; task?: string }>;
+  teamPlanTodoIds?: string[];
   title: string;
   sourceRequest?: WorkspaceActionPreviewRequest;
   workspaceCandidates?: Array<{ label: string; workspaceRef: string }>;

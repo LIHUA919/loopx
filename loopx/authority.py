@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from .control_plane.projects.registry_codec import (
     load_project_registry,
     mutate_project_registry,
+    require_runtime_compatible_project_registry,
 )
 from .control_plane.runtime.time import now_local_iso
 from .public_safe_text import (
@@ -457,9 +458,12 @@ def register_authority_source(
         )
 
     if dry_run:
-        summary, previous_entry = reduce(
-            copy.deepcopy(load_project_registry(registry_path))
+        registry = load_project_registry(registry_path)
+        require_runtime_compatible_project_registry(
+            registry,
+            operation="authority source registration",
         )
+        summary, previous_entry = reduce(copy.deepcopy(registry))
     else:
         summary, previous_entry = mutate_project_registry(
             registry_path,
@@ -568,9 +572,12 @@ def import_doc_registry_authority(
         )
 
     if dry_run:
-        summary, previous_entry = reduce(
-            copy.deepcopy(load_project_registry(registry_path))
+        registry = load_project_registry(registry_path)
+        require_runtime_compatible_project_registry(
+            registry,
+            operation="authority registry import",
         )
+        summary, previous_entry = reduce(copy.deepcopy(registry))
     else:
         summary, previous_entry = mutate_project_registry(
             registry_path,

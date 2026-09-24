@@ -38,6 +38,11 @@ def _review(*, area="product_runtime"):
         )
         if "verdict_values" in requirement:
             row["verdict"] = requirement["verdict_values"][0]
+        if key == "code_volume":
+            row["compatibility_assessment"] = {
+                "decision": "not_applicable",
+                "reason": "Local formatting fixture; no protocol, adapter or persisted format change.",
+            }
         if key == "semantic_alignment":
             row.update(
                 checked_scope="Changed helper and its callers; no shared state writes.",
@@ -509,3 +514,108 @@ def test_cli_rejects_goal_incomplete_approval_without_mutating_packet(tmp_path, 
     assert "problem_context:blocking_verdict" in checked["approval_blockers"]
     assert not checked["external_writes_performed"]
     assert result_path.read_bytes() == before
+
+
+def _compatibility(*, decision="retain", boundary="independent"):
+    return {
+        "decision": decision,
+        "reason": "Keep the old reader until supported offline clients complete their upgrade window.",
+        "consumer_inventory": "cli/request.py and supported mobile client releases call server/decode.py.",
+        "deployment_boundary": boundary,
+        "persisted_contract": "Receipt ids and digests remain stable; requests are not stored.",
+        "simpler_alternative": "One live wire version cannot yet serve the deployed offline clients.",
+        "validation_evidence": "validation_matrix: old/new client and immutable receipt readback cases.",
+    }
+
+
+def test_receipt_compatibility_prose_alone_cannot_justify_parallel_wires():
+    packet, result = _review()
+    row = result["evidence"]["code_volume"]
+    row.pop("compatibility_assessment")
+    row["compatibility_or_migration_need"] = "Keep v2 so old receipts remain recoverable."
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "code_volume:compatibility_assessment:value_not_object" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("missing", [
+    "consumer_inventory", "deployment_boundary", "persisted_contract",
+    "simpler_alternative", "validation_evidence", "reason",
+])
+def test_compatibility_retention_needs_separate_evidence(missing):
+    packet, result = _review()
+    assessment = _compatibility()
+    del assessment[missing]
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert f"code_volume:compatibility_assessment:missing_field:{missing}" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("boundary", ["independent", "co_deployed", "persisted_only", "mixed"])
+def test_real_compatibility_obligations_may_be_retained(boundary):
+    packet, result = _review()
+    assessment = _compatibility(boundary=boundary)
+    if boundary != "independent":
+        assessment.update(
+            consumer_inventory="recovery/replay.py reads durable pending requests after restart.",
+            persisted_contract="Historical request bytes are stored, not just result receipts.",
+            simpler_alternative="Consolidate current writers but retain the durable request decoder.",
+            reason="Old pending requests must remain readable until explicit migration drains them.",
+        )
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
+def test_optional_simplification_can_approve_with_a_concrete_nonblocking_followup():
+    packet, result = _review()
+    assessment = _compatibility(decision="follow_up", boundary="co_deployed")
+    assessment.update(
+        simpler_alternative="Replace the two harmless local wrappers with one named intent argument.",
+        reason="P2: consolidate wrappers next time their owner changes; neither duplicates decision rules.",
+    )
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    result["findings"] = [{"severity": "P2", "blocking": False}]
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("decision", ["simplify_now", "not_yet_proven"])
+def test_required_simplification_or_material_unknown_cannot_claim_approval(decision):
+    packet, result = _review()
+    result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision=decision)
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "code_volume:compatibility_assessment:blocking_decision" in checked["approval_blockers"]
+    result["verdict"] = "REQUEST_CHANGES"
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("patch,blocker", [
+    ({"decision": "looks_good"}, "invalid_decision"),
+    ({"deployment_boundary": "maybe"}, "invalid_deployment_boundary"),
+    ({"deployment_boundary": "unknown"}, "unknown_boundary_cannot_justify_decision"),
+])
+def test_unknown_compatibility_cannot_be_relabelled_as_verified(patch, blocker):
+    packet, result = _review()
+    result["evidence"]["code_volume"]["compatibility_assessment"] = {**_compatibility(), **patch}
+    assert f"code_volume:compatibility_assessment:{blocker}" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_unrelated_change_needs_only_a_scoped_compatibility_reason():
+    packet, result = _review(area="public_docs")
+    assessment = result["evidence"]["code_volume"]["compatibility_assessment"]
+    assert set(assessment) == {"decision", "reason"}
+    assert check_review_result(packet, result)["approval_consistent"]
+    del assessment["reason"]
+    assert not check_review_result(packet, result)["approval_consistent"]
+
+
+def test_projected_compatibility_rules_cannot_mutate_the_checker():
+    packet, result = _review()
+    contract = build_review_execution_contract()
+    rule = next(row for row in contract["evidence_requirements"] if row["evidence_id"] == "code_volume")
+    rule["compatibility_assessment"]["blocking_decisions"].clear()
+    rule["compatibility_assessment"]["applicable_fields"].clear()
+    packet["agent_response_contract"] = {"review_execution_contract": contract}
+    result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision="simplify_now")
+    assert not check_review_result(packet, result)["approval_consistent"]

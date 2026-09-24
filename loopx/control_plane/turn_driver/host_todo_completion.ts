@@ -27,7 +27,7 @@ export const HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION =
 export const HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION =
   "host_adapter_todo_settlement_v0";
 
-const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "project_guard"] as const;
+const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard"] as const;
 const STEP_KINDS = [
   "guard",
   "lifecycle_completion",
@@ -54,6 +54,7 @@ interface HostTodoCompletionRequest {
   no_follow_up: boolean;
   vision_path: string | null;
   vision_unchanged_reason: string | null;
+  checkpoint_read_context_id: string | null;
   provider_outcomes: readonly ProviderOutcome[];
 }
 
@@ -130,15 +131,22 @@ function decodeRequest(
     ? null : requireNonEmptyString(value[field], field);
   const visionPath = optionalText("vision_path");
   const unchanged = normalizeVisionUnchangedReason(optionalText("vision_unchanged_reason"));
+  const readContextId = optionalText("checkpoint_read_context_id");
   if (visionPath && unchanged) {
     throw new EffectRuntimeRequestError("choose a vision patch or an unchanged reason, not both");
   }
-  if ((visionPath || unchanged || phase === "vision_refresh") &&
+  if ((visionPath || unchanged || readContextId || phase === "vision_refresh" || phase === "vision_context") &&
       value.schema_version !== HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION) {
     throw new EffectRuntimeRequestError("host vision authoring requires v1");
   }
   if (phase === "vision_refresh" && !visionPath && !unchanged) {
     throw new EffectRuntimeRequestError("vision refresh requires an authored decision");
+  }
+  if (phase === "vision_context" && (visionPath || unchanged || readContextId)) {
+    throw new EffectRuntimeRequestError("vision context reads cannot submit a decision or receipt");
+  }
+  if (readContextId && phase !== "vision_refresh") {
+    throw new EffectRuntimeRequestError("checkpoint read context belongs only to vision recovery");
   }
   const request: HostTodoCompletionRequest = {
     phase,
@@ -168,6 +176,7 @@ function decodeRequest(
     no_follow_up: requireBoolean(value.no_follow_up, "no_follow_up"),
     vision_path: visionPath,
     vision_unchanged_reason: unchanged,
+    checkpoint_read_context_id: readContextId,
     provider_outcomes: [],
   };
   if (phase === "finalize") {
@@ -339,6 +348,7 @@ function writebackArgs(request: HostTodoCompletionRequest, identity: JsonObject)
     "--no-global-sync", "--suppress-external-sinks",
     ...(request.vision_path ? ["--agent-vision-json", request.vision_path] : []),
     ...(request.vision_unchanged_reason ? ["--vision-unchanged-reason", request.vision_unchanged_reason] : []),
+    ...(request.checkpoint_read_context_id ? ["--checkpoint-read-context", request.checkpoint_read_context_id] : []),
   ];
 }
 
@@ -966,6 +976,14 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
   const request = decodeRequest(value, phase);
   if (phase === "finalize") return finalize(request);
   const { payload: identity } = expectedIdentity(request);
+  if (phase === "vision_context") {
+    return {
+      schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION,
+      phase, identity, args: ["checkpoint-context", "--goal-id", request.goal_id,
+        "--agent-id", request.agent_id, "--todo-id", request.todo_id,
+        "--turn-instance-id", String(identity.turn_instance_id)],
+    };
+  }
   if (phase === "vision_refresh") {
     return {
       schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION,

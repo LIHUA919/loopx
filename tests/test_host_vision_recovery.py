@@ -51,11 +51,15 @@ def test_completed_todos_require_vision_decision_not_automatic_goal_close(tmp_pa
     assert before["should_run"] is True
     assert before["interaction_contract"]["mode"] != "terminal_no_followup"
     assert len(spends(runtime)) == 2
-    repaired = json.loads(control.review_task_vision("todo_cli", fixture.AGENT, vision(state)))
+    context = json.loads(control.review_task_vision("todo_cli", fixture.AGENT))
+    assert context["ok"] is True, context
+    assert context["basis"]["todo"]["todo_id"] == "todo_cli"
+    receipt = context["read_context_id"]
+    repaired = json.loads(control.review_task_vision("todo_cli", fixture.AGENT, vision(state), read_context_id=receipt))
     assert repaired["ok"] is True, repaired
     assert repaired["vision_checkpoint"]["satisfied"] is True
     assert repaired["refresh_recovery"]["decision"] == "supplement_checkpoint"
-    replay = json.loads(control.review_task_vision("todo_cli", fixture.AGENT, vision(state)))
+    replay = json.loads(control.review_task_vision("todo_cli", fixture.AGENT, vision(state), read_context_id=receipt))
     assert replay["ok"] is True, replay
     assert replay["appended"] is False
     assert len(spends(runtime)) == 2
@@ -205,8 +209,11 @@ def test_checkpoint_recovery_missing_baseline_conflict_and_lost_response(tmp_pat
     result = json.loads(control.complete_task("todo_reducer", fixture.AGENT, "Synthetic acceptance",
         successor_todo_ids=["todo_cli"]))
     assert result["ok"] is True
+    context = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT))
+    assert context["ok"] is True, context
+    receipt = context["read_context_id"]
     unchanged = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT,
-        vision_unchanged_reason="Still correct"))
+        vision_unchanged_reason="Still correct", read_context_id=receipt))
     assert unchanged.get("vision_checkpoint", {}).get("satisfied") is not True
     assert len(spends(runtime)) == 1
     original = control.run_cli
@@ -218,12 +225,12 @@ def test_checkpoint_recovery_missing_baseline_conflict_and_lost_response(tmp_pat
 
     monkeypatch.setattr(control, "run_cli", response_lost)
     with pytest.raises(TimeoutError):
-        control.review_task_vision("todo_reducer", fixture.AGENT, vision("vision_patch_proposed"))
+        control.review_task_vision("todo_reducer", fixture.AGENT, vision("vision_patch_proposed"), read_context_id=receipt)
     monkeypatch.setattr(control, "run_cli", original)
-    replay = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision("vision_patch_proposed")))
+    replay = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision("vision_patch_proposed"), read_context_id=receipt))
     assert replay["ok"] is True, replay
     assert replay["appended"] is False
-    conflict = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision("no_followup")))
+    conflict = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision("no_followup"), read_context_id=receipt))
     assert conflict["ok"] is False
     assert len(spends(runtime)) == 1
     # A valid vision decision never consumes the independent open successor.
@@ -238,3 +245,35 @@ def test_native_outer_controller_owns_new_vision_tool(monkeypatch):
     control = SimpleNamespace()
     guard_native_controller_writeback(control)
     assert json.loads(control.review_task_vision("todo_any", "agent", vision()))["ok"] is False
+
+
+def test_host_recovery_requires_its_explicit_fresh_read_context(tmp_path, monkeypatch):
+    control, project, runtime = control_at(tmp_path)
+    monkeypatch.chdir(project)
+    completed = json.loads(control.complete_task("todo_reducer", fixture.AGENT, "Synthetic acceptance",
+        successor_todo_ids=["todo_cli"]))
+    assert completed["ok"] is True, completed
+    index = runtime / "goals" / fixture.GOAL / "runs/index.jsonl"
+    before = index.read_bytes()
+    missing = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision()))
+    assert missing["error_code"] == "checkpoint_read_context_required", missing
+    old = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT))
+    current = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT))
+    replaced = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision(),
+        read_context_id=old["read_context_id"]))
+    assert replaced["error_code"] == "checkpoint_read_context_unknown_or_replaced", replaced
+    # A synthetic owner acceptance edit between the read and the decision.
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance\n\nVerify revised output.\n", encoding="utf-8")
+    stale = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, vision(),
+        read_context_id=current["read_context_id"]))
+    assert stale["error_code"] == "checkpoint_read_context_stale", stale
+    assert index.read_bytes() == before
+    fresh = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT))
+    assert "Verify revised output." in json.dumps(fresh["basis"])
+    corrected = vision("vision_patch_proposed")
+    corrected["vision_patch"]["acceptance_summary"] = "Verify revised output."
+    result = json.loads(control.review_task_vision("todo_reducer", fixture.AGENT, corrected,
+        read_context_id=fresh["read_context_id"]))
+    assert result["ok"] is True and result["vision_checkpoint"]["satisfied"], result
+    assert len(spends(runtime)) == 1

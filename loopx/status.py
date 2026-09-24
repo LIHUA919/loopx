@@ -483,6 +483,7 @@ def autonomous_replan_obligation_from_runs(
     *,
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
+    external_progress_review: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     from .control_plane.status.autonomous_replan_projection import (
         autonomous_replan_obligation_from_runs as _autonomous_replan_obligation_from_runs,
@@ -492,7 +493,21 @@ def autonomous_replan_obligation_from_runs(
         latest_runs,
         agent_todos=agent_todos,
         agent_id=agent_id,
+        external_progress_review=external_progress_review,
     )
+
+
+def external_progress_review_context(
+    goal: dict[str, Any],
+    runtime_root: Path | None,
+) -> dict[str, Any] | None:
+    """Status reads the sentinel context through the capability-owned loader."""
+
+    from .capabilities.progress_review.context import (
+        external_progress_review_context as _load_external_progress_review_context,
+    )
+
+    return _load_external_progress_review_context(goal, runtime_root)
 
 
 def autonomous_backlog_candidates(
@@ -1132,6 +1147,7 @@ def build_attention_queue(
             autonomous_replan_obligation_from_runs=autonomous_replan_obligation_from_runs,
             source_registry_shadow_findings=SOURCE_REGISTRY_SHADOW_FINDINGS,
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
+            external_progress_review_context=external_progress_review_context,
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,

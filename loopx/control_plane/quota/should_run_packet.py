@@ -24,6 +24,7 @@ from ..agents.agent_scope import (
     _agent_scope_deferred_resume_candidates,
     _agent_scope_frontier_action,
     _agent_scope_no_candidate_frontier,
+    _selected_candidate_priority_frontier,
     _attach_agent_identity_contracts,
 )
 from ..agents.capability_gate import missing_required_capabilities
@@ -441,6 +442,22 @@ def _delivery_preemptions_for_route(
         preemptions.append("control_repair")
     if not normal_delivery_allowed:
         preemptions.append("delivery_not_allowed")
+    requested_candidate = prepared.requested_action_candidate
+    agent_id = normalize_todo_claimed_by(
+        (prepared.agent_identity or {}).get("agent_id")
+    )
+    if (
+        not preemptions
+        and agent_id
+        and isinstance(prepared.agent_todo_summary, dict)
+        and isinstance(requested_candidate, dict)
+        and _selected_candidate_priority_frontier(
+            agent_id=agent_id,
+            summary=prepared.agent_todo_summary,
+            selected=requested_candidate,
+        )
+    ):
+        preemptions.append("ready_deferred_successor_priority_preemption")
     return preemptions
 
 

@@ -38,6 +38,21 @@ code-symbol and negative-walkthrough applicability. Inventory-only rows expose
 no executable review artifacts. Host skills route and publish this packet; they
 must not maintain a second explanation checklist.
 
+Compatibility review replaces the old free-text justification inside
+`code_volume` with `compatibility_assessment`. Reviewers identify actual callers,
+their deployment boundary, the separately persisted contract, a simpler
+alternative, and validation evidence. Keeping historical receipts does not by
+itself justify retaining an old transient request decoder; deploying callers
+together does not justify deleting a reader for durable queued requests.
+
+The declared decision is `retain`, `simplify_now`, `follow_up`, `not_yet_proven`,
+or `not_applicable`. A required simplification or material unknown cannot support
+APPROVE; an evidenced non-blocking follow-up can. Unrelated changes need only a
+scoped not-applicable reason. The checker enforces these declarations, not their
+truth: real caller inspection and old-data/mixed-version readback still belong
+to the reviewer. Policy revision 8 requires fresh evidence rather than relabeling
+an older result. It does not add a new wire schema or a new review authority.
+
 Codex agents should use the dedicated `loopx-pr-review` skill for this slash
 command. Do not route `/loopx-pr-review` through the broader `loopx-project`
 workflow or the merge-focused `loopx-pr-merge` skill.

@@ -38,6 +38,8 @@ LOCAL_AUTHORITY_PROTOCOL_KEYS = (
     "todo_read_result_schema",
     "todo_list_request_schema",
     "todo_list_result_schema",
+    "todo_snapshot_page_request_schema",
+    "todo_snapshot_page_result_schema",
     "promotion_request_schema",
     "promotion_result_schema",
     "promotion_receipt_schema",

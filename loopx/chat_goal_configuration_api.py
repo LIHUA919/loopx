@@ -140,6 +140,37 @@ def _change_quality_options(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _progress_review_options(config: Mapping[str, Any]) -> dict[str, Any]:
+    from .capabilities.progress_review.policy import (
+        normalize_progress_review_contract_revision,
+        normalize_progress_review_drift_threshold,
+        normalize_progress_review_mode,
+        normalize_progress_review_signal,
+    )
+
+    mode = config.get("mode")
+    signal = config.get("signal")
+    threshold = config.get("drift_threshold")
+    return {
+        "progress_review_contract_revision": (
+            normalize_progress_review_contract_revision(config.get("contract_revision"))
+            if "contract_revision" in config
+            else None
+        ),
+        "progress_review_mode": (
+            normalize_progress_review_mode(mode) if mode is not None else None
+        ),
+        "progress_review_signal": (
+            normalize_progress_review_signal(signal) if signal is not None else None
+        ),
+        "progress_review_drift_threshold": (
+            normalize_progress_review_drift_threshold(threshold)
+            if threshold is not None
+            else None
+        ),
+    }
+
+
 def _local_authority_shadow_options(config: Mapping[str, Any]) -> dict[str, Any]:
     if _boolean_configuration("local_authority_shadow", config, "enabled"):
         return {"local_authority_shadow_file": True}
@@ -167,6 +198,8 @@ def _goal_capability_options(
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
             return {"clear_change_quality_configuration": True}
+        if capability_id == "progress_review":
+            return {"clear_progress_review_configuration": True}
         if capability_id == "reward_memory":
             return {"clear_reward_memory_config": True}
         raise ValueError(f"Goal capability cannot be cleared: {capability_id}")
@@ -186,6 +219,7 @@ def _goal_capability_options(
         "explore_harness": {"enabled", "profile"},
         "pull_request_review": {"wait_for_ci", "review_priority"},
         "change_quality_qualification": {"enabled", "safe_fix", "strict_receipt"},
+        "progress_review": {"mode", "signal", "drift_threshold", "contract_revision"},
         "local_authority_shadow": {"enabled"},
         "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
@@ -239,6 +273,8 @@ def _goal_capability_options(
         return {"pull_request_review_configuration": normalize_configuration(config)}
     if capability_id == "change_quality_qualification":
         return _change_quality_options(config)
+    if capability_id == "progress_review":
+        return _progress_review_options(config)
     if capability_id == "local_authority_shadow":
         return _local_authority_shadow_options(config)
     if capability_id == "coordination_runtime_shadow":

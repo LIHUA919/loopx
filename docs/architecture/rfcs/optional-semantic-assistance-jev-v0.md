@@ -1,7 +1,7 @@
 # RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)
 
 - **RFC status:** Draft; M0 **accepted-for-discussion** ([maintainer decision](https://github.com/loopx-project/loopx/pull/4749#pullrequestreview-5259253204)). Q1–Q7 remain pending; the research/design is not accepted for implementation.
-- **Delivery maturity:** Proposal; documentation only, no integration or model qualification.
+- **Delivery maturity:** Research proposal; a separate D1-only optional shadow implementation is proposed in Appendix A. No model qualification or automatic correction is established. The default-off sentinel capability and its recorded differential live in [`loopx/capabilities/progress_review`](../../../loopx/capabilities/progress_review/README.md); those numbers do not change this Draft's status.
 - **Created:** 2026-09-19. **Last normative revision:** 2026-09-20.
 - **Implementation baseline:** `9f1916960306b3650d795895b89f331eeae2516e`; source ownership and trigger behavior rechecked at PR revision `27812bd0fb437f831a541b564bcb5be8a96ff77e`. Historical upstream inspection is recorded in Appendix A, not a whole-system certification.
 - **Authors / owners:** Proposal author; existing domain maintainers own any direction selected. No new runtime authority or assigned implementation owner.
@@ -355,7 +355,18 @@ No default D1 implementation, automatic worker adoption or hidden mandatory-mode
 - **Delta:** D7/D8, provisional opportunity ordering, expected-value decomposition and bounded ranking comparisons; bilingual text and index updated.
 - **Evidence/remaining gap:** source inspection and documentation only. No live provider comparison, production ranker or new authority; Q1–Q7 remain pending.
 
+### 2026-09-21 — Task-progress shadow implementation proposal (RFC D1)
+
+- **Baseline:** upstream `62d18677c`; the implementation includes only the optional D1 command, without D2–D8 ranking or selector changes.
+- **Proposal:** scoped checkpoint capture around actual refresh-state, separate inference, off/shadow configuration and historical readback. See the [operation guide](../../../packages/loopx-jev/DRIFT_SHADOW.md).
+- **Evidence boundary:** [discussion evolution and current-implementation measurements](../../../packages/loopx-jev/DESIGN_DECISIONS.md); deterministic integration checks are distinct from provider accuracy and task benefit. No automatic intervention or native host-hook rollout.
+- **Pending:** maintainer acceptance of this optional-tool scope and independently evaluated comparative value. The earlier M0 intake is not retroactive implementation approval.
+
 ## Appendix B: Decision log
+
+The separately proposed [Task-progress observation tool and decision record](../../../packages/loopx-jev/DESIGN_DECISIONS.md)
+do not change the historical M0 decision or settle Q1–Q7. Maintainers review that
+optional-tool scope separately; experimental results do not establish product adoption.
 
 | Date | Proposal / decision | Owner / approval state | Alternatives | Sections |
 | --- | --- | --- | --- | --- |
@@ -376,6 +387,7 @@ Record any future accepting decision with its actual public link and exact scope
 | E4 | PR #4749 and its linked maintainer review | Public request and request-changes rationale; no accepted research/adoption decision |
 | E5 | A/B/C and F01–F12 | Proposed experiments/obligations; unexecuted for this feature |
 | E6 | [Jev external evidence supplement v0 (Chinese)](../../research/agent-workflow-audits/jev-external-evidence-supplement-v0.zh-CN.md) | Third-party quality and implementation evidence as of 2026-09-21; no change to Q1-Q7 or research/adoption status |
+| E7 | [Task-progress observation decision record](../../../packages/loopx-jev/DESIGN_DECISIONS.md) | Public synthesis and current-implementation observations; not independent qualification, complete A/B/C or automatic-correction evidence |
 
 ## Appendix D: Deferred mechanisms and rejected shortcuts
 

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 import loopx.cli_commands.turn as turn_command
+from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
 )
@@ -1782,6 +1783,15 @@ def test_turn_run_once_cli_commits_validated_result_and_one_quota_slot(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry = _write_live_fixture(tmp_path)
+    policy_output = io.StringIO()
+    with contextlib.redirect_stdout(policy_output):
+        policy_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "automation-cadence", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--min-interval-minutes", "1440", "--expected-revision", "0",
+            "--owner-reference", "fixture-owner", "--execute",
+        ])
+    assert policy_code == 0, policy_output.getvalue()
     host_project = tmp_path / "isolated-host-workspace"
     host_project.mkdir()
     host_script = """
@@ -1847,6 +1857,8 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
     assert payload["status"] == "committed"
+    assert payload["admission"]["reserved"] is True
+    assert payload["admission"]["pre_model_admission"] == "managed_turn_only"
     assert payload["receipt"]["status"] == "committed"
     assert payload["receipt"]["next_phase"] is None
     assert payload["validation"]["status"] == "passed"
@@ -1933,6 +1945,28 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     assert [row["classification"] for row in replayed_rows] == [
         "fixture_progress",
         "quota_slot_spent",
+    ]
+
+    next_output = io.StringIO()
+    with contextlib.redirect_stdout(next_output):
+        next_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--host", "generic-cli", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--turn-instance-id", "next-cadence-fixture",
+            "--project", str(host_project), "--host-command-json",
+            json.dumps([sys.executable, "-c", host_script]), "--validation-command-json",
+            json.dumps([sys.executable, "-c", validation_script]), "--scan-root", str(project),
+            "--no-global-sync", "--execute",
+        ])
+    waiting = json.loads(next_output.getvalue())
+    assert next_code == 1, waiting
+    assert waiting["status"] == "interval_wait"
+    assert waiting["admission"]["next_eligible_at_ms"] > 0
+    assert waiting["effects"]["host_invoked"] is False
+    assert waiting["effects"]["quota_spent"] is False
+    assert "- next_eligible_at: " in render_loopx_turn_execution_markdown(waiting)
+    assert [json.loads(line)["classification"] for line in index_path.read_text(encoding="utf-8").splitlines()] == [
+        "fixture_progress", "quota_slot_spent",
     ]
 
 

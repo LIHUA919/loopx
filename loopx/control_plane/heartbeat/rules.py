@@ -22,9 +22,10 @@ HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     "具体user todo未投影，需修复LoopX状态投影；静默时内部修复。"
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
-    "writeback: 本轮精确monitor-poll提交→不refresh/spend；"
-    "其余no-change=surface_only/no spend；material=outcome+vision；"
-    "缺则同轮按返回命令补齐再terminal；unchanged→真实--vision-unchanged-reason。"
+    "本轮精确monitor-poll提交→不refresh/spend；"
+    "其余no-change=surface_only/no spend；writeback material=outcome+vision；"
+    "缺则同轮checkpoint-context重判，按凭据仅补vision；"
+    "过期重读；unchanged→真实--vision-unchanged-reason。"
 )
 REWARD_MEMORY_OUTCOME_RULE = (
     "`reward_memory_recall.experiment.automatic_ingest=true`: reusable Todo outcomes "

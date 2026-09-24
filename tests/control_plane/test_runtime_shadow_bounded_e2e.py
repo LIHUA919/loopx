@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
 from loopx.control_plane.coordination.coordination_state_contract_generated import (
     TASK_LEASE_ACQUIRE_REQUEST_SCHEMA,
 )
@@ -510,14 +512,13 @@ def test_public_committed_primary_cannot_be_relabelled_abandoned_by_native_reque
     w.crash("before_commit", "todo", "add", "--role", "agent", "--text", "A committed primary is never abandoned")
     directory = outbox.partition_directory(w.runtime, w.goal, "todos")
     [entry] = outbox.list_entries(directory)
-    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry,
-        resolution="abandoned", projection=None, digest=None)
-    assert request["entry"]["committed_sha256"] is not None
+    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry)
+    assert request["committed_sha256"] is not None
+    request["resolution"] = "abandoned"
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     primary = w.state.read_bytes()
-    result = adapter.effect_runtime_result("coordination.runtime_shadow.commit_entry", request, timeout=15)
-    assert result["outcome"] == "failed"
-    assert result["reason_code"] == "outbox_resolution_marker_mismatch"
+    with pytest.raises(EffectRuntimeRejected, match="shadow_entry_selection_invalid"):
+        adapter.effect_runtime_result("coordination.runtime_shadow.commit_entry", request, timeout=15)
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
     assert w.state.read_bytes() == primary
     assert w.drain()["ok"] is True

@@ -250,6 +250,24 @@ def test_stage_2a_row_reports_specific_unverified_reasons_for_each_missing_input
     assert ladder.collect_bindings(inputs)["nokv_client_config_sha256"] is not None
 
 
+@pytest.mark.stage2c_e2e
+def test_stage_2c2_row_passes_when_the_ladder_root_is_reached_through_a_symlink(tmp_path: Path) -> None:
+    """macOS's default temp directory is a symlink; the shadow rows must not care (#4892)."""
+
+    real = tmp_path / "real-root"
+    real.mkdir()
+    link = tmp_path / "link-root"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    row = ladder.row_by_id("s2c2.outbox_prepared_then_committed_entries")
+    result = ladder.run_row(row, root=link, environ=os.environ)
+    if result.status == "unverified":
+        pytest.skip(f"unverified: {result.reason_code}")
+    assert result.status == "pass", (result.reason_code, result.evidence)
+
+
 def test_nokv_sdk_pin_and_fence_checks_agree_across_helper_ladder_and_probe() -> None:
     from loopx.control_plane.coordination import nokv_jsonl_helper as helper
 

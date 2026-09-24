@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
 
 from shadow_e2e_fixture import workspace
 from loopx.control_plane.coordination import local_authority_shadow_adapter as adapter
@@ -134,16 +136,11 @@ def test_native_markerless_resolution_requires_source_evidence(
     w.crash(window, "todo", "add", "--role", "agent", "--text", "Source proof is not a caller flag")
     directory = outbox.partition_directory(w.runtime, w.goal, "todos")
     [entry] = outbox.list_entries(directory)
-    projection, digest = adapter._entry_projection(entry, goal_id=w.goal)
-    if claimed_resolution == "abandoned":
-        projection, digest = None, None
-    request = adapter._commit_entry_request(
-        runtime_root=w.runtime, goal_id=w.goal, entry=entry,
-        resolution=claimed_resolution, projection=projection, digest=digest,
-    )
+    request = adapter._commit_entry_request(runtime_root=w.runtime, goal_id=w.goal, entry=entry)
+    request["resolution"] = claimed_resolution
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
-    result = adapter.effect_runtime_result("coordination.runtime_shadow.commit_entry", request, timeout=15)
-    assert result["outcome"] == "failed", result
+    with pytest.raises(EffectRuntimeRejected, match="shadow_entry_selection_invalid"):
+        adapter.effect_runtime_result("coordination.runtime_shadow.commit_entry", request, timeout=15)
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
     view = adapter.read_local_authority_shadow(runtime_root=w.runtime, goal_id=w.goal, scan_limit=20)
     assert len(view["proof"]["transactions"]) == 1

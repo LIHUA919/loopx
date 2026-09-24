@@ -70,7 +70,9 @@ export async function commandObservationScenario(kind: CommandObservationCase, s
         expected_provider_revision});
       break;
     case "supersede":
-      run = backend => executeCoordinationTodoTerminalLifecycle(backend, {...common, todo_id: target,
+      const {operation_id: terminalId, ...terminalCommon} = common;
+      run = backend => executeCoordinationTodoTerminalLifecycle(backend, {...terminalCommon, todo_id: target,
+        operation_identity: {kind: "explicit", operation_id: terminalId},
         command: "supersede", expected_role: "agent", lifecycle_grants: [], authority_reason: null,
         decision_outcome: null, lease_idempotency_key: null, lease_expected_version: null,
         allow_user_gate_auto_acquire: false, requested_no_followup: false,

@@ -80,6 +80,7 @@ import {
 import {
   COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
   executeCoordinationTodoTerminalLifecycle,
+  decodeTerminalOperationIntent,
 } from "./todo_terminal_lifecycle.ts";
 import {
   acknowledgeLocalArchiveAttempt,
@@ -105,9 +106,7 @@ export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
 export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA =
-  "loopx_local_coordination_todo_terminal_lifecycle_request_v0";
-export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v1";
-export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_SOURCE_BOUND_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v2";
+  "loopx_local_coordination_todo_terminal_lifecycle_request_v3";
 export const LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_archive_request_v0";
 export const LOCAL_COORDINATION_TODO_ARCHIVE_ACK_REQUEST_SCHEMA =
@@ -1269,18 +1268,12 @@ export async function terminalLifecycleLocalCoordinationTodo(
     decision_read_from_provider: true, legacy_fallback_used: false};
   try {
     const input = requireJsonObject(value, "local coordination Todo terminal request");
-    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_WITNESSED_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_SOURCE_BOUND_REQUEST_SCHEMA) {
-      throw new TypeError("local coordination Todo terminal request schema mismatch");
+    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA) {
+      throw new TypeError("local coordination Todo terminal request schema mismatch; regenerate with the current runtime");
     }
-    const sourceBound = input.schema_version === LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_SOURCE_BOUND_REQUEST_SCHEMA;
-    if (!sourceBound && ["review_basis", "validation_source_provider_revision", "validation_declaration_sha256"].some(key => Object.hasOwn(input, key))) {
-      throw new TypeError("terminal source binding requires request v2");
-    }
+    const operationIntent = decodeTerminalOperationIntent(input);
     const reviewBasis = input.review_basis == null ? undefined : requireJsonObject(input.review_basis, "terminal review basis");
-    const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA, reviewBasis?.registry_sha256);
+    const authoritySourcesCurrent = registryAuthoritySourceCheck(input, true, reviewBasis?.registry_sha256);
     if (!Array.isArray(input.registered_agents) || !Array.isArray(input.lifecycle_grants) ||
         !Array.isArray(input.successor_intents) ||
         !Array.isArray(input.linked_successor_todo_ids)) {
@@ -1308,10 +1301,10 @@ export async function terminalLifecycleLocalCoordinationTodo(
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
       return {...await executeCoordinationTodoTerminalLifecycle(store, {
-        ...(sourceBound ? {validation_source_provider_revision: input.validation_source_provider_revision == null
+        validation_source_provider_revision: input.validation_source_provider_revision == null
           ? null : requireAuthorityStoreId(input.validation_source_provider_revision, "validation source provider revision"),
-          validation_declaration_sha256: input.validation_declaration_sha256 == null
-            ? null : requireAuthorityStoreId(input.validation_declaration_sha256, "validation declaration digest")} : {}),
+        validation_declaration_sha256: input.validation_declaration_sha256 == null
+          ? null : requireAuthorityStoreId(input.validation_declaration_sha256, "validation declaration digest"),
         ...(reviewBasis === undefined ? {} : {review_basis: {
           ...reviewBasis,
           provider_revision: requireAuthorityStoreId(reviewBasis.provider_revision, "review provider revision"),
@@ -1321,7 +1314,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
         todo_id: requireAuthorityStoreId(input.todo_id, "todo id"),
         expected_role: input.role === null || input.role === undefined
           ? null : requireAuthorityStoreId(input.role, "role") as "agent" | "user",
-        command: requireAuthorityStoreId(input.command, "command") as "complete" | "supersede",
+        ...operationIntent,
         actor_agent_id: input.actor_agent_id === null || input.actor_agent_id === undefined
           ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registeredAgents,
@@ -1331,20 +1324,12 @@ export async function terminalLifecycleLocalCoordinationTodo(
         decision_outcome: input.decision_outcome === null || input.decision_outcome === undefined
           ? null : requireAuthorityStoreId(input.decision_outcome, "decision_outcome") as
             "approve" | "reject" | "cancel",
-        operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_idempotency_key:
           input.lease_idempotency_key === null || input.lease_idempotency_key === undefined
             ? null : requireAuthorityStoreId(input.lease_idempotency_key, "lease idempotency key"),
         lease_expected_version: leaseExpectedVersion,
         allow_user_gate_auto_acquire: input.allow_user_gate_auto_acquire as boolean,
         requested_no_followup: input.requested_no_followup as boolean,
-        requested_completion_turn_key:
-          input.requested_completion_turn_key === null ||
-            input.requested_completion_turn_key === undefined
-            ? null : claimAgentValue(
-              input.requested_completion_turn_key,
-              "requested_completion_turn_key",
-            ),
         requested_completion_identity_source:
           input.requested_completion_identity_source === null ||
             input.requested_completion_identity_source === undefined

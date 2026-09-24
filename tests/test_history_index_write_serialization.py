@@ -26,15 +26,15 @@ GOAL_ID = "goal-history-lock"
 def record_lock_calls(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Capture every lock path taken through the history module."""
     taken: list[Path] = []
-    real_lock = history.exclusive_file_lock
+    real_lock = history.exclusive_run_index_lock
 
     @contextmanager
     def recording_lock(path: Path, **_kwargs: Any) -> Iterator[Path]:
         taken.append(path)
-        with real_lock(path) as locked:
+        with real_lock(path, **_kwargs) as locked:
             yield locked
 
-    monkeypatch.setattr(history, "exclusive_file_lock", recording_lock)
+    monkeypatch.setattr(history, "exclusive_run_index_lock", recording_lock)
     return taken
 
 

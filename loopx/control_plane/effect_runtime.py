@@ -29,7 +29,7 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MINIMUM_NODE_VERSION = (22, 18, 0)
+MINIMUM_NODE_VERSION = (22, 22, 3)
 MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -197,6 +197,18 @@ class EffectRuntimeStartupError(RuntimeError):
         self.diagnostic_code = diagnostic_code
 
 
+class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
+    """The request may have executed even though its response was lost."""
+
+    def __init__(self, method: str, *, timeout: float) -> None:
+        super().__init__(
+            f"TypeScript Effect runtime returned no verifiable response for {method} "
+            f"(request budget {timeout:g}s); the operation may have committed. Read its exact "
+            "durable receipt before any retry",
+            diagnostic_code="runtime_response_ambiguous",
+        )
+
+
 def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
@@ -359,6 +371,25 @@ def _pid_is_alive(value: object) -> bool:
     return process_is_alive(value)
 
 
+def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
+    """Let a dead directly spawned child fail the next non-signaling probe.
+
+    A stopped child can remain a zombie until its Python parent reaps it;
+    ``kill(pid, 0)`` still reports that zombie as present. This helper does
+    nothing for a live child or a runtime owned by another process.
+    """
+
+    if os.name == "nt" or not isinstance(info, Mapping):
+        return
+    pid = info.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
+
+
 def _start_lock_holder_pid(path: Path) -> int | None:
     try:
         value = int(path.read_text(encoding="utf-8").strip())
@@ -480,7 +511,12 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
             params={},
             timeout=timeout,
         )
-    except (EffectRuntimeRejected, EffectRuntimeRemoteError, OSError):
+    except (
+        EffectRuntimeRejected,
+        EffectRuntimeRemoteError,
+        EffectRuntimeResponseAmbiguous,
+        OSError,
+    ):
         # A runtime that is already closing must still be reported as pending
         # rather than as a failed restart.
         pass
@@ -530,30 +566,33 @@ def _request_with_info(
     with socket.create_connection(
         (str(info["host"]), int(info["port"])), timeout=timeout
     ) as connection:
-        connection.settimeout(timeout)
-        connection.sendall(encoded)
-        while True:
-            chunk = connection.recv(64 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            size += len(chunk)
-            if size > MAX_RESPONSE_BYTES:
-                raise RuntimeError("TypeScript Effect runtime response is oversized")
-            if b"\n" in chunk:
-                break
+        try:
+            connection.settimeout(timeout)
+            # sendall may have delivered a prefix before it raises. From this
+            # point onward the caller cannot prove that no effect ran.
+            connection.sendall(encoded)
+            while True:
+                chunk = connection.recv(64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("TypeScript Effect runtime response is oversized")
+                if b"\n" in chunk:
+                    break
+        except (OSError, RuntimeError) as exc:
+            raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
     try:
         response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
     except (json.JSONDecodeError, IndexError):
-        raise RuntimeError(
-            "TypeScript Effect runtime returned malformed JSON"
-        ) from None
+        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from None
     if (
         not isinstance(response, dict)
         or response.get("schema_version") != EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION
         or response.get("request_id") != request_id
     ):
-        raise RuntimeError("TypeScript Effect runtime response shape mismatch")
+        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout)
     if response.get("ok") is not True:
         raise _remote_runtime_error(response.get("error"))
     return response
@@ -773,6 +812,7 @@ def effect_runtime_request(
     request_id = str(uuid.uuid4())
     last_error: OSError | RuntimeError | None = None
     for attempt in range(2 if retry_safe else 1):
+        info: dict[str, Any] | None = None
         try:
             info = _read_info(info_path, fingerprint=fingerprint)
             if info is None:
@@ -784,18 +824,32 @@ def effect_runtime_request(
                 params=params,
                 timeout=timeout,
             )
-        except EffectRuntimeRemoteError:
+        except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
             raise
         except EffectRuntimeStartupError as exc:
             last_error = exc
             if attempt == 0 and retry_safe:
-                info_path.unlink(missing_ok=True)
                 continue
             raise
+        except TimeoutError as exc:
+            # A connect timeout is not evidence that an existing runtime died.
+            # In particular it must not replace a live server which may still
+            # be completing an earlier mutation under the per-Goal lock.
+            raise EffectRuntimeStartupError(
+                f"TypeScript Effect runtime did not connect for {method} "
+                f"within {timeout:g}s",
+                diagnostic_code="runtime_request_timeout",
+            ) from exc
         except (OSError, RuntimeError) as exc:
             last_error = exc
             if attempt == 0 and retry_safe:
-                info_path.unlink(missing_ok=True)
+                # Only pre-send connection failures reach this branch. Re-read
+                # the locator on retry: reap our own exited child first so a
+                # zombie is rejected by _read_info, while a live server may
+                # simply be draining.
+                # Even a token check followed by unlink would race with a
+                # replacement server publishing its own locator.
+                _reap_exited_runtime_child(info)
                 continue
             break
     if isinstance(last_error, TimeoutError):

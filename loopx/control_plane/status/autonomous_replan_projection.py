@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-
+from collections.abc import Mapping
 from typing import Any
 
 from ..work_items.replan_history_codec import (
@@ -88,11 +88,13 @@ def autonomous_replan_obligation_from_runs(
     *,
     agent_todos: dict[str, Any] | None,
     agent_id: str | None = None,
+    external_progress_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     return _autonomous_replan_obligation_from_runs(
         latest_runs,
         agent_todos=agent_todos,
         agent_id=agent_id,
+        external_progress_review=external_progress_review,
         autonomous_replan_ack_recorded=autonomous_replan_ack_recorded,
         neutral_classifications=AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS,
         build_autonomous_replan_obligation=build_autonomous_replan_obligation,

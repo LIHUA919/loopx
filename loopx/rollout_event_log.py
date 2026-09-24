@@ -186,6 +186,47 @@ def _idempotency_body(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key != "event_id"}
 
 
+def _iter_rollout_event_lines(
+    log_path: Path,
+    *,
+    strict: bool = False,
+) -> Iterator[tuple[int, str]]:
+    try:
+        handle = log_path.open("rb")
+    except OSError:
+        return
+    with handle:
+        for line_number, encoded_line in enumerate(handle, start=1):
+            try:
+                line = encoded_line.decode("utf-8")
+            except UnicodeDecodeError:
+                if strict:
+                    raise ValueError(
+                        f"rollout event log line {line_number} must contain valid UTF-8"
+                    ) from None
+                continue
+            yield line_number, line
+
+
+def _append_rollout_event_line(
+    log_path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    """Append one readable JSONL row after any torn final record."""
+
+    encoded = (
+        json.dumps(dict(payload), sort_keys=True, ensure_ascii=False).encode("utf-8")
+        + b"\n"
+    )
+    with log_path.open("a+b") as handle:
+        handle.seek(0, 2)
+        if handle.tell() > 0:
+            handle.seek(-1, 2)
+            if handle.read(1) != b"\n":
+                handle.write(b"\n")
+        handle.write(encoded)
+
+
 def rollout_event_log_path(runtime_root: Path, goal_id: str) -> Path:
     # Goal ids are used as directory names throughout the control plane. Keep
     # this shared path helper fail-closed so every reader and writer inherits
@@ -379,21 +420,19 @@ def append_rollout_event(log_path: Path, event: Mapping[str, Any]) -> dict[str, 
         raise ValueError("rollout event_id is required")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(log_path):
-        with log_path.open("a+", encoding="utf-8") as handle:
-            handle.seek(0)
-            for line in handle:
-                if event_id not in line:
-                    continue
-                try:
-                    existing = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(existing, dict) or existing.get("event_id") != event_id:
-                    continue
-                if _idempotency_body(existing) == _idempotency_body(payload):
-                    return existing
-                raise ValueError(f"conflicting rollout event_id: {event_id}")
-            handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n")
+        for _, line in _iter_rollout_event_lines(log_path):
+            if event_id not in line:
+                continue
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(existing, dict) or existing.get("event_id") != event_id:
+                continue
+            if _idempotency_body(existing) == _idempotency_body(payload):
+                return existing
+            raise ValueError(f"conflicting rollout event_id: {event_id}")
+        _append_rollout_event_line(log_path, payload)
     return payload
 
 
@@ -421,22 +460,20 @@ def append_rollout_event_once(
         raise ValueError("rollout event_id is required")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(log_path):
-        with log_path.open("a+", encoding="utf-8") as handle:
-            handle.seek(0)
-            for line in handle:
-                try:
-                    existing = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(existing, dict):
-                    continue
-                if all(existing.get(field) == payload.get(field) for field in fields):
+        for _, line in _iter_rollout_event_lines(log_path):
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(existing, dict):
+                continue
+            if all(existing.get(field) == payload.get(field) for field in fields):
+                return existing, False
+            if existing.get("event_id") == event_id:
+                if _idempotency_body(existing) == _idempotency_body(payload):
                     return existing, False
-                if existing.get("event_id") == event_id:
-                    if _idempotency_body(existing) == _idempotency_body(payload):
-                        return existing, False
-                    raise ValueError(f"conflicting rollout event_id: {event_id}")
-            handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n")
+                raise ValueError(f"conflicting rollout event_id: {event_id}")
+        _append_rollout_event_line(log_path, payload)
     return payload, True
 
 
@@ -445,36 +482,31 @@ def iter_rollout_events(
     *,
     strict: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    try:
-        handle = log_path.open(encoding="utf-8")
-    except OSError:
-        return
-    with handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                if strict:
-                    raise ValueError(
-                        f"rollout event log line {line_number} must contain valid JSON"
-                    ) from None
-                continue
-            if not isinstance(parsed, dict):
-                if strict:
-                    raise ValueError(
-                        f"rollout event log line {line_number} must contain an object"
-                    )
-                continue
-            if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
-                if strict:
-                    raise ValueError(
-                        f"rollout event log line {line_number} must use "
-                        f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
-                    )
-                continue
-            yield parsed
+    for line_number, line in _iter_rollout_event_lines(log_path, strict=strict):
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            if strict:
+                raise ValueError(
+                    f"rollout event log line {line_number} must contain valid JSON"
+                ) from None
+            continue
+        if not isinstance(parsed, dict):
+            if strict:
+                raise ValueError(
+                    f"rollout event log line {line_number} must contain an object"
+                )
+            continue
+        if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
+            if strict:
+                raise ValueError(
+                    f"rollout event log line {line_number} must use "
+                    f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
+                )
+            continue
+        yield parsed
 
 
 def load_rollout_events(log_path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:

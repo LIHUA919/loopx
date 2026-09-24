@@ -35,7 +35,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
       const before = await loaded(store);
       const request: CoordinationTodoTerminalLifecycleInput = {goal_id: goal, todo_id: fixture.completion_todo_id,
         expected_role: "agent", command: "complete", actor_agent_id: "agent-a", registered_agents: fixture.registered_agents,
-        lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_id: "reviewed-close",
+        lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_identity: {kind: "explicit" as const, operation_id: "reviewed-close"},
         lease_idempotency_key: fixture.completion_lease_idempotency_key,
         lease_expected_version: fixture.completion_lease_expected_version,
         allow_user_gate_auto_acquire: false, requested_no_followup: true,
@@ -55,7 +55,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
         const result = await execute(store, {...request, ...changes});
         assert.equal(result.reason_code, code, JSON.stringify(result));
         assert.deepEqual(await loaded(store), before);
-        assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+        assert.equal((await store.readReceipt(request.operation_identity.operation_id)).status, "missing");
       }
       assert.equal((await execute(store, {...request, validation_declaration: declaration, dry_run: true})).status, "planned");
       assert.deepEqual(await loaded(store), before);
@@ -81,7 +81,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
       assert.equal((await execute(store, {...resume, review_basis: undefined})).reason_code, scenario.changed_source_rejection);
       assert.deepEqual(await loaded(store), advanced);
       const fresh = {...withDeclaration, validation_source_provider_revision: advanced.provider_revision,
-        operation_id: "fresh-review", review_basis: {
+        operation_identity: {kind: "explicit" as const, operation_id: "fresh-review"}, review_basis: {
         ...request.review_basis!, provider_revision: advanced.provider_revision}};
       const freshEffect = await execute(store, fresh);
       assert.equal(freshEffect.status, "execute_validation");
@@ -105,7 +105,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
         {...oldLease, status: "released", updated_at: scenario.observed_at});
       assert.deepEqual((after.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id),
         (advanced.head.todos as JsonObject[]).filter(todo => todo.todo_id !== request.todo_id));
-      const receipt = await store.readReceipt(commit.operation_id);
+      const receipt = await store.readReceipt(commit.operation_identity.operation_id);
       const replay = await execute(contender, {...commit, validation_declaration: null, validation_receipt: null,
         validation_source_provider_revision: null, now: new Date(String(scenario.after_expiry))},
         async () => {throw new Error("Historical recovery must precede source checks");});
@@ -116,7 +116,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
         assert.equal((await execute(store, {...commit, ...changes})).reason_code, "coordination_operation_identity_mismatch");
       }
       assert.deepEqual(await loaded(store), after);
-      assert.deepEqual(await store.readReceipt(commit.operation_id), receipt);
+      assert.deepEqual(await store.readReceipt(commit.operation_identity.operation_id), receipt);
     });
   }
 }

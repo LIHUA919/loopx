@@ -111,6 +111,29 @@ test("delegated controller reopens a promoted legacy claim before its first leas
     patch: {note: "Must not cross active execution"}})).reason_code, "lease_fence_required");
 });
 
+test("claimed deferred Todo can reopen after its time gate under hard lease", async () => {
+  const {store, request} = await seeded({status: "deferred", done: true,
+    task_class: "advancement_task", resume_when: "resume_at:2026-09-05T22:00:00Z"});
+  const head = await store.loadAuthority();
+  assert.equal(head.status, "loaded");
+  if (head.status !== "loaded") return;
+  await store.commitAuthority({operation_id: "enable-hard-lease",
+    expected_provider_revision: head.provider_revision, events: [], receipts: [],
+    next_projection: {...head.head, handoff_mode: "hard_lease"}});
+  const resume = {...request, operation_id: "resume-deferred", patch: {}, clear_fields: [],
+    planning_intent: {status: "open", clear_resume_when: true}};
+  const result = await executeCoordinationTodoUpdate(store, resume);
+  assert.equal(result.status, "applied", JSON.stringify(result));
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") return;
+  const todo = (after.head.todos as Record<string, unknown>[])[0]!;
+  assert.equal(todo.status, "open");
+  assert.equal(todo.resume_when, undefined);
+  assert.equal(todo.claimed_by, "agent-a");
+  assert.deepEqual(after.head.leases, []);
+});
+
 test("native planning edit commits nonterminal state and clears its wait atomically", async () => {
   const {store, request} = await seeded({task_class: "advancement_task"});
   const edit = {...request, patch: {text: "Old text"}, clear_fields: [], planning_intent: {

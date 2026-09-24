@@ -41,6 +41,19 @@ def test_observation_completion_replay_and_same_hash_reactivation(tmp_path, monk
     assert row["result_hash"] == "same-member-set"
     assert "completed_at" not in row and "completion_continuation" not in row
     assert revived["projection_delivery"] in {"delivered", "current"}
+    completed_again = complete_goal_todo(**arguments, no_followup=True)
+    assert completed_again["provider_status"] == "applied"
+    assert completed_again["changed"] is True
+    assert (
+        completed_again["original_receipt"]["operation_id"]
+        != completed["original_receipt"]["operation_id"]
+    )
+    final = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+    row = next(todo for todo in final["todos"] if todo["todo_id"] == monitor["todo_id"])
+    assert row["status"] == "done" and row["done"] is True
+    second_replay = complete_goal_todo(**arguments, no_followup=True)
+    assert second_replay["provider_status"] == "replayed"
+    assert second_replay["original_receipt"] == completed_again["original_receipt"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -44,6 +44,7 @@ BUILTIN_IDS = [
     "connector-registry",
     "external-evidence-research",
     "reliability-diagnostics",
+    "progress-review-sentinel",
 ]
 
 

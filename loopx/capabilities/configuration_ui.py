@@ -6,6 +6,13 @@ from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
 
+from .progress_review.policy import (
+    PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
+    PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD,
+    PROGRESS_REVIEW_MODES,
+    PROGRESS_REVIEW_SIGNALS,
+)
+
 CAPABILITY_CONFIGURATION_CATALOG_SCHEMA = "capability_configuration_catalog_v0"
 CAPABILITY_CONFIGURATION_EDITOR_SCHEMA = "capability_configuration_editor_v0"
 CAPABILITY_CONFIGURATION_RESOLUTION_SCHEMA = "capability_configuration_resolution_v0"
@@ -286,6 +293,52 @@ def capability_configuration_editor(
                 _field("enabled", "Enabled", "boolean"),
                 _field("safe_fix", "Allow one bounded safe-fix pass", "boolean"),
                 _field("strict_receipt", "Require an exact-diff receipt", "boolean"),
+            ],
+        },
+        "progress_review": {
+            "supported_scopes": ["goal"],
+            "writable_scopes": ["goal"],
+            "fields": [
+                _field(
+                    "mode",
+                    "Mode",
+                    "select",
+                    options=PROGRESS_REVIEW_MODES,
+                    required=True,
+                    description=(
+                        "off records nothing; shadow records typed receipts only; "
+                        "assist lets consecutive drift receipts raise the existing "
+                        "autonomous replan obligation. No pause or gate authority."
+                    ),
+                ),
+                _field(
+                    "signal",
+                    "Drift signal",
+                    "select",
+                    options=PROGRESS_REVIEW_SIGNALS,
+                    description=(
+                        "Which receipt judgment counts as drift: the Noul behavior/"
+                        "acceptance pair or the Choice relation/increment pair."
+                    ),
+                ),
+                _field(
+                    "drift_threshold",
+                    "Consecutive drift receipts before an obligation",
+                    "integer",
+                    minimum=PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD,
+                    maximum=PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
+                ),
+                _field(
+                    "contract_revision",
+                    "Pinned goal contract revision",
+                    "text",
+                    nullable=True,
+                    description=(
+                        "sha256 of the observer basis the receipts must be bound to; "
+                        "printed by `loopx-jev drift init`. assist raises nothing "
+                        "without it, and receipts for other revisions are stale."
+                    ),
+                ),
             ],
         },
         "pull_request_review": {

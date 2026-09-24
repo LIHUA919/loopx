@@ -37,13 +37,27 @@ TS terminal owner 统一决定准入、来源新鲜度、验证计划、租约�
 
 ## 协议与迁移边界
 
-当前 Python adapter 使用 `loopx_local_coordination_todo_terminal_lifecycle_request_v2`，
-复用已有 terminal method，新增字段限定为：
+随包发布的 Python adapter 和 TypeScript runtime 统一使用
+`loopx_local_coordination_todo_terminal_lifecycle_request_v3`，完成和 supersede
+都通过 `operation_identity` 明确表达操作意图：
+
+- `{kind: "explicit", operation_id: "..."}`：执行或恢复指定操作，包括旧 runtime
+  已写入的历史回执。
+- `{kind: "current_monitor_cycle"}`：完成没有显式 completion turn key 的
+  `continuous_monitor` 当前轮次。TS owner 根据 Goal id、Todo id 和权威状态中的
+  `material_change_generation` 推导操作标识。
+
+Monitor 重开时 generation 递增，因此旧周期回执不能完成当前 open 周期。
+如果显式操作已完成当前周期，核心写入该 generation 的 no-change 回执，不会猜测
+legacy unscoped 回执属于该周期。两种意图共用同一个终结事务；普通完成和 supersede
+使用 explicit identity。
+
+同一 terminal method 还接受以下受限字段：
 
 - `review_basis`：若提供，精确包含 `provider_revision` 和 `registry_sha256`，绑定
   已审核意图并进入回执 identity。
 - `validation_source_provider_revision`：发出 effect 前为 null，继续执行时传回发出的
-  revision。它约束新鲜度，不创建新 operation identity；v2 的普通验证和 Goal acceptance
+  revision。它约束新鲜度，不创建新 operation identity；当前协议的普通验证和 Goal acceptance
   验证都要求它。
 - `validation_declaration_sha256`：canonical 的公开声明摘要。先查历史回执，再获取私有
   声明；新执行仍须验证原声明和当前授权。
@@ -53,13 +67,17 @@ TS terminal owner 统一决定准入、来源新鲜度、验证计划、租约�
 （解析声明、规划 effect、提交）；无验证完成和历史回放仍是一次 terminal 请求。
 这次额外调用让恢复不依赖本机 argv，未来原生 host 同时拥有声明解析与 effect 执行后可删除。
 
-v0/v1 保留原 fingerprint 和验证合同，拒绝新字段，不能静默丢弃约束。不带 review 的
-v2 保留原 CLI terminal fingerprint，不改写旧回执。带审核 basis 的请求若遇到已回退
+删除 v0/v1/v2 请求解码分支。这是随包共同发布的 adapter/runtime 内部请求，
+不是持久化操作：两端一起升级，由当前 runtime 重新生成请求。旧版本和顶层
+`operation_id` 写法在访问 provider 前即被拒绝。已有回执 schema、operation id 和
+请求 fingerprint 不变；读取旧回执不需要保留旧请求解码器。
+带审核 basis 的请求若遇到已回退
 的 legacy authority，公共 facade 拒绝落入旧写路径。
 
 本次不改变 provider 默认值、晋升、权限、保留策略或存储格式。回滚保留 provider
-数据、回执和 writer fence，恢复兼容代码；旧代码不能执行 v2，应重新生成兼容预览，
-不能剥掉审核字段。Markdown 仍是永久显示。此批闭合终结审核/恢复调用族，不等于
+数据、回执和 writer fence，恢复兼容代码；无法识别请求版本的代码不能执行该请求，
+应重新生成兼容预览，不能剥掉审核字段，也不能剥掉 operation identity。Markdown
+仍是永久显示。此批闭合终结审核/恢复调用族，不等于
 全部 leased metadata、executor-held effect fence、D1–D3 或整 Goal 切换完成。
 
 共享 provider conformance 使用完整复杂 fixture、native/imported 两种记录，覆盖审核/

@@ -1097,7 +1097,11 @@ the same completion intent and a corrected uncommitted vision. Checkpoint-only
 recovery is not a substitute for unfinished settlement.
 
 If a previously completed MCP Todo omitted its decision, call
-`review_task_vision(todo_id, agent_id, agent_vision=...)` with that same Todo.
+`review_task_vision(todo_id, agent_id)` with that same Todo to read its current
+decision basis. Judge the returned basis, then submit `agent_vision=...` or
+`vision_unchanged_reason=...` together with `read_context_id=...`. A stale or
+replaced receipt requires another read and a new judgment; a lost response
+requires the exact same receipt and decision, without reading again.
 It uses the original host Turn and the same writeback command constructor,
 delegating to the existing typed checkpoint recovery. It neither repeats Todo
 completion nor spends again. Exact replay is idempotent; a conflicting committed
@@ -1115,7 +1119,9 @@ not a substitute for evidence; remaining acceptance gaps or gates still prevent
 terminal quota. Kernel validation does not independently prove arbitrary prose
 true, so behavior qualification must also inspect the delivered artifacts.
 
-MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏。
+MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏：
+先只传 Todo 和 Agent 读取依据，重新判断后携带 `read_context_id` 与判断提交。
+凭据过期或被替换时重读重判；响应丢失时原样重试凭据和判断，不重新读取。
 复用 TS 的既有恢复规则，不新增结算引擎、不重扣额度；已提交的判断不能偷偷改写。
 格式和预算预检在 Todo 完成前拒绝非法输入；若旧宿主已部分完成，则修正未提交的
 vision 并重试原 `complete_task`，不能用仅补 checkpoint 的操作替代未完成结算。

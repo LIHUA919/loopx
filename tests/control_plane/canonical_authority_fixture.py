@@ -48,3 +48,22 @@ def isolate_sqlite_runtime(tmp_path, monkeypatch):
     # Each CLI subprocess resolves its own tempfile root from this environment.
     for variable in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(variable, str(tmp_path))
+
+
+def single_snapshot_page(result: dict, goal_id: str = "goal-a") -> dict:
+    """Encode small provider read fixtures as one complete transport page."""
+    return {
+        "schema_version": "loopx_canonical_snapshot_page_result_v0", "status": "page",
+        "snapshot": {"goal_id": goal_id, "store_identity": "fixture-store",
+                     "provider_revision": result["provider_revision"], "cursor": result["cursor"],
+                     "query_sha256": "fixture-query", "todo_count": len(result["todos"]),
+                     "lease_count": len(result.get("leases", []))},
+        "metadata": {key: result[key] for key in (
+            "todo_read_model", "goal_acceptance_contract", "handoff_mode", "projection_readback"
+        ) if key in result},
+        **{key: result[key] for key in (
+            "todos", "leases", "goal_acceptance_work_guards", "source_authority",
+            "decision_read_from_provider", "legacy_fallback_used"
+        ) if key in result},
+        "next": None,
+    }

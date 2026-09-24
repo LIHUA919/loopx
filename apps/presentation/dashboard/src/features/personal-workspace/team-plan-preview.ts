@@ -104,6 +104,13 @@ export type TeamPlanGapLane = { laneId: string; agentId: string; reasonCode: str
 
 export type TeamPlanAssignment = { laneId: string; agentId: string; task: string };
 
+/** Only canonical Todo identities from the apply receipt can link later work to this plan. */
+export function teamPlanTodoIds(receipt: unknown): string[] {
+  const ids = asRecord(asRecord(receipt).resource_ids).lane_todo_ids;
+  return Array.isArray(ids) ? ids.filter((id): id is string =>
+    typeof id === "string" && /^todo_[a-f0-9]{12}$/.test(id)) : [];
+}
+
 /** Receipt membership owns the result; the admitted preview only supplies task labels. */
 export function teamPlanAssignments(receipt: unknown, parameters: Record<string, unknown>): TeamPlanAssignment[] {
   const record = asRecord(receipt);

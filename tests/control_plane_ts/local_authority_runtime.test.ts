@@ -1522,8 +1522,10 @@ test("local canonical runtime never falls back when provider state is missing", 
 test("terminal and archive wire adapters reject coercible numeric values", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "loopx-local-authority-strict-numbers-"));
   t.after(() => rm(root, {recursive: true, force: true}));
+  await writeFile(join(root, "registry.json"), "{}");
   const terminalRequest = (leaseExpectedVersion: unknown) => ({
     schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
+    registry_source: {path: join(root, "registry.json"), sha256: createHash("sha256").update("{}").digest("hex")},
     runtime_root: root,
     goal_id: "goal-a",
     todo_id: "todo-a",
@@ -1534,7 +1536,7 @@ test("terminal and archive wire adapters reject coercible numeric values", async
     lifecycle_grants: [],
     authority_reason: null,
     decision_outcome: null,
-    operation_id: "terminal-strict-number",
+    operation_identity: {kind: "explicit" as const, operation_id: "terminal-strict-number"},
     lease_idempotency_key: null,
     lease_expected_version: leaseExpectedVersion,
     allow_user_gate_auto_acquire: false,
@@ -1655,8 +1657,10 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
       }),
       receipts: [],
     })).status, "applied");
+    await writeFile(join(root, "registry.json"), "{}");
     const request = {
       schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
+      registry_source: {path: join(root, "registry.json"), sha256: createHash("sha256").update("{}").digest("hex")},
       runtime_root: root,
       goal_id: "goal-a",
       todo_id: "todo_a",
@@ -1667,7 +1671,7 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
       lifecycle_grants: [],
       authority_reason: null,
       decision_outcome: null,
-      operation_id: `terminal-prose-${index}`,
+      operation_identity: {kind: "explicit" as const, operation_id: `terminal-prose-${index}`},
       lease_idempotency_key: null,
       lease_expected_version: null,
       allow_user_gate_auto_acquire: false,
@@ -1698,6 +1702,7 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
   for (const field of ["note", "evidence", "reason"] as const) {
     const invalid = await terminalLifecycleLocalCoordinationTodo({
       schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
+      registry_source: {path: join(tmpdir(), "unused-registry.json"), sha256: "0".repeat(64)},
       runtime_root: join(tmpdir(), "loopx-invalid-terminal-prose"),
       goal_id: "goal-a",
       todo_id: "todo-a",
@@ -1708,7 +1713,7 @@ test("terminal wire preserves legacy optional prose semantics", async (t) => {
       lifecycle_grants: [],
       authority_reason: null,
       decision_outcome: null,
-      operation_id: `terminal-invalid-${field}`,
+      operation_identity: {kind: "explicit" as const, operation_id: `terminal-invalid-${field}`},
       lease_idempotency_key: null,
       lease_expected_version: null,
       allow_user_gate_auto_acquire: false,

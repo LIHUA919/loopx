@@ -31,12 +31,9 @@ from .coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_TRANSACTION_EVIDENCE_SCHEMA,
 )
 from .local_authority_shadow_projection import (
-    LEASE_PARTITION,
     PARTITIONS,
     TODO_PARTITION,
-    canonical_value,
     head_digest,
-    partition_digest,
     todo_partition_projection,
 )
 from .runtime_shadow import resolve_coordination_runtime_shadow_config, capture_todo_archive_dependencies
@@ -94,14 +91,6 @@ _COMMIT_ENTRY_OUTCOMES = {
 }
 _SETTLED_OUTCOMES = {"delivered", "replayed", "ambiguous_reconciled"}
 _SEED_WRITE_CLASSES = {"seed", "reseed_after_crash_gap"}
-_ENTRY_SOURCE_FIELDS = (
-    "kind",
-    "previous_bytes_digest",
-    "previous_partition_digest",
-    "bytes_digest",
-    "lease",
-    "event_id",
-)
 _EVIDENCE_V1_OUTCOMES = {
     "delivered",
     "replayed",
@@ -239,39 +228,6 @@ def _goal_sources(
     )
 
 
-def _read_state_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
-
-
-def _event_present(sources: _GoalSources, event_id: str) -> bool:
-    from ...event_sourced_state import AppendOnlyStateEventStore
-    from ..goals.active_state_event_projection import state_event_log_candidates
-    from ..goals.path_resolution import resolve_goal_local_path
-
-    if sources.goal is None:
-        return False
-    for candidate in state_event_log_candidates(
-        sources.goal,
-        state_path=sources.state_path,
-        resolve_goal_local_path=resolve_goal_local_path,
-    ):
-        if not candidate.exists():
-            continue
-        for event in AppendOnlyStateEventStore(candidate).load():
-            if isinstance(event, dict) and event.get("event_id") == event_id:
-                return True
-    return False
-
-
-def _lease_bytes(sources: _GoalSources, todo_id: str) -> bytes | None:
-    if not todo_id or "/" in todo_id or "\\" in todo_id or todo_id in {".", ".."}:
-        raise outbox.OutboxError("outbox_file_invalid", "invalid lease source identity")
-    try:
-        return (sources.lease_dir / f"{todo_id}.json").read_bytes()
-    except FileNotFoundError:
-        return None
-
-
 @contextmanager
 def _primary_lock_if_free(
     partition: str,
@@ -318,80 +274,18 @@ def _primary_lock_if_free(
         yield False
 
 
-def _entry_projection(
-    entry: outbox.OutboxEntry,
-    *,
-    goal_id: str,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Compact projection and digest for a deliverable entry."""
-
-    raw = entry.projection()
-    if raw is None:
-        return None, None
-    if entry.partition == LEASE_PARTITION:
-        projection = outbox.compact_lease_projection(raw, goal_id=goal_id)
-        return projection, partition_digest(projection)
-    projection = dict(canonical_value(raw))
-    digest = partition_digest(projection)
-    recorded = entry.recorded_partition_digest()
-    if recorded is not None and recorded != digest:
-        raise outbox.OutboxError(
-            "outbox_file_invalid",
-            f"entry {entry.entry_id} projection does not match its recorded digest",
-        )
-    return projection, digest
-
-
 def _commit_entry_request(
-    *,
-    runtime_root: Path,
-    goal_id: str,
-    entry: outbox.OutboxEntry,
-    resolution: str,
-    projection: dict[str, Any] | None,
-    digest: str | None,
+    *, runtime_root: Path, goal_id: str, entry: outbox.OutboxEntry,
 ) -> dict[str, Any]:
-    raw_source = (
-        entry.prepared.get("source")
-        if isinstance(entry.prepared.get("source"), dict)
-        else {}
-    )
-    writer = (
-        entry.prepared.get("writer")
-        if isinstance(entry.prepared.get("writer"), dict)
-        else {}
-    )
-    committed_at = entry.committed.get("committed_at") if entry.committed else None
+    """Select witnessed disk evidence; TS owns projection and source resolution."""
     return {
         "schema_version": LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA,
-        "runtime_root": str(runtime_root),
-        "goal_id": goal_id,
-        "entry": {
-            "entry_id": entry.entry_id,
-            "partition": entry.partition,
-            "seq": entry.seq,
-            "writer": {
-                "runtime": writer.get("runtime"),
-                "write_class": writer.get("write_class"),
-                "operation_id": writer.get("operation_id"),
-            },
-            "source": {key: raw_source.get(key) for key in _ENTRY_SOURCE_FIELDS},
-            "source_root_digest": entry.prepared.get("source_root_digest"),
-            "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
-            "prepared_sha256": outbox.raw_bytes_digest(
-                entry.prepared_path.read_bytes()
-            ),
-            "committed_sha256": outbox.raw_bytes_digest(
-                entry.committed_path.read_bytes()
-            )
-            if entry.committed_path
-            else None,
-            "prepared_at": entry.prepared.get("prepared_at"),
-            "committed_at": committed_at,
-            "resolution": resolution,
-        },
-        "partition_projection": projection,
-        "partition_digest": digest,
+        "runtime_root": str(runtime_root), "goal_id": goal_id,
+        "entry_id": entry.entry_id, "partition": entry.partition, "seq": entry.seq,
+        "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
+        "prepared_sha256": outbox.raw_bytes_digest(entry.prepared_path.read_bytes()),
+        "committed_sha256": outbox.raw_bytes_digest(entry.committed_path.read_bytes())
+        if entry.committed_path else None,
     }
 
 
@@ -489,7 +383,6 @@ class _PartitionDrainer:
         self._lock_timeout = lock_timeout_seconds
         self._directory = outbox.partition_directory(runtime_root, goal_id, partition)
         self._lineage: str | None = capture_lineage_id
-        self._source_root_digest: str | None = None
         self.last_delivered_digest: str | None = None
 
     def _lock(self) -> Any:
@@ -513,270 +406,98 @@ class _PartitionDrainer:
                 "stale_generation", "drain belongs to an earlier lineage"
             )
         self._lineage = lineage
-        self._source_root_digest = str(binding["source_root_digest"])
         return binding
 
-    def _proof(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        binding = self._binding()
-        # Parse before consulting the candidate: malformed cursor bytes are evidence.
-        outbox.read_cursor(self._directory)
-        view = read_local_authority_shadow(
-            runtime_root=self._runtime_root,
-            goal_id=self._goal_id,
-            scan_limit=10_000,
-            read_model="proof",
-        )
-        proof = view.get("proof")
-        if view.get("status") != "loaded" or not isinstance(proof, dict):
-            raise outbox.OutboxError(
-                str(view.get("reason_code") or "outbox_receipt_unproved"),
-                "candidate history is not proved",
-            )
-        transactions = proof.get("transactions")
-        if (
-            proof.get("capture_lineage_id") != self._lineage
-            or view.get("store_identity") != binding["store_identity"]
-            or not isinstance(transactions, list)
-            or not transactions
-            or not all(isinstance(tx, dict) for tx in transactions)
-            or transactions[-1].get("cursor") != view.get("cursor")
-            or transactions[-1].get("provider_revision")
-            != view.get("provider_revision")
-        ):
-            raise outbox.OutboxError(
-                "outbox_receipt_unproved", "incomplete or foreign history proof"
-            )
-        return view, transactions
-
-    @staticmethod
-    def _receipt(transaction: dict[str, Any]) -> dict[str, Any] | None:
-        receipts = transaction.get("receipts")
-        if (
-            isinstance(receipts, list)
-            and len(receipts) == 1
-            and isinstance(receipts[0], dict)
-        ):
-            return receipts[0]
-        return None
-
-    def _partition_history(
-        self, transactions: list[dict[str, Any]]
-    ) -> dict[int, dict[str, Any]]:
-        history: dict[int, dict[str, Any]] = {}
-        for transaction in transactions:
-            receipt = self._receipt(transaction)
-            if receipt is None or receipt.get("partition") != self._partition:
-                continue
-            seq = receipt.get("seq")
-            if (
-                type(seq) is not int
-                or seq != len(history) + 1
-                or receipt.get("capture_lineage_id") != self._lineage
-                or receipt.get("source_root_digest") != self._source_root_digest
-                or receipt.get("entry_id") != transaction.get("operation_id")
-            ):
-                raise outbox.OutboxError(
-                    "outbox_receipt_unproved", "partition history is not continuous"
-                )
-            history[seq] = transaction
-        return history
-
-    def _check_file(
-        self, entry: outbox.OutboxEntry, transaction: dict[str, Any]
-    ) -> list[tuple[Path, str]]:
-        receipt = self._receipt(transaction)
-        if (
-            receipt is None
-            or receipt.get("entry_id") != entry.entry_id
-            or receipt.get("seq") != entry.seq
-            or receipt.get("partition") != entry.partition
-            or receipt.get("capture_lineage_id") != self._lineage
-        ):
-            raise outbox.OutboxError(
-                "outbox_receipt_mismatch", "entry does not match its receipt"
-            )
-        files: list[tuple[Path, str]] = []
-        for path, key in (
-            (entry.prepared_path, "prepared_sha256"),
-            (entry.committed_path, "committed_sha256"),
-        ):
-            if path is None or not path.exists():
-                continue
-            expected = receipt.get(key)
-            if (
-                not isinstance(expected, str)
-                or outbox.raw_bytes_digest(path.read_bytes()) != expected
-            ):
-                raise outbox.OutboxError(
-                    "outbox_receipt_mismatch", "outbox bytes differ from the receipt"
-                )
-            files.append((path, expected))
-        return files
-
     def _reconcile(
-        self,
-        transactions: list[dict[str, Any]],
-        *,
-        delivered_entry_id: str | None = None,
-    ) -> list[outbox.OutboxEntry] | None:
-        history = self._partition_history(transactions)
+        self, *, acknowledgement: dict[str, Any] | None = None,
+    ) -> tuple[list[outbox.OutboxEntry], int]:
+        binding = self._binding()
+        # Malformed cursor bytes remain evidence, even if the candidate is unavailable.
         cursor = outbox.read_cursor(self._directory)
-        if cursor is not None:
-            anchor = history.get(cursor["last_seq"])
-            if (
-                anchor is None
-                or anchor.get("operation_id") != cursor["last_entry_id"]
-                or anchor.get("cursor") != cursor["last_cursor"]
-                or anchor.get("provider_revision") != cursor["last_provider_revision"]
-                or self._cursor_digest(anchor) != cursor["last_partition_digest"]
-            ):
-                raise outbox.OutboxError(
-                    "outbox_cursor_unproved", "cursor has no exact history anchor"
-                )
         entries = outbox.list_entries(self._directory, allow_committed_only=True)
-        verified: dict[str, list[tuple[Path, str]]] = {}
+        files: dict[str, list[tuple[Path, str]]] = {}
+        observations = []
         for entry in entries:
-            transaction = history.get(entry.seq)
-            if transaction is not None:
-                verified[entry.entry_id] = self._check_file(entry, transaction)
-            elif not entry.prepared:
-                raise outbox.OutboxError(
-                    "outbox_file_invalid", "unproved committed-only residue"
+            observation: dict[str, Any] = {
+                "entry_id": entry.entry_id, "seq": entry.seq,
+                "prepared": bool(entry.prepared),
+                "capture_lineage_id": entry.prepared.get("capture_lineage_id"),
+            }
+            files[entry.entry_id] = []
+            for path, key in (
+                (entry.prepared_path, "prepared_sha256"),
+                (entry.committed_path, "committed_sha256"),
+            ):
+                digest = (
+                    outbox.raw_bytes_digest(path.read_bytes())
+                    if path is not None and path.exists() else None
                 )
-            elif entry.prepared.get("capture_lineage_id") != self._lineage:
-                raise outbox.OutboxError(
-                    "stale_generation", "outbox entry belongs to another lineage"
-                )
-        recovered = [
-            entry
-            for entry in entries
-            if entry.seq in history and entry.entry_id != delivered_entry_id
-        ]
-        # Prove every residue first, then reclaim a bounded prefix. Repeated
-        # small-budget recovery must make progress without concealing a bad tail.
+                observation[key] = digest
+                if digest is not None and path is not None:
+                    files[entry.entry_id].append((path, digest))
+            observations.append(observation)
+        plan = effect_runtime_result(
+            "coordination.runtime_shadow.plan_drain",
+            {
+                "schema_version": "loopx_shadow_drain_plan_request_v0",
+                "runtime_root": str(self._runtime_root), "goal_id": self._goal_id,
+                "partition": self._partition,
+                "capture_lineage_id": binding["capture_lineage_id"],
+                "store_identity": binding["store_identity"],
+                "source_root_digest": binding["source_root_digest"],
+                "cursor": cursor, "entries": observations,
+                "remaining_entries": self._budget.remaining_entries,
+                "budget_open": self._budget.can_reclaim(0),
+                "acknowledgement": acknowledgement,
+            },
+            timeout=15.0,
+        )
+        if not isinstance(plan, dict) or plan.get("schema_version") != "loopx_shadow_drain_plan_result_v0":
+            raise outbox.OutboxError("shadow_drain_result_invalid", "invalid drain plan")
+        view = plan.get("view")
+        if isinstance(view, dict):
+            if self._result.cursor_before is None:
+                self._result.cursor_before = view.get("cursor")
+            self._record_view(view)
+        if plan.get("status") != "planned":
+            raise outbox.OutboxError(
+                str(plan.get("reason_code") or "shadow_drain_result_invalid"),
+                "native drain plan rejected observations",
+            )
+        # Time can expire during the native read; the plan cannot extend the budget.
         if not self._budget.can_reclaim(0):
             self._result.budget_exhausted = True
-            return None
-        if len(recovered) > self._budget.remaining_entries:
-            self._result.budget_exhausted = True
-            recovered = recovered[: self._budget.remaining_entries]
-        selected_ids = {entry.entry_id for entry in recovered}
-        if delivered_entry_id is not None:
-            selected_ids.add(delivered_entry_id)
-        files = [
-            item
-            for entry_id, batch in verified.items()
-            if entry_id in selected_ids
-            for item in batch
-        ]
-        # No deletion or cursor rewrite until the complete batch has been checked.
-        if history:
-            last = history[len(history)]
+            return [], int(plan["next_seq"])
+        self._result.budget_exhausted |= plan["budget_exhausted"]
+        if plan["history_present"]:
             with _primary_lock_if_free(
-                self._partition,
-                runtime_root=self._runtime_root,
-                goal_id=self._goal_id,
-                sources=self._sources,
+                self._partition, runtime_root=self._runtime_root,
+                goal_id=self._goal_id, sources=self._sources,
             ) as held:
                 if not held:
-                    raise outbox.OutboxError(
-                        "primary_writer_busy", "primary writer is in flight"
-                    )
+                    raise outbox.OutboxError("primary_writer_busy", "primary writer is in flight")
                 self._binding()
                 if (
                     outbox.read_cursor(self._directory) != cursor
-                    or outbox.list_entries(self._directory, allow_committed_only=True)
-                    != entries
+                    or outbox.list_entries(self._directory, allow_committed_only=True) != entries
                 ):
-                    raise outbox.OutboxError(
-                        "outbox_file_changed", "outbox changed during proof"
-                    )
-                digest = self._cursor_digest(last)
-                if cursor is None or cursor["last_seq"] != len(history):
+                    raise outbox.OutboxError("outbox_file_changed", "outbox changed during proof")
+                outbox.verify_observed_files(item for batch in files.values() for item in batch)
+                if plan["cursor_update"] is not None:
                     outbox.write_cursor(
-                        self._directory,
-                        partition=self._partition,
-                        last_seq=len(history),
-                        last_entry_id=str(last["operation_id"]),
-                        last_partition_digest=digest,
-                        last_cursor=str(last["cursor"]),
-                        last_provider_revision=str(last["provider_revision"]),
+                        self._directory, partition=self._partition, **plan["cursor_update"],
                     )
-                self._result.reclaimed_residue += outbox.reclaim_verified_files(files)
-                for entry in recovered:
-                    transaction = history[entry.seq]
-                    receipt = self._receipt(transaction)
-                    assert receipt is not None
-                    self._result.entries.append(
-                        {
-                            "entry_id": entry.entry_id,
-                            "partition": entry.partition,
-                            "seq": entry.seq,
-                            "resolution": receipt["resolution"],
-                            "outcome": "replayed",
-                            "reason_code": "verified_receipt_recovery",
-                            "cursor": transaction["cursor"],
-                            "provider_revision": transaction["provider_revision"],
-                            "partition_digest": receipt["partition_digest"],
-                        }
-                    )
+                self._result.reclaimed_residue += outbox.reclaim_verified_files([
+                    item for entry_id in plan["reclaim_entry_ids"] for item in files[entry_id]
+                ])
+                for replay in plan["replay_entries"]:
+                    summary = dict(replay)
+                    self._result.no_op += int(summary.pop("no_op"))
+                    self._result.entries.append(summary)
                     self._result.replayed += 1
-                    self._result.no_op += int(receipt["no_op"])
                     self._budget.consumed += 1
-        return [entry for entry in entries if entry.seq not in history]
-
-    def _cursor_digest(self, transaction: dict[str, Any]) -> str | None:
-        # The native history validator owns this applied-mutation marker.
-        # Settled no-ops advance position but never synthesize a baseline digest.
-        marker = transaction["projection_partitions"][self._partition]
-        return None if marker is None else marker["partition_digest"]
-
-    def _resolve(
-        self, entry: outbox.OutboxEntry, pending: list[outbox.OutboxEntry]
-    ) -> tuple[str, dict[str, Any] | None, str | None]:
-        if entry.is_committed:
-            projection, digest = _entry_projection(entry, goal_id=self._goal_id)
-            if projection is None:
-                raise outbox.OutboxError(
-                    "outbox_file_invalid", "committed entry has no projection"
-                )
-            return "committed", projection, digest
-        with _primary_lock_if_free(
-            self._partition,
-            runtime_root=self._runtime_root,
-            goal_id=self._goal_id,
-            sources=self._sources,
-        ) as held:
-            if not held:
-                raise outbox.OutboxError(
-                    "primary_writer_busy", "prepared writer is in flight"
-                )
-            # Current A cannot prove an earlier A->B was abandoned after B->A.
-            if any(other.seq > entry.seq for other in pending):
-                raise outbox.OutboxError(
-                    "outbox_source_unproved",
-                    "later writes make source recovery ambiguous",
-                )
-            resolution = outbox.resolve_prepared_only_entry(
-                entry,
-                markdown_text_reader=lambda: _read_state_text(self._sources.state_path),
-                lease_bytes_reader=lambda todo_id: _lease_bytes(self._sources, todo_id),
-                event_presence_reader=lambda event_id: _event_present(
-                    self._sources, event_id
-                ),
-            )
-            if resolution == "abandoned":
-                return resolution, None, None
-            if resolution != "committed":
-                raise outbox.OutboxError(
-                    "outbox_source_unproved", "prepared source cannot be proved"
-                )
-            projection, digest = _entry_projection(entry, goal_id=self._goal_id)
-            if projection is None:
-                raise outbox.OutboxError(
-                    "outbox_source_unproved", "prepared source has no projection"
-                )
-            return "committed_proven_by_readback", projection, digest
+        pending_ids = set(plan["pending_entry_ids"])
+        return [entry for entry in entries if entry.entry_id in pending_ids], int(plan["next_seq"])
 
     def _record_view(self, view: dict[str, Any]) -> None:
         self._result.candidate_readback_verified = True
@@ -789,19 +510,23 @@ class _PartitionDrainer:
     def run(self) -> None:
         while not self._budget.exhausted():
             with self._lock():
-                view, transactions = self._proof()
-                if self._result.cursor_before is None:
-                    self._result.cursor_before = view.get("cursor")
-                self._record_view(view)
-                pending = self._reconcile(transactions)
+                pending, next_seq = self._reconcile()
                 if not pending:
                     return
                 if self._budget.exhausted():
                     self._result.budget_exhausted = True
                     return
                 entry = pending[0]
-                resolution, projection, digest = self._resolve(entry, pending)
-                if entry.seq != len(self._partition_history(transactions)) + 1:
+                if not entry.is_committed:
+                    # Preserve the legacy flock busy signal. This host probe
+                    # makes no source decision; TS rechecks under shared locks.
+                    with _primary_lock_if_free(
+                        self._partition, runtime_root=self._runtime_root,
+                        goal_id=self._goal_id, sources=self._sources,
+                    ) as held:
+                        if not held:
+                            raise outbox.OutboxError("primary_writer_busy", "primary writer is in flight")
+                if entry.seq != next_seq:
                     raise outbox.OutboxError(
                         "outbox_sequence_gap", "pending sequence is not continuous"
                     )
@@ -809,9 +534,6 @@ class _PartitionDrainer:
                     runtime_root=self._runtime_root,
                     goal_id=self._goal_id,
                     entry=entry,
-                    resolution=resolution,
-                    projection=projection,
-                    digest=digest,
                 )
             # TS owns M for every public commit, including retries. Never re-enter M across RPC.
             raw = effect_runtime_result(
@@ -828,30 +550,20 @@ class _PartitionDrainer:
                     "seq": entry.seq,
                     "entry_id": entry.entry_id,
                     "outcome": raw["outcome"],
-                    "reason_code": raw.get("reason_code"),
+                    "reason_code": "outbox_source_unproved" if raw.get("reason_code") == "source_transaction_unproved"
+                    else raw.get("reason_code"),
                 }
                 return
+            resolution = raw["resolution"]
+            digest = raw["partition_digest"]
             with self._lock():
-                view, transactions = self._proof()
-                history = self._partition_history(transactions)
-                transaction = history.get(entry.seq)
-                if (
-                    transaction is None
-                    or transaction.get("operation_id") != entry.entry_id
-                    or transaction.get("cursor") != raw.get("cursor")
-                    or transaction.get("provider_revision")
-                    != raw.get("provider_revision")
-                    or view.get("store_identity") != raw.get("store_identity")
-                    or self._receipt(transaction).get("no_op") != raw.get("no_op")
-                    or self._receipt(transaction).get("partition_digest") != digest
-                ):
-                    raise outbox.OutboxError(
-                        "shadow_commit_entry_result_invalid",
-                        "ACK differs from exact receipt",
-                    )
-                # Preserve verified commit evidence even if local cleanup fails.
-                self._record_view(view)
-                self._reconcile(transactions, delivered_entry_id=entry.entry_id)
+                self._reconcile(acknowledgement={
+                    "entry_id": entry.entry_id, "seq": entry.seq,
+                    "cursor": raw.get("cursor"),
+                    "provider_revision": raw.get("provider_revision"),
+                    "store_identity": raw.get("store_identity"),
+                    "no_op": raw.get("no_op"), "partition_digest": digest,
+                })
             summary = {
                 "entry_id": entry.entry_id,
                 "partition": entry.partition,
@@ -1266,7 +978,6 @@ __all__ = [
     "INLINE_DRAIN_BUDGET_SECONDS",
     "INLINE_DRAIN_LOCK_TIMEOUT_SECONDS",
     "INLINE_DRAIN_MAX_ENTRIES",
-    "LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA",
     "LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA",
     "LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1",
     "LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA",

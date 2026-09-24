@@ -42,6 +42,14 @@ def _checkpoint_instructions(checkpoint: Mapping[str, Any]) -> str:
     lines = [
         "Submit a checkpoint-only refresh with the same Goal, Agent, Todo/obligation, "
         "Turn, and delivery fields, from the original working directory.",
+        "- Read first: Run `loopx checkpoint-context` with the same `--goal-id`, "
+        "`--agent-id`, `--todo-id` or `--replan-obligation-id`, `--turn-instance-id`, "
+        "and original registry/runtime/project/state-file options. Include "
+        "`--dependency-todo-id` for any additional upstream Todo result used in the "
+        "judgment. Read its returned basis and judge again; echo `read_context_id` "
+        "as `--checkpoint-read-context` in the supplement. Confirmations for the "
+        "same Turn are serial: a reread replaces the old receipt. If stale or "
+        "replaced, reread and rejudge; never substitute a new token onto an old judgment.",
         "- Preserve: Keep original values and presence for target, scope, and isolation "
         "options: `--registry`, `--runtime-root`, `--project`, `--state-file`, "
         "`--progress-scope`, `--agent-lane`, `--available-capability`, "
@@ -59,7 +67,7 @@ def _checkpoint_instructions(checkpoint: Mapping[str, Any]) -> str:
         "values are unchanged: `--next-action`, `--autonomous-replan-recorded`, "
         "`--repair-delta-kind`, `--usage-json`, `--usage-codex-session`. "
         "Remove dependent options that become invalid without them.",
-        "- Add: Add only one valid vision decision: a valid `--agent-vision-json` packet "
+        "- Add: Echo `--checkpoint-read-context` from the read, and add only one valid vision decision: a valid `--agent-vision-json` packet "
         "or inline `--vision-*` patch containing your authored vision content.",
     ]
     if checkpoint.get("missing_baseline") is True:

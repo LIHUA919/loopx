@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
 
 import type { WorkspaceLocale } from "./i18n";
 import { useWorkspaceI18n } from "./i18n";
 import { LarkSettingsPage } from "./lark-settings-page";
 import { GoalCapabilitySettings } from "./goal-capability-settings";
+import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
 
-type WorkspaceSettingsTab = "provider" | "machine" | "capabilities" | "lark" | "appearance" | "language";
+type WorkspaceSettingsTab = "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
 const tabIcons: Record<WorkspaceSettingsTab, typeof Settings2> = {
   appearance: Palette,
   capabilities: SlidersHorizontal,
+  cadence: Clock3,
   language: Languages,
   lark: Settings2,
   machine: ServerCog,
@@ -67,6 +69,7 @@ export function WorkspaceSettingsPage({
   }, [tab]);
   const tabs: Array<{ key: WorkspaceSettingsTab; label: string }> = [
     ...(initialGoalId ? [{ key: "capabilities" as const, label: t("capabilities.title") }] : []),
+    ...(initialGoalId ? [{ key: "cadence" as const, label: t("cadence.title") }] : []),
     // The model provider is one machine decision (which endpoint and key the
     // operator credential holds); the capability catalog is another (which
     // machine defaults every Goal inherits). They answer different questions
@@ -94,6 +97,9 @@ export function WorkspaceSettingsPage({
     capabilities: {
       title: t("capabilities.title"),
     },
+    cadence: {
+      title: t("cadence.title"),
+    },
     language: {
       title: t("settings.language"),
     },
@@ -108,6 +114,10 @@ export function WorkspaceSettingsPage({
     },
   };
   const heading = headings[tab];
+  const selectedGoal = goals.find((item) => item.goalId === initialGoalId);
+  const goalSettingsTarget = (tab === "capabilities" || tab === "cadence") && initialGoalId
+    ? selectedGoal?.title || initialGoalId
+    : null;
 
   return (
     <section aria-label={t("settings.title")} className="personal-settings-page" data-pw-theme={theme}>
@@ -136,8 +146,14 @@ export function WorkspaceSettingsPage({
 
       <main className="personal-settings-body">
         <header className="personal-settings-header">
-          <div>
+          <div className="personal-settings-heading">
             <h1>{heading.title}</h1>
+            {goalSettingsTarget ? (
+              <span className="personal-settings-goal-target" title={`${goalSettingsTarget} · ${initialGoalId}`}>
+                <span>Goal</span>
+                <strong>{goalSettingsTarget}</strong>
+              </span>
+            ) : null}
           </div>
         </header>
         {tab === "lark" ? (
@@ -166,6 +182,7 @@ export function WorkspaceSettingsPage({
             onChanged={onChanged}
           />
         ) : null}
+        {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings goal={selectedGoal} /> : null}
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">

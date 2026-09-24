@@ -265,10 +265,99 @@ Valid checkpoint decisions are:
 A material closeout should carry its own vision patch or evidence-backed unchanged
 reason. If omitted, `refresh-state` still records the outcome and returns the
 checkpoint repair action. Follow that action in the same turn with the original
-settlement identity, removing already executed state mutations. The supplement
+settlement identity: first read `checkpoint-context`, then echo its
+`read_context_id` as `--checkpoint-read-context` with a newly judged vision
+decision, removing already executed state mutations. The supplement
 must satisfy the checkpoint before terminal closeout; it neither re-authors the
 outcome nor spends a second time. Never invent an unchanged reason to clear a gap.
 Typed in-flight continuations keep their existing exemption.
+
+### Read basis for checkpoint-only recovery
+
+Missing-checkpoint supplementation now requires an explicit read receipt. This is
+a default admission change for both legacy and newly committed Turn writebacks;
+normal first writebacks and non-Turn vision authoring retain their existing rules.
+From the original working directory and with the original registry/runtime/project/
+state-file options, read the basis for the exact settlement:
+
+```sh
+loopx checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --format json
+```
+
+Use `--replan-obligation-id` instead of `--todo-id` for an obligation-bound Turn.
+Declared Todo dependencies are included; repeat `--dependency-todo-id` for any
+additional upstream Todo results actually used in the judgment. Inspect the
+returned `basis`, judge the direction again, and add
+`--checkpoint-read-context <read_context_id>` to the checkpoint-only refresh.
+The agent echoes this opaque receipt; LoopX retains the version manifest.
+
+MCP hosts use the same protocol through `review_task_vision`: call with only
+`todo_id` and `agent_id` to read, then submit the returned `read_context_id`
+with one newly judged `agent_vision` or `vision_unchanged_reason`. Reading never
+automatically submits a decision. Missing receipts fail closed; stale receipts
+require another read and judgment, while lost replies use the exact original
+receipt and decision. The Python `checkpoint_context_io` adapter gathers and
+locks local sources. TypeScript derives canonical Todos and the complete owner
+acceptance document from one authority head; `checkpoint_read_context` compares
+the basis and `checkpoint_commit` owns the final append.
+
+The basis covers the selected Todo, its dependency closure and recorded results,
+shared Goal prose and User Todos, the owner acceptance document/revision when
+configured, the current agent vision, and the local source binding. A replan
+obligation covers the full Todo frontier. Archived dependencies remain inputs.
+Todo display positions, source headings, and the Goal's global `updated_at` are
+excluded; an unrelated Agent Todo or run-history append does not invalidate an
+otherwise unchanged Todo-bound basis. Shared prose is deliberately conservative:
+editing it requires another judgment even if the edit was only editorial.
+
+The File/SQLite path retains the Goal index and local source protection, then
+enters the real provider's writer fence: File uses the same mutation lock as
+`commitAuthority`; SQLite uses one connection's `BEGIN IMMEDIATE`. Final head
+read, version comparison and checkpoint append complete before release. SQLite
+performs this short section synchronously, with no `await` while holding the
+transaction. Model reasoning and projection sync remain outside it. The provider
+revision is returned for diagnostics, but only relevant component changes or a
+different store identity invalidate the basis. Old v0 receipts require a new read.
+
+The ordinary local Todo command wrapper already takes the maintenance lock
+before committing. The provider fence additionally covers transactions through
+the exported provider boundary that do not take that outer lock; these are
+distinct concurrency tests. Provider failures stay closed. This adds no
+PostgreSQL or cross-Goal transaction support and does not move checkpoint
+authority into the Todo provider. SQLite cannot roll back the external run files.
+
+Index lock order is kernel then mutation marker for Python writers; existing
+quota adapters retain their kernel lock around the native marker owner. Native
+writers never wait for the kernel lock. Source writers retain marker then kernel,
+in maintenance/Todo/state order. History append/repair, refresh, feedback,
+operator-gate, project-map and runtime projection use this shared index boundary;
+feedback takes the index before state. The checkpoint effect claims the caller's
+index/source markers and owns their release through the durable append. Caller
+exit or timeout does not release an in-flight effect's claims. Runtime death
+allows the existing conservative PID/token reclaim; a live stalled owner times
+out contenders rather than losing its lock. No model or Agent holds a store lock.
+
+Receipts are bound to the exact Goal/Agent/Todo or obligation/Turn. A new read for
+that Turn replaces its previous receipt, so its confirmation operations must be
+serial; other work may remain parallel. A missing, replaced, or stale receipt
+rejects the supplement without appending delivery or spending quota. Rerun
+`checkpoint-context`, reread, and rejudge. Never attach a new receipt to an old
+judgment. The committed decision includes the receipt identity in its replay
+digest: an exact retry returns the original result even if state changed after
+commit. Acquiring a receipt for an already satisfied checkpoint is rejected.
+Replay also verifies the committed artifact references. A malformed/torn index,
+conflicting checkpoint rows, or inconsistent artifacts returns an explicit
+unknown/error; prepared JSON/Markdown alone never authorizes a blind append.
+
+Versions are content revisions of the declared decision inputs, including native
+revision fields where present. They cannot detect an unobserved change-and-revert
+in legacy Markdown, raw writes bypassing the writer locks, or changed bytes behind
+an unversioned external link. Upstream deliveries must be represented by their
+recorded Todo results/references. The receipt verifies the declared basis, not
+whether the model actually understood or used it. It grants no new permissions,
+task-completion authority, or evidence of acceptance. Older binaries do not enforce
+this admission rule; rolling back loses its freshness protection.
 
 `missing_required` is not a chat reminder. Status keeps it in compact run
 history, quota filters it by current `agent_id`, and goal-frontier projection

@@ -6,7 +6,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...configuration_transaction import goal_capability_configuration_revision
+from ...agent_registry import registered_agent_ids_for_goal
+from ...configuration_transaction import (
+    configuration_payload_revision,
+    goal_capability_configuration_revision,
+)
 from ...configure_goal import configure_goal
 from ...global_registry import (
     sanitize_goal_for_global,
@@ -96,6 +100,60 @@ def read_goal_configuration_with_source_route(
         goal_id=goal_id,
         execute=False,
     )
+
+
+def _goal_agent_binding_revision(
+    *,
+    goal_id: str,
+    source_registry: Path,
+    registered_agents: list[str],
+) -> str:
+    return configuration_payload_revision(
+        {
+            "goal_id": goal_id,
+            "source_registry": str(source_registry.expanduser().resolve()),
+            "registered_agents": registered_agents,
+        }
+    )
+
+
+def goal_agent_binding_revision(
+    goal_id: str,
+    goal: dict[str, Any],
+    *,
+    source_registry: Path,
+) -> str:
+    """Revision the canonical source identity and its Agent peer set."""
+
+    return _goal_agent_binding_revision(
+        goal_id=goal_id,
+        source_registry=source_registry,
+        registered_agents=registered_agent_ids_for_goal(goal),
+    )
+
+
+def read_goal_agent_binding_with_source_route(
+    *, registry_path: Path, goal_id: str
+) -> dict[str, Any]:
+    """Read the Agent binding state from the canonical source registry."""
+
+    source_registry_path = _resolve_authoritative_source_registry(
+        registry_path=registry_path,
+        goal_id=goal_id,
+    )
+    source_goal = _goal(load_registry(source_registry_path), goal_id)
+    if source_goal is None:
+        raise ValueError(f"goal id not found in source registry: {goal_id}")
+    return {
+        "ok": True,
+        "goal_id": goal_id,
+        "registered_agents": registered_agent_ids_for_goal(source_goal),
+        "revision": goal_agent_binding_revision(
+            goal_id,
+            source_goal,
+            source_registry=source_registry_path,
+        ),
+    }
 
 
 def _digest(value: Any) -> str:
@@ -286,6 +344,7 @@ def _configure_goal_with_global_sync_unlocked(
     runtime_root_override: str | None,
     execute: bool,
     registry_transaction: ProjectRegistryTransaction | None = None,
+    sync_if_unchanged: bool = False,
     **configure_options: Any,
 ) -> dict[str, Any]:
     """Configure one source goal and keep its authoritative shared read model current."""
@@ -298,24 +357,25 @@ def _configure_goal_with_global_sync_unlocked(
         **configure_options,
     )
     changed = bool(preview.get("changed"))
+    sync_required = changed or sync_if_unchanged
     target_resolution = (
         resolve_configure_goal_sync_target(
             registry_path=registry_path,
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
         )
-        if changed
+        if sync_required
         else None
     )
     preview["global_sync"] = _sync_plan(
-        changed=changed,
+        changed=sync_required,
         target_resolution=target_resolution,
         execute=execute,
     )
     if not execute:
         return preview
 
-    if not changed:
+    if not sync_required:
         applied = configure_goal(
             registry_path=registry_path,
             goal_id=goal_id,
@@ -360,7 +420,7 @@ def _configure_goal_with_global_sync_unlocked(
         _registry_transaction=registry_transaction,
         **configure_options,
     )
-    if not applied.get("written"):
+    if not applied.get("written") and not sync_if_unchanged:
         applied["global_sync"] = _sync_plan(
             changed=False,
             target_resolution=target_resolution,
@@ -640,3 +700,115 @@ def configure_goal_with_global_sync(
             receipt=capacity_receipt,
             plan_before_apply=capacity_plan,
         )
+
+
+def bind_goal_agent_with_global_sync(
+    *,
+    registry_path: Path,
+    goal_id: str,
+    agent_id: str,
+    runtime_root_override: str | None = None,
+    execute: bool,
+    expected_revision: str | None = None,
+) -> dict[str, Any]:
+    """Bind one Agent through source authority and verify its shared projection."""
+
+    source_registry_path = _resolve_authoritative_source_registry(
+        registry_path=registry_path,
+        goal_id=goal_id,
+    )
+    if not execute:
+        state = read_goal_agent_binding_with_source_route(
+            registry_path=source_registry_path,
+            goal_id=goal_id,
+        )
+        return {
+            **state,
+            "changed": agent_id not in state["registered_agents"],
+            "written": False,
+            "projection_verified": False,
+        }
+
+    with project_registry_transaction(
+        source_registry_path,
+        operation="bind_goal_agent_with_global_sync",
+    ) as registry_transaction:
+        source_goal = _goal(registry_transaction.payload_copy(), goal_id)
+        if source_goal is None:
+            raise ValueError(f"goal id not found in source registry: {goal_id}")
+        registered_agents = registered_agent_ids_for_goal(source_goal)
+        actual_revision = goal_agent_binding_revision(
+            goal_id,
+            source_goal,
+            source_registry=source_registry_path,
+        )
+        already_bound = agent_id in registered_agents
+        if expected_revision is not None and actual_revision != expected_revision:
+            retry_revision = _goal_agent_binding_revision(
+                goal_id=goal_id,
+                source_registry=source_registry_path,
+                registered_agents=[
+                    registered_agent
+                    for registered_agent in registered_agents
+                    if registered_agent != agent_id
+                ],
+            )
+            if not already_bound or retry_revision != expected_revision:
+                return {
+                    "ok": False,
+                    "status": "stale",
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "expected_revision": expected_revision,
+                    "actual_revision": actual_revision,
+                    "registered_agents": registered_agents,
+                    "changed": False,
+                    "written": False,
+                    "projection_verified": False,
+                }
+
+        if already_bound:
+            applied: dict[str, Any] = _configure_goal_with_global_sync_unlocked(
+                registry_path=source_registry_path,
+                goal_id=goal_id,
+                runtime_root_override=runtime_root_override,
+                execute=True,
+                registry_transaction=registry_transaction,
+                sync_if_unchanged=True,
+                registered_agents=registered_agents,
+            )
+        else:
+            applied = _configure_goal_with_global_sync_unlocked(
+                registry_path=source_registry_path,
+                goal_id=goal_id,
+                runtime_root_override=runtime_root_override,
+                execute=True,
+                registry_transaction=registry_transaction,
+                registered_agents=sorted({*registered_agents, agent_id}),
+            )
+
+        source_after = _goal(load_registry(source_registry_path), goal_id)
+        source_registered_agents = registered_agent_ids_for_goal(source_after)
+        readback = (applied.get("global_sync") or {}).get("readback") or {}
+        projection_verified = bool(
+            agent_id in source_registered_agents and readback.get("verified")
+        )
+        return {
+            **applied,
+            "ok": bool(applied.get("ok") and projection_verified),
+            "status": "already_bound" if already_bound else "bound",
+            "goal_id": goal_id,
+            "agent_id": agent_id,
+            "source_revision_before": actual_revision,
+            "source_revision_after": (
+                goal_agent_binding_revision(
+                    goal_id,
+                    source_after,
+                    source_registry=source_registry_path,
+                )
+                if source_after is not None
+                else None
+            ),
+            "source_registered_agents": source_registered_agents,
+            "projection_verified": projection_verified,
+        }

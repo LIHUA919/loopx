@@ -8,6 +8,7 @@ import { normalizeDeliveryWorkspaceSnapshot } from "../agents/delivery_workspace
 import { decodeExternalDelivery, type ExternalDeliveryRequest } from "./refresh_external_delivery.ts";
 
 export interface RefreshRetryRequest {
+  checkpoint_read_context_id?: string | null;
   external_delivery?: ExternalDeliveryRequest | null;
   vision: JsonObject | null;
   unchanged_reason: string | null;
@@ -37,6 +38,7 @@ export function decodeRefreshRetry(value: unknown): RefreshRetryRequest | null {
     return value;
   };
   return {
+    checkpoint_read_context_id: input.checkpoint_read_context_id == null ? null : nullableString("checkpoint_read_context_id"),
     external_delivery: decodeExternalDelivery(input.external_delivery),
     vision: input.vision === null ? null : requireJsonObject(input.vision, "refresh_retry.vision"),
     unchanged_reason: nullableString("unchanged_reason"),
@@ -77,6 +79,7 @@ export function refreshRecovery(
     vision: request.vision,
     unchanged_reason: request.unchanged_reason,
     merge_patch: request.merge_patch,
+    ...(request.checkpoint_read_context_id ? {checkpoint_read_context_id: request.checkpoint_read_context_id} : {}),
   })).digest("hex") : null;
   const mutationDigest = createHash("sha256").update(canonical(request.mutation)).digest("hex");
   const changesMutation = Object.values(request.mutation).some((value) =>
@@ -85,6 +88,7 @@ export function refreshRecovery(
     schema_version: "refresh_recovery_v0",
     decision, reason, vision_request_digest: digest,
     mutation_digest: mutationDigest,
+    ...(request.checkpoint_read_context_id ? {checkpoint_read_context_id: request.checkpoint_read_context_id} : {}),
     original_generated_at: jsonObject(prior?.refresh_recovery)?.original_generated_at
       ?? prior?.generated_at ?? null,
   });

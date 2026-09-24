@@ -299,6 +299,22 @@ def test_production_scale_rebuild_retains_order_and_requires_private_declaration
     assert len(parsed_ids) == 464
     assert _read(runtime) == before
 
+    # A routine refresh must also drain the full source, including records well
+    # beyond presentation limits, without re-running a canonical mutation.
+    from loopx.state_refresh import refresh_state_run
+    state.unlink()
+    refreshed = refresh_state_run(
+        registry_path=registry, runtime_root_override=str(runtime), goal_id="goal-a",
+        project=None, state_file=None, classification="validated_change",
+        recommended_action="Inspect recovered Todo display.", dry_run=False, sync_global=False,
+    )
+    assert refreshed["ok"] and refreshed["projection_delivery"] == "delivered"
+    assert refreshed["projection_outbox"]["todo_count"] == 464
+    active, archived, _ = parse_todo_source(state.read_text())
+    recovered_ids = {row["todo_id"] for rows in (*active.values(), archived) for row in rows}
+    assert recovered_ids == set(parsed_ids)
+    assert _read(runtime) == before
+
 
 def test_equal_display_does_not_acknowledge_an_unfinished_durability_barrier(canonical_display, monkeypatch):
     registry, runtime, state = canonical_display

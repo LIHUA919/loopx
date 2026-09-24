@@ -75,6 +75,18 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
     finally {if (current === generation.current) setBusy(false);}
   }
   const rows = page ? readableRows(page) : [];
+  const adoptions = selection?.result.adoptions ?? [];
+  const currentAdoptions = adoptions.filter(row => row.state === "current").length;
+  const unavailableAdoptions = adoptions.length - currentAdoptions;
+  const adoptionSummary = currentAdoptions && unavailableAdoptions
+    ? (zh ? "部分采用可核验 · 查看后续结果与失效项" : "Some adoption is verifiable · inspect results and unavailable evidence")
+    : currentAdoptions
+      ? (zh ? "已记录采用 · 查看后续结果" : "Adoption recorded · inspect downstream results")
+      : unavailableAdoptions
+        ? (zh ? "采用证据无法核验 · 查看版本依据" : "Adoption evidence unavailable · inspect versions")
+        : selection?.result.dependencies?.length
+          ? (zh ? "此结果关联来源版本 · 查看依据" : "This result references source versions · inspect evidence")
+          : (zh ? "尚无采用记录 · 查看验收与版本依据" : "No adoption recorded · inspect acceptance and versions");
   return <section className="goal-team-results" aria-label={zh ? "团队成果" : "Team results"} aria-busy={busy}>
     <header><h3>{zh ? "团队成果" : "Team results"}</h3>
       <button type="button" disabled={busy} onClick={() => void list(cursor.current)}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新成果" : "Refresh results"}</button></header>
@@ -91,6 +103,7 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
         {page.has_more && page.next_cursor ? <button type="button" disabled={busy} onClick={() => void list(page.next_cursor!, true)}>{zh ? "下一页成果" : "Next results page"}</button> : null}
       </nav> : null}
       {selection ? <div ref={report} tabIndex={-1} className="goal-team-result-reader" aria-label={zh ? "当前报告" : "Current report"}>
+        <details><summary>{adoptionSummary}</summary><GoalTeamLineage result={selection.result} zh={zh} onInspect={operationId => void read(operationId)}/></details>
         <TeamArtifactReport key={`${selection.result.operation_id}:${selection.artifact.sha256}`} artifact={selection.artifact} zh={zh} heading={zh ? "已通过当前验收" : "Currently accepted"}/>
         {selection.result.artifacts && selection.result.artifacts.length > 1 ? <label>{zh ? "其他产物" : "Other artifacts"}<select value={selection.artifact.ref}
           onChange={event => {const artifact = selection.result.artifacts!.find(row => row.ref === event.target.value); if (artifact) {
@@ -99,7 +112,6 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
           }}}>
           {selection.result.artifacts.map(row => <option value={row.ref} key={row.ref}>{row.ref}</option>)}
         </select></label> : null}
-        <details><summary>{zh ? "验收与采用关系" : "Acceptance and adoption"}</summary><GoalTeamLineage result={selection.result} zh={zh} onInspect={operationId => void read(operationId)}/></details>
       </div> : null}
     </div>
   </section>;

@@ -803,7 +803,11 @@ def _mixed_writer_cycle(ledger: _MixedWriterLedger, cycle: int) -> None:
 def _assert_bounded_parity(ledger: _MixedWriterLedger, cycle: int, anchor_todo_id: str) -> JsonObject:
     workspace = ledger.workspace
     inspection = _object(inspect(workspace).get("inspection"), f"cycle {cycle} inspection")
-    expect(inspection.get("status") == "matched" and inspection.get("parity_matches") is True, f"cycle {cycle}: the candidate head must match the primary")
+    expect(
+        inspection.get("status") == "matched" and inspection.get("parity_matches") is True,
+        f"cycle {cycle}: the candidate head must match the primary "
+        f"(status={inspection.get('status')!r}, reason_code={inspection.get('reason_code')!r})",
+    )
     flags = ["--minimum-operations", str(ledger.deliveries)]
     for write_class in PARITY_REQUIRED_WRITE_CLASSES:
         flags.extend(["--require-event-kind", write_class])

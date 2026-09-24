@@ -48,7 +48,7 @@ loopx-openviking-semantic-preference = "loopx.extensions.openviking_semantic_pre
 include = ["loopx*"]
 
 [tool.setuptools.package-data]
-"loopx" = ["web/chat/*.html", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
 "loopx.control_plane" = ["*.json", "*.ts", "presentation/*.ts"]
 "loopx.semantics" = ["*.json"]
 "loopx.control_plane.agents" = ["*.ts"]
@@ -141,6 +141,7 @@ python_version = "3.11"
 strict = true
 files = [
   "loopx/control_plane/__init__.py",
+  "loopx/control_plane/coordination/canonical_snapshot.py",
   "loopx/control_plane/coordination/executor.py",
   "loopx/control_plane/coordination/file_provider.py",
   "loopx/control_plane/coordination/head.py",

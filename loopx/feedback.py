@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .history import _chronology_key, load_index, load_registry
+from .control_plane.runtime.time import chronology_key
+from .history import load_index, load_registry
 from .paths import resolve_runtime_root
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
@@ -215,7 +216,7 @@ def select_run(runs: list[dict[str, Any]], run_generated_at: str | None) -> dict
     return max(
         enumerate(runs),
         key=lambda item: (
-            *_chronology_key(item[1].get("generated_at")),
+            *chronology_key(item[1].get("generated_at")),
             item[0],
         ),
     )[1]
@@ -472,7 +473,9 @@ def append_human_reward(
             exclusive_cross_runtime_file_lock(state_file_to_write, operation="reward_summary")
             if state_file_to_write is not None else nullcontext()
         )
-        with state_lock:
+        # Match refresh/history: index first, then the source state lock.
+        from .file_lock import exclusive_run_index_lock
+        with exclusive_run_index_lock(index_path, operation="reward_append"), state_lock:
             if state_file_to_write is not None:
                 original = state_file_to_write.read_text(encoding="utf-8")
                 planned, changed = insert_progress_ledger_entry(

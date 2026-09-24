@@ -157,6 +157,71 @@ const NON_WORK_FIELDS = new Set([
 export function goalAcceptanceTodoDigest(todo: JsonObject): string {
   return canonicalAuthoritySha256(Object.fromEntries(Object.entries(todo).filter(([key]) => !NON_WORK_FIELDS.has(key))));
 }
+/** Existing owner bindings persist the v0 digest, including fields later used
+ * for validator revision bookkeeping and successor links. Keep that digest
+ * format so previously ready bindings stay ready. When it differs, check only
+ * historical states that the current append-only metadata can reconstruct;
+ * changing the Todo's work declaration still requires owner confirmation. */
+function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolean {
+  if (goalAcceptanceTodoDigest(todo) === boundDigest) return true;
+
+  // Adding a wait condition changes when existing work can resume, not which
+  // owner-confirmed Goal criterion it serves. Only the absent -> present case
+  // is reconstructible from the current Todo; changing an existing condition
+  // remains stale because its previous value cannot be proven here.
+  const scheduleVariants: JsonObject[] = [todo];
+  if (Object.hasOwn(todo, "resume_when")) {
+    const withoutResume = {...todo};
+    delete withoutResume.resume_when;
+    scheduleVariants.push(withoutResume);
+  }
+
+  const revision = todo.completion_validation_revision;
+  const history = todo.completion_validation_revision_history;
+  let revisionPrefixes: number[] = [];
+  if (Number.isSafeInteger(revision) && Number(revision) >= 1 && Number(revision) <= 32 &&
+      Array.isArray(history) && history.length === revision &&
+      history.every((entry, index) => entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
+        (entry as JsonObject).schema_version === "loopx_todo_completion_validation_revision_receipt_v0" &&
+        (entry as JsonObject).revision === index + 1 &&
+        typeof (entry as JsonObject).previous_declaration_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test((entry as JsonObject).previous_declaration_sha256 as string) &&
+        typeof (entry as JsonObject).declaration_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test((entry as JsonObject).declaration_sha256 as string)) &&
+      history.every((entry, index) => index === 0 ||
+        (entry as JsonObject).previous_declaration_sha256 === (history[index - 1] as JsonObject).declaration_sha256) &&
+      (history.at(-1) as JsonObject).declaration_sha256 === todo.completion_validation_sha256) {
+    revisionPrefixes = Array.from({length: Number(revision)}, (_, index) => index);
+  }
+
+  for (const scheduleVariant of scheduleVariants) {
+    const successors = scheduleVariant.successor_todo_ids;
+    const successorVariants: JsonObject[] = [scheduleVariant];
+    if (Array.isArray(successors) && successors.length <= 32 &&
+        successors.every(value => typeof value === "string")) {
+      for (let count = successors.length - 1; count >= 0; count--) {
+        successorVariants.push({...scheduleVariant, successor_todo_ids: successors.slice(0, count)});
+      }
+      const withoutSuccessors = {...scheduleVariant};
+      delete withoutSuccessors.successor_todo_ids;
+      successorVariants.push(withoutSuccessors);
+    }
+    for (const successorVariant of successorVariants) {
+      if (successorVariant !== todo && goalAcceptanceTodoDigest(successorVariant) === boundDigest) return true;
+      for (const priorRevision of revisionPrefixes) {
+        const previous: JsonObject = {...successorVariant, completion_validation_revision: priorRevision,
+          completion_validation_revision_history: (history as JsonObject[]).slice(0, priorRevision)};
+        if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+        if (priorRevision === 0) {
+          delete previous.completion_validation_revision;
+          delete previous.completion_validation_revision_history;
+          if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 function advancement(todo: JsonObject): boolean {
   return todo.role === "agent" && (todo.task_class == null || todo.task_class === "advancement_task");
 }
@@ -225,7 +290,7 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
 
 export function acceptanceTask(todoId: string, todo: JsonObject | undefined, state: AcceptanceState): AcceptanceTask {
   const binding = state.bindings.find(item => item.todo_id === todoId);
-  const reason_code = !binding ? "goal_acceptance_unbound" : !todo || binding.todo_semantic_digest !== goalAcceptanceTodoDigest(todo)
+  const reason_code = !binding ? "goal_acceptance_unbound" : !todo || !acceptanceBindingMatches(todo, binding.todo_semantic_digest)
     ? "goal_acceptance_stale" : "goal_acceptance_ready";
   return {todo_id: todoId, state: !binding ? "unbound" : reason_code === "goal_acceptance_stale" ? "stale" : "ready",
     criterion_ids: binding?.criterion_ids ?? [], reason_code,

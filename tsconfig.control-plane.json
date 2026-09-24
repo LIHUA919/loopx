@@ -46,6 +46,7 @@
     "loopx/control_plane/goals/vision_checkpoint.ts",
     "loopx/control_plane/goals/shared_goal_alignment.ts",
     "loopx/control_plane/goals/goal_amendment_proposal.ts",
+    "loopx/control_plane/goals/goal_instance_identity.ts",
     "loopx/control_plane/quota/settlement_workspace_causality.ts",
     "loopx/control_plane/quota/settlement_readback.ts",
     "loopx/control_plane/quota/heartbeat_receipt_identity.ts",
@@ -144,9 +145,14 @@
     "tests/control_plane_ts/turn_journal.test.ts",
     "tests/control_plane_ts/turn_journal_effects.test.ts",
     "tests/control_plane_ts/vision_checkpoint.test.ts",
+    "tests/control_plane_ts/checkpoint_read_context.test.ts",
+    "tests/control_plane_ts/checkpoint_provider_head.test.ts",
+    "tests/control_plane_ts/checkpoint_commit_probe.ts",
+    "tests/control_plane_ts/refresh_recovery.test.ts",
     "tests/control_plane_ts/vision_wait_coverage.test.ts",
     "tests/control_plane_ts/shared_goal_alignment.test.ts",
     "tests/control_plane_ts/replan_history.test.ts",
-    "tests/control_plane_ts/goal_amendment_proposal.test.ts"
+    "tests/control_plane_ts/goal_amendment_proposal.test.ts",
+    "tests/control_plane_ts/goal_instance_identity.test.ts"
   ]
 }

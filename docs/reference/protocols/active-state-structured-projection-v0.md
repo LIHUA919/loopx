@@ -257,6 +257,47 @@ from facts; old wire `effective` hints are accepted but cannot override them.
 有效租约，未过期但持有人失去资格时返回原因，不自动续租、转移或清理。
 读取不提供写授权；release 的 key/version 门禁与幂等、CAS 规则保持不变。
 
+### Refresh recovery and authoritative diagnostics
+
+After promotion, a successful non-preview `refresh-state` now attempts Todo
+projection delivery, including recovery of a previously committed same-Turn
+writeback. CLI and Turn use the same path. Legacy refresh and preview remain
+non-repairing; rejected admission does not acquire a display-write opportunity.
+A provider or display failure after the refresh commit is `projection_delivery=pending`,
+not a failed or repeated business write. JSON and Markdown responses disclose
+that distinction. Retry the original Turn, or use `todo project-markdown` with a
+fresh provider revision; do not repeat Todo completion or quota spend.
+
+The planner retains its complete canonical snapshot for delivery rather than
+immediately reading it again. The renderer still confirms authority after
+durable file readback. TS returns a typed `next_action=retry|finish`; only
+latest-head intent may retry an overlap, and no fourth attempt is admitted.
+Pinned explicit projection preserves its requested revision. These are internal,
+co-deployed request fields, not persisted request bytes or new receipt versions.
+Existing receipts and provider formats are unchanged.
+
+The refresh record's missing-work diagnosis also uses the same canonical Todo
+summary. Stale Markdown cannot fabricate a missing-task warning or hide a truly
+empty canonical group. Markdown remains the source of independent narrative.
+Delivery can catch up to a newer provider revision without rewriting the earlier
+refresh record or pretending its original planning snapshot was newer.
+
+Recovery adds real rendering, file durability and confirmation work to committed
+promoted refreshes. It is not a free read or a claim of lower latency. The normal
+path shares the planning read and adds one confirmation read; same-Turn replay
+loads the current head before repairing. Missing display recovers only Todo
+sections, with the existing private-validation digest and source-ownership
+checks. It cannot reconstruct independent Goal narrative or bypass an
+unavailable private validation declaration. No timer, new outbox, persistent ACK,
+provider default or active-Goal migration is introduced.
+
+中文：已晋升 Goal 的非预览 `refresh-state` 和同 Turn 重试现在会恢复 Todo 显示。
+业务成功、显示 pending 分别报告；只重试显示，不重新完成 Todo 或扣费。规划、缺失工作
+诊断与投影起点复用完整 canonical 快照，权威空集合不回退到旧 Markdown；耐久写入后
+仍读取 provider 确认，由 TS 统一决定是否追赶以及三次上限。Legacy、预览与拒绝请求
+不获得新的显示写入。这个默认行为变化只影响已晋升 Goal，增加了渲染和耐久确认成本；
+不改变默认 provider。缺失文件仅恢复 Todo 区域，不能恢复独立 Goal 叙述。
+
 ## Migration Path
 
 The projector accepts complete legacy records and native `TodoDomainRecord`
@@ -273,8 +314,8 @@ one provider transaction. After that commit, the Python compatibility adapter
 renders the latest head under the Markdown lock and durably reads it back. A
 renderer/write failure leaves typed `pending` delivery
 evidence without reversing or hiding the canonical commit. A later successful
-mutation or `todo project-markdown --execute` replays the current head
-idempotently. This is projection recovery, not a second authority path.
+mutation, committed `refresh-state` (including same-Turn replay), or
+`todo project-markdown --execute` replays the current head idempotently. This is projection recovery, not a second authority path.
 The ordinary state writer and projection writer share durable atomic publication.
 Missing-display recovery uses create-only publication and cannot overwrite a
 concurrently restored document. When bytes already match, execution still syncs
@@ -303,7 +344,8 @@ only the internal projection readback request opts into confirmation metadata.
 
 The TypeScript read owner validates complete canonical data and compares the
 host's durable readback revision with the same loaded head. Python retains
-Markdown ownership, durability, bounded IO retry and rendering. A missing
+Markdown ownership, physical durability and rendering. The TypeScript confirmation
+owns latest-head versus pinned intent and the three-attempt retry decision. A missing
 confirmation from a downlevel runtime cannot be treated as delivery success.
 The normal successful execution adds one provider read; each caught-up attempt
 reuses the already returned full snapshot. This is a freshness cost, not a

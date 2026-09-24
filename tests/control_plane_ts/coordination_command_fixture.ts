@@ -58,7 +58,9 @@ export async function coordinationCommandFixture(store: AuthorityStore, command:
       observation: {todo_id: monitor.todo_id, result_hash: "new-recovery-evidence", material_change: true,
         generated_at: "2026-09-07T07:00:00Z"},
       intent: {next_agent_todo: "Advance the recovered material change", next_action_kind: "implement"}}, sourceCheck);
-    return executeCoordinationTodoTerminalLifecycle(target, {...request, command,
+    const {operation_id: terminalId, ...terminalRequest} = request;
+    return executeCoordinationTodoTerminalLifecycle(target, {...terminalRequest, command,
+      operation_identity: {kind: "explicit", operation_id: terminalId},
       todo_id: fixture.completion_todo_id, actor_agent_id: "agent-a", expected_role: "agent",
       lifecycle_grants: [], authority_reason: null, decision_outcome: null,
       lease_idempotency_key: fixture.completion_lease_idempotency_key,

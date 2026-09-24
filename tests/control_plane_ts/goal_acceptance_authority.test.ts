@@ -11,6 +11,7 @@ import type {AuthorityStore} from "../../loopx/control_plane/coordination/author
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {prepareCoordinationProjectionCommit, validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
@@ -54,6 +55,42 @@ test("terminal continuation observations preserve work while changed requirement
   assert.notEqual(goalAcceptanceTodoDigest({...completed, text: "Deliver different work"}), goalAcceptanceTodoDigest(work));
   assert.notEqual(goalAcceptanceTodoDigest({...completed, completion_validation_required: true}), goalAcceptanceTodoDigest(work));
 });
+test("validator revisions and successor links preserve an existing acceptance binding", () => {
+  const original = todo("todo_first", {completion_validation_required: true,
+    completion_validation_sha256: "a".repeat(64), completion_validation_revision: 0,
+    completion_validation_revision_history: [], successor_todo_ids: []});
+  const contract = normalizeGoalAcceptanceDocument({...document(),
+    bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]});
+  const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+    digest: canonicalAuthoritySha256(contract), document: contract, verification: null,
+    bindings: [{todo_id: "todo_first", todo_semantic_digest: goalAcceptanceTodoDigest(original),
+      revision: 1, criterion_ids: ["prerequisite"], confirmed_by: "owner"}]};
+  const receipt = {schema_version: "loopx_todo_completion_validation_revision_receipt_v0", revision: 1,
+    operation_id: "revise", previous_declaration_sha256: "a".repeat(64),
+    declaration_sha256: "b".repeat(64), actor_agent_id: "agent-a", revised_at: "2026-09-23T00:00:00Z"};
+  const revised = {...original, completion_validation_sha256: "b".repeat(64),
+    completion_validation_revision: 1, completion_validation_revision_history: [receipt],
+    successor_todo_ids: ["todo_followup"]};
+  const guarded = (work: JsonObject) => acceptanceWorkGuard(authorityProjectionFixture(goal,
+    [work, todo("todo_followup")], [], "native", {goal_acceptance: state}), goal, "todo_first");
+  assert.equal(guarded(original)?.state, "ready");
+  assert.notEqual(goalAcceptanceTodoDigest(revised), goalAcceptanceTodoDigest(original),
+    "persisted v0 digests must remain compatible without rebinding every existing Todo");
+  assert.equal(guarded(revised)?.state, "ready");
+  assert.equal(guarded({...revised, resume_when: "monitor_changed:todo_followup"})?.state, "ready",
+    "an added scheduling wait cannot alter the confirmed acceptance association");
+  assert.equal(guarded({...revised, text: "Different work"})?.state, "stale");
+  assert.equal(guarded({...revised, required_write_scopes: ["private"]})?.state, "stale");
+  assert.equal(guarded({...revised, completion_validation_required: false})?.state, "stale");
+  assert.equal(guarded({...revised, completion_validation_revision_history: [{...receipt,
+    declaration_sha256: "c".repeat(64)}]})?.state, "stale");
+  const boundWithWait = {...state, bindings: [{...state.bindings[0],
+    todo_semantic_digest: goalAcceptanceTodoDigest({...original, resume_when: "monitor_changed:todo_first"})}]};
+  const changedWait = acceptanceWorkGuard(authorityProjectionFixture(goal,
+    [{...original, resume_when: "monitor_changed:todo_followup"}, todo("todo_followup")], [], "native",
+    {goal_acceptance: boundWithWait}), goal, "todo_first");
+  assert.equal(changedWait?.state, "stale", "the matcher cannot reconstruct a replaced prior wait condition");
+});
 async function seed(store: AuthorityStore) {
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     events: [], receipts: [], next_projection: originalHead()})).status, "applied");
@@ -83,9 +120,8 @@ async function update(store: AuthorityStore, todoId: string, patch: JsonObject) 
   assert.equal(result.status, "applied");
 }
 const providers = ["file", "sqlite", "postgresql"] as const;
-// SQLite authority needs the WAL-reset driver; the public Node minimum ships
-// an older one. Skip those rows there rather than fail, and keep the file
-// rows running: the qualified runtime job executes every row for real.
+// Developer runtimes outside the supported Node range may lack the WAL-reset
+// driver. CI asserts SQLite qualification and runs every provider row.
 const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
 async function fixture(t: TestContext, provider: typeof providers[number]): Promise<AuthorityStore> {
   if (provider !== "postgresql") {

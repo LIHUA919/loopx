@@ -13,6 +13,15 @@
 
 ---
 
+
+## canonical collection 分页检查点（2026-09-23）
+
+canonical collection 跨语言传输改为 TS 一致性分页：旧 direct list 和分页共用
+`canonicalTodoCollection` 规则 owner，Python 校验并组装完整分页，保持调用方形状。
+不提高 2 MiB RPC 上限，不在 Python 重建 Todo/acceptance 规则；并发版本变化导致
+整份读取失败，File 只读打开不创建缺失 authority。限制与开销见[分页合同](../../reference/canonical-snapshot-pagination.md)。
+shared-authority 当前计划细化为含本批 **7–9 个 PR，合入后 6–8 个**；此处细化取代旧的粗粒度交付包估算，不代表 D1–D3 完成。
+
 ## 跨 RFC 的执行优先级（2026-09-16）
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) 的 R1–R5 是 T0–T4 的当前产品消费者，不另设一套迁移阶段。团队确认路径现在由 `work_items/team_plan.ts` 负责预览、整批规划及不可变操作身份，复用现有 AuthorityStore 回执/CAS 边界。Python 保留公开安全校验与 legacy Markdown IO adapter，逐 lane 写入循环已移除。R1 检查点区分已交付的分配/重试结果与尚未验收的接收者/执行边界。
@@ -34,7 +43,7 @@ receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 p
 删除 Python 的阻塞分类、伪造旧模式和整篇文本重写，保留来源投影、锁与 capture IO。
 旧扫描补齐事件独有 claim，canonical 回执复用 command recovery 并严格校验历史决策。
 完整快照和真实 provider 验证覆盖这一 T1/T2 替换；它关闭一处规则/调用差异，
-不代表关闭整项默认切换交付包，条件性的 5–8 包估算不变。
+不代表关闭整项默认切换交付包，条件性的 7–9 包估算不变。
 [行为变化与恢复](../../reference/handoff-mode.md)。
 
 终结审核与验证已收敛到既有 TS terminal owner：Agent 完成、Monitor 停止复用 Chat
@@ -637,7 +646,7 @@ Todo 来源；frontier 和报告事实复用同一完整已求值快照。展示
 归档拒绝记录仍有效，显式 runtime-root 同时约束 intent 和 Todo IO。已冻结的编辑
 请求沿用原始依据，不因重试刷新。见[操作边界](../../../loopx/capabilities/periodic_report/README.md#todo-authority-and-report-retries)。
 这闭合一组 T3/L5 消费者，不代表 D1 永久展示新鲜度、D2 耐久性、D3 整 Goal
-资格或默认 provider 已完成；条件性的 5–8 个后续完整交付批次估算保持不变。
+资格或默认 provider 已完成；条件性的 7–9 个后续完整交付批次估算保持不变。
 
 Todo 摘要 lane 与裁剪前工作计数现共用 `todos/summary_lanes.ts`，删除 Python 的
 lane 分类和隐藏任务推断循环。quota 在作用域筛选后重新计数，不完整来源状态贯穿
@@ -1400,6 +1409,7 @@ transaction 要和 matched durability baseline 比较，而不是套用 2 ms ker
 
 迁移不能要求用户管理服务。Python 过渡版本要求 Node.js 22.18.0 或更新版本，
 但 installer 与 `loopx doctor` 必须在正常控制面工作前检测，并给出精确修复方式。
+当前源码版本已将最低要求升至 Node.js 22.22.3，以覆盖内嵌 SQLite 的 WAL-reset 修复。
 Wheel 与 sdist 携带 TS source 和版本化 schema。
 
 Runtime 因 idle 退出时仍是健康状态：`stopped` 表示下一次控制面请求会自动拉起，
@@ -1435,6 +1445,15 @@ transaction 只能靠削弱既有行为才能通过 invariant/recovery/performan
 
 实测交付记录存于[逐条 ledger](ledger/typescript-control-plane-migration-v0/)。
 每条记录说明已交付边界及剩余验收缺口；上方 T1–T4 检查点仍是当前迁移计划。
+
+### Canonical 显示确认与刷新恢复
+
+TS 拥有 canonical revision 比较、最新／固定版本意图及三次重试上限；Python 继续执行
+文件锁、耐久落盘和 Markdown 渲染。已提交刷新与同 Turn 重试复用这一恢复路径，规划
+快照同时供应缺失工作诊断和初始显示，删除 Python 的重试决策及晋升后从旧 Markdown
+再判断 Todo 数量的路径。没有增加 RPC 方法或持久 ACK，正常恢复增加一次确认读取。
+这是 T3／D1 的刷新调用方闭合；其他 consumer、D2 与整 Goal 切换仍需独立资格。
+见[投影合同](../../reference/protocols/active-state-structured-projection-v0.md)。
 
 ### Reviewed coordination cutover ownership
 

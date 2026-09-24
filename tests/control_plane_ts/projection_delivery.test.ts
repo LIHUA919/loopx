@@ -37,14 +37,37 @@ test("end-to-end fixture preserves delivery causal chain", async () => {
 test("projection confirmation binds durable host readback to one observed revision", async () => {
   const {decodeProjectionReadback, confirmProjectionReadback} = await import("../../loopx/control_plane/todos/projection_delivery.ts");
   for (const changed of [true, false]) {
-    const readback = decodeProjectionReadback({provider_revision: "revision-a", changed});
+    const readback = decodeProjectionReadback({provider_revision: "revision-a", changed, attempt: 1, target: "latest"});
     assert.equal(confirmProjectionReadback(readback, "revision-a").status, changed ? "delivered" : "current");
-    assert.deepEqual(confirmProjectionReadback(readback, "revision-b"), {
-      status: "pending", provider_revision: "revision-a", observed_provider_revision: "revision-b",
-    });
+    const overlap = confirmProjectionReadback(readback, "revision-b");
+    assert.equal(overlap.status, "pending");
+    assert.equal(overlap.next_action, "retry");
+    assert.equal(overlap.observed_provider_revision, "revision-b");
   }
   for (const bad of [null, [], {}, {provider_revision: "", changed: false},
     {provider_revision: "a", changed: "true"}, {provider_revision: "a", changed: false, verified: true}]) {
     assert.throws(() => decodeProjectionReadback(bad));
   }
+});
+
+
+test("delivery retry is bounded and pinned requests cannot chase a new head", async () => {
+  const {decodeProjectionReadback, confirmProjectionReadback} = await import("../../loopx/control_plane/todos/projection_delivery.ts");
+  for (const target of ["pinned", "latest"]) for (const attempt of [1, 2, 3]) {
+    const witness = decodeProjectionReadback({provider_revision: "old", changed: true, attempt, target});
+    const pending = confirmProjectionReadback(witness, "new");
+    assert.equal(pending.status, "pending");
+    assert.equal(pending.next_action, target === "latest" && attempt < 3 ? "retry" : "finish");
+    const current = confirmProjectionReadback(witness, "old");
+    assert.equal(current.status, "delivered");
+    assert.equal(current.next_action, "finish");
+  }
+  const valid = {provider_revision: "old", changed: true, attempt: 1, target: "latest"};
+  for (const attempt of [0, -1, 1.5, 4, "1", null, Number.NaN]) {
+    assert.throws(() => decodeProjectionReadback({...valid, attempt}));
+  }
+  for (const target of [null, "", "maybe", false]) {
+    assert.throws(() => decodeProjectionReadback({...valid, target}));
+  }
+  assert.throws(() => decodeProjectionReadback({...valid, extra: true}));
 });

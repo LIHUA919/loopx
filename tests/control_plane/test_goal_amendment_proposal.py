@@ -37,6 +37,7 @@ from loopx.control_plane.goals.goal_amendment_proposal import (
 from loopx.control_plane.goals.shared_goal_alignment import (
     project_shared_goal_alignment,
 )
+from loopx.control_plane.runtime.time import chronology_key
 from loopx.control_plane.status.autonomous_replan_projection import (
     autonomous_replan_obligation_from_runs,
 )
@@ -250,7 +251,7 @@ def _newest_first_runs(
         for _, run in sorted(
             enumerate(runs),
             key=lambda item: (
-                str(item[1].get("generated_at") or ""),
+                *chronology_key(item[1].get("generated_at")),
                 item[0],
             ),
             reverse=True,
@@ -644,6 +645,31 @@ def test_settlement_ack_run_closes_the_derived_obligation(
             _newest_first_runs(paths), agent_todos=None, agent_id="agent-a"
         )
         is None
+    )
+
+    with pytest.raises(ValueError, match="does not match an open replan obligation"):
+        _admit(paths, proposal)
+
+    assert _journal_rows(paths) == []
+
+
+def test_later_utc_ack_closes_obligation_across_offsets(
+    tmp_path: Path,
+) -> None:
+    stalled_runs = _stall_runs()
+    stalled_runs[0]["generated_at"] = "2026-09-01T08:00:00+08:00"
+    stalled_runs[1]["generated_at"] = "2026-09-01T08:01:00+08:00"
+    paths = _write_fixture(
+        tmp_path,
+        events=_default_events(),
+        runs=stalled_runs,
+    )
+    proposal = _proposal(paths)
+    obligation_id = _derived_obligation(paths)["obligation_id"]
+
+    _append_runs(
+        paths,
+        [_ack_run(obligation_id, generated_at="2026-09-01T01:00:00Z")],
     )
 
     with pytest.raises(ValueError, match="does not match an open replan obligation"):

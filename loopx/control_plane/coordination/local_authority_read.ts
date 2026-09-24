@@ -12,6 +12,51 @@ import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_LIS
   LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA} from "./coordination_state_contract.generated.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
 
+/** Shared admission for full and paged collection reads. Pagination changes
+ * transport only; retained records, read-model validation and acceptance keep
+ * this same owner. */
+export function canonicalTodoCollection(head: JsonObject, goalId: string, includeLeases: boolean) {
+  return {
+    projection: indexCoordinationProjectionTodos(head, goalId),
+    todoReadModel: validateCoordinationTodoReadModel(head, goalId),
+    leaseIndex: includeLeases ? indexCoordinationProjection(head, goalId) : null,
+    acceptance: projectGoalAcceptance(head, goalId),
+  };
+}
+
+const LOCAL_COORDINATION_OPERATION_RECEIPT_REQUEST_SCHEMA = "loopx_local_coordination_operation_receipt_request_v0";
+const LOCAL_COORDINATION_OPERATION_RECEIPT_RESULT_SCHEMA = "loopx_local_coordination_operation_receipt_result_v0";
+
+/** Exact historical operation readback. It grants no current lease or retry authority. */
+export async function readLocalCoordinationOperationReceipt(
+  value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
+  let sourceAuthority = "canonical_unavailable";
+  try {
+    const input = requireJsonObject(value, "local coordination operation receipt request");
+    if (input.schema_version !== LOCAL_COORDINATION_OPERATION_RECEIPT_REQUEST_SCHEMA) {
+      throw new Error("local coordination operation receipt request schema mismatch");
+    }
+    const root = runtimeRoot(input.runtime_root);
+    const goalId = requireAuthorityStoreId(input.goal_id, "goal id");
+    const operationId = requireAuthorityStoreId(input.operation_id, "operation id");
+    const store = await openRuntimeStore(root, goalId, dependencies);
+    sourceAuthority = sourceAuthorityFor(store);
+    const receipt = await store.readReceipt(operationId);
+    return {schema_version: LOCAL_COORDINATION_OPERATION_RECEIPT_RESULT_SCHEMA,
+      goal_id: goalId, operation_id: operationId, ...receipt,
+      source_authority: sourceAuthority, decision_read_from_provider: true,
+      legacy_fallback_used: false};
+  } catch (error) {
+    return {schema_version: LOCAL_COORDINATION_OPERATION_RECEIPT_RESULT_SCHEMA,
+      status: "failed", reason_code: "invalid_local_coordination_operation_receipt_request",
+      reason: error instanceof Error ? error.message : "invalid operation receipt request",
+      source_authority: sourceAuthority, decision_read_from_provider: false,
+      legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+  }
+}
+
 /** Provider-first exact Todo read. Missing/unavailable state never falls back. */
 export async function readLocalCoordinationTodo(
   value: unknown,
@@ -98,11 +143,9 @@ export async function listLocalCoordinationTodos(
         legacy_fallback_used: false,
       };
     }
-    const projection = indexCoordinationProjectionTodos(head.head, goalId);
-    const todoReadModel = validateCoordinationTodoReadModel(head.head, goalId);
-    const leaseIndex = input.include_leases === true
-      ? indexCoordinationProjection(head.head, goalId) : null;
-    const acceptance = projectGoalAcceptance(head.head, goalId);
+    const {projection, todoReadModel, leaseIndex, acceptance} = canonicalTodoCollection(
+      head.head, goalId, input.include_leases === true,
+    );
     return {
       schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
       status: "loaded",

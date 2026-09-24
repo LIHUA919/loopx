@@ -9,10 +9,12 @@ import pytest
 
 from loopx.control_plane.projects import registry_codec
 from loopx.control_plane.projects.registry_codec import (
+    ProjectRegistryError,
     ProjectRegistryMutationError,
     ProjectRegistryProtocolError,
     load_project_registry,
     mutate_project_registry,
+    source_session_registry_transaction,
 )
 from loopx.global_registry import (
     GlobalRegistryReduction,
@@ -127,6 +129,107 @@ def test_future_protocol_is_readable_but_not_mutable(tmp_path: Path) -> None:
             reducer=lambda registry: registry.update({"updated": True}),
         )
     assert path.read_bytes() == before
+
+
+def test_source_session_transaction_creates_and_preserves_v2(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "registry.json"
+    initial: dict[str, object] = {
+        "schema_version": "0.2",
+        "registry_role": "project-local",
+        "profile_id": "source_session_v1",
+        "goals": [],
+    }
+
+    with source_session_registry_transaction(
+        path,
+        operation="test_source_session_create",
+        create=lambda: initial,
+    ) as transaction:
+        payload = transaction.payload_copy()
+        payload["created"] = True
+        assert transaction.commit(payload) is True
+
+    created = json.loads(path.read_text(encoding="utf-8"))
+    assert created[0]["schema_version"] == "loopx_project_registry_envelope_v2"
+    assert created[0]["minimum_writer_protocol"] == "goal_instance_v2"
+    assert created[0]["payload_sha256"] == _digest(created[1])
+
+    with source_session_registry_transaction(
+        path,
+        operation="test_source_session_update",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        payload["updated"] = True
+        assert transaction.commit(payload) is True
+
+    updated = json.loads(path.read_text(encoding="utf-8"))
+    assert updated[0]["schema_version"] == "loopx_project_registry_envelope_v2"
+    assert updated[0]["minimum_writer_protocol"] == "goal_instance_v2"
+    assert updated[0]["payload_sha256"] == _digest(updated[1])
+    assert updated[1] == {**initial, "created": True, "updated": True}
+
+    before = path.read_bytes()
+    with pytest.raises(ProjectRegistryProtocolError, match="goal_instance_v2"):
+        mutate_project_registry(
+            path,
+            operation="test_legacy_writer_rejected",
+            reducer=lambda registry: registry.update({"legacy_write": True}),
+        )
+    assert path.read_bytes() == before
+
+
+def test_source_session_profile_is_not_a_generic_runtime_registry(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "registry.json"
+    payload: dict[str, object] = {
+        "schema_version": "0.2",
+        "profile_id": "source_session_v1",
+        "goals": [],
+    }
+    _write(
+        path,
+        [
+            {
+                "schema_version": "loopx_project_registry_envelope_v2",
+                "minimum_writer_protocol": "goal_instance_v2",
+                "payload_sha256": _digest(payload),
+            },
+            payload,
+        ],
+    )
+
+    assert load_project_registry(path) == payload
+    with pytest.raises(
+        ProjectRegistryProtocolError,
+        match="lifecycle-only",
+    ):
+        load_registry(path)
+
+
+def test_v2_envelope_rejects_an_unknown_profile(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    payload: dict[str, object] = {
+        "schema_version": "0.2",
+        "profile_id": "unqualified_profile_v1",
+        "goals": [],
+    }
+    _write(
+        path,
+        [
+            {
+                "schema_version": "loopx_project_registry_envelope_v2",
+                "minimum_writer_protocol": "goal_instance_v2",
+                "payload_sha256": _digest(payload),
+            },
+            payload,
+        ],
+    )
+
+    with pytest.raises(ProjectRegistryError, match="profile_id"):
+        load_project_registry(path)
 
 
 def test_global_registry_mutation_remains_object_only(tmp_path: Path) -> None:

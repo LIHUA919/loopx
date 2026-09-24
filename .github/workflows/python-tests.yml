@@ -19,6 +19,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
       - "tsconfig.control-plane.json"
 
 permissions:
@@ -83,8 +85,38 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  kernel-static-checks:
+  chat-bundle:
     needs: changes
+    if: needs.changes.outputs.core_tests == 'true' || needs.changes.outputs.python_tests == 'true' || needs.changes.outputs.presentation_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
+      - run: python scripts/chat_bundle.py build --install
+      - run: python scripts/chat_bundle.py verify --source
+      - name: Qualify the actual compiled UI before saving the artifact
+        working-directory: apps/presentation/dashboard
+        run: |
+          ./node_modules/.bin/playwright install --with-deps chromium
+          npm run smoke:personal-workspace-packaged
+          npm run smoke:chat-upgrade
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+          if-no-files-found: error
+          retention-days: 7
+
+  kernel-static-checks:
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -93,6 +125,11 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -123,6 +160,8 @@ jobs:
           node-version: "22.22.3"
 
       - name: Qualify the TypeScript Effect core
+        env:
+          LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"
         run: |
           npm ci --ignore-scripts
           npm run typecheck:control-plane
@@ -154,13 +193,18 @@ jobs:
         run: python examples/control_plane/cli-output-budget-regression-smoke.py
 
   dashboard-acceptance:
-    needs: changes
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
 
       - name: Set up the qualified Node.js runtime
         uses: actions/setup-node@v6
@@ -213,31 +257,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core_tests == 'true'
     runs-on: ubuntu-latest
-    # The full public-minimum suite has reached fifteen minutes on hosted runners.
-    # Keep a bounded margin above the measured workload without weakening coverage.
-    timeout-minutes: 20
+    # The full suite runs under this exact Node version in kernel-static-checks.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: "22.18.0"
+          node-version: "22.22.3"
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Qualify the public minimum Node.js runtime
+        env:
+          LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"
         run: |
           npm ci --ignore-scripts
           npm run typecheck:control-plane
-          # Default File/control-plane compatibility stays on the public minimum.
-          # SQLite requires a WAL-fixed embedded driver; its admission rejection
-          # runs here, while full SQLite suites run on the qualified runtime.
-          tests=()
-          for test in tests/control_plane_ts/*.test.ts; do
-            case "$test" in
-              */sqlite_authority_store.test.ts|*/sqlite_authority_bounded_profile.test.ts|*/sqlite_authority_migration.test.ts|*/local_authority_provider.test.ts|*/authority_provider_parity.test.ts|*/sqlite_capacity.test.ts) continue ;;
-            esac
-            tests+=("$test")
-          done
-          node --no-warnings --experimental-sqlite --experimental-strip-types --test "${tests[@]}"
+          # Prove the minimum itself admits SQLite and executes both provider
+          # lifecycle rows. The qualified core lane runs the complete suite.
+          node --no-warnings --experimental-sqlite --experimental-strip-types --test \
+            tests/control_plane_ts/sqlite_runtime_admission.test.ts \
+            tests/control_plane_ts/deferred_hard_lease_lifecycle.test.ts
 
   node-forward-compatibility:
     needs: changes
@@ -261,7 +300,7 @@ jobs:
           npm run test:control-plane
 
   test-shard:
-    needs: changes
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -273,6 +312,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -381,7 +425,7 @@ jobs:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   stage2c-suite:
-    needs: changes
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.stage2c_tests == 'true'
     name: stage2c (${{ matrix.suite }} ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -396,6 +440,11 @@ jobs:
           - {suite: installed, shard: 0}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -475,15 +524,20 @@ jobs:
         run: test "$STAGE2C_RESULT" = success
 
   windows-powershell:
-    needs: changes
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.python_tests == 'true'
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -495,6 +549,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/presentation/dashboard/package-lock.json
 
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -e ".[test]"
@@ -530,34 +586,43 @@ jobs:
           tests/control_plane_ts/local_authority_provider.test.ts
           tests/control_plane_ts/sqlite_runtime_admission.test.ts
 
+      - name: Install the frontend dependencies for a source rebuild
+        working-directory: apps/presentation/dashboard
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild the Chat bundle where only python.exe is usable
+        working-directory: apps/presentation/dashboard
+        shell: pwsh
+        run: |
+          $shadow = Join-Path $env:RUNNER_TEMP "python-exe-only"
+          New-Item -ItemType Directory -Force -Path $shadow | Out-Null
+          # Supported Windows installs may expose python.exe alone, and a
+          # python3.exe App Execution Alias stub is not runnable. The npm entry
+          # must resolve a real 3.11+ interpreter either way.
+          Set-Content -Path (Join-Path $shadow "python3.exe") `
+            -Value "unusable python3 stand-in" -Encoding ascii
+          $env:PATH = "$shadow;$env:PATH"
+          npm run build:chat
+
+      - name: Verify the Windows-built Chat bundle
+        run: python scripts/chat_bundle.py verify --source
+
   presentation:
-    needs: changes
+    needs: [changes, chat-bundle]
     if: needs.changes.outputs.presentation_tests == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: pip
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: apps/presentation/dashboard/package-lock.json
-      - run: python -m pip install --disable-pip-version-check -e ".[test]"
-      - name: Build and test the actual packaged Dashboard
-        working-directory: apps/presentation/dashboard
-        run: |
-          npm ci --ignore-scripts
-          npm run build:chat
-          if [[ -n "$(git -C ../../.. status --short --untracked-files=all -- loopx/web/chat)" ]]; then
-            echo "Packaged Dashboard differs from its source build." >&2
-            exit 1
-          fi
-          ./node_modules/.bin/playwright install --with-deps chromium
-          npm run smoke:personal-workspace-packaged
+      - name: Verify the source-bound, browser-qualified Dashboard artifact
+        run: python scripts/chat_bundle.py verify --source
 
   merge-gate:
     # Always publish one stable outcome, including documentation-only PRs.

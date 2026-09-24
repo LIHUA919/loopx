@@ -144,6 +144,56 @@ CASES = [
 ]
 
 
+# Same symptom, different compatibility obligations. Do not reward blanket
+# version deletion, blanket retention, or approval after only the last bug fix.
+# Breaking a durable reader/writer contract is integration; redundant live
+# dispatch paths without independent consumers are an architecture cost.
+COMPATIBILITY_CASES = [
+    (
+        {
+            "request": "Re-review recurring-job completion after the reported replay bug was fixed.",
+            "problem": "A reopened job must complete its new cycle without replaying old success.",
+            "proposal": "Keep an old request version for named operations and add a new version where null id means current cycle. Both enter the same transaction. Author says old receipts require the old request version.",
+            "evidence": "Complete caller inventory finds only one adapter and runtime shipped in the same package, selected by source fingerprint. Requests are transient; persisted receipts store ids and intent digests, not request versions. A single current request with named explicit/current-cycle variants preserves both meanings and hashes. Real old-receipt readback and cycle/race tests pass for that smaller design. No external old clients or delayed request queues exist. Prior review fixed legacy fallback and all correctness tests pass.",
+            "repository_rule": "Remove avoidable permanent protocol branches when one equally validated contract serves every supported caller.",
+        },
+        "REQUEST_CHANGES",
+        "architecture",
+    ),
+    (
+        {
+            "request": "Review recurring-job completion with a new current-cycle mode.",
+            "problem": "New cycles must complete independently while supported offline clients can retry named operations.",
+            "proposal": "Keep a thin old-request decoder, normalize both formats to a typed explicit/current-cycle intent, and share one transaction and receipt owner.",
+            "evidence": "Named deployed mobile releases ship independently and must remain supported for 90 days. Their old request bytes still arrive. Caller inventory, release policy, mixed-client integration, historical receipt replay and cycle/race tests pass. Decoder retirement is tied to expiry of that supported window. No duplicated state rule or implicit null mode remains; all other evidence is verified.",
+        },
+        "APPROVE",
+        "none",
+    ),
+    (
+        {
+            "request": "Review a protocol cleanup for a co-packaged adapter and runtime.",
+            "problem": "Reduce duplicate request decoders without losing pending durable work after restart.",
+            "proposal": "Delete the old request decoder because all live callers upgrade together.",
+            "evidence": "The durable retry queue stores complete old-version request bodies. After upgrade, its real restart test rejects those pending jobs before dispatch. No migration or draining step exists. New live requests work and receipt readback passes. The author argues source fingerprinting makes all old formats unnecessary.",
+        },
+        "REQUEST_CHANGES",
+        "integration",
+    ),
+    (
+        {
+            "request": "Review a protocol cleanup for a co-packaged adapter and runtime.",
+            "problem": "Reduce duplicate live request paths while preserving durable pending work after restart.",
+            "proposal": "Use one typed current request for all live calls; retain the old durable-queue decoder only at the replay boundary and normalize to the same owner.",
+            "evidence": "Caller inventory proves coordinated upgrades. Persisted pending requests require the historical reader until migration drains them; result receipts separately keep their original ids. Real pre-upgrade queue restart, live call, cycle/race, negative identity and immutable receipt tests pass. No duplicate business rule remains and other applicable evidence is verified. A local naming suggestion is P2 and optional.",
+        },
+        "APPROVE",
+        "none",
+    ),
+]
+CASES.extend(COMPATIBILITY_CASES)
+
+
 def test_decision_procedure_is_in_the_real_packet_before_prose():
     response = build_agent_response_contract()
     assert response["review_execution_contract"]["decision_procedure"]["order"] == [
@@ -200,7 +250,8 @@ def test_live_review_decision(scenario, expected, concern):
             "(the unresolved blocking reason: lifecycle, architecture, integration, "
             "or none when approving), and a short explanation. Lifecycle means "
             "process termination/drain correctness; integration means incompatibility "
-            "between related PR contracts; architecture means unjustified ownership, "
+            "between callers/readers and wire or persisted contracts, including related PRs; "
+            "architecture means unjustified ownership, "
             "scope or default-path changes. Pick the strongest concrete blocker. "
             "Do not reproduce the full review template for this bounded decision probe.\n"
             + json.dumps(contract, ensure_ascii=False)

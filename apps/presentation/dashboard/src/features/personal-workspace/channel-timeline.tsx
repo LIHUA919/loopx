@@ -1,3 +1,4 @@
+import {Fragment} from "react";
 import { CollaborationCard } from "./collaboration-card";
 import { Activity, Bot, Sparkles } from "lucide-react";
 
@@ -8,16 +9,21 @@ import { RunRow } from "./cards/run-row";
 import { ScheduleRow } from "./cards/schedule-row";
 import { useWorkspaceI18n } from "./i18n";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
+import {ManagerTeamResult} from "./manager-team-result";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 export function ChannelTimeline({
   items,
   onSelect,
   selectedGoal,
+  showManagerTeamResults = false,
+  onOpenGoalEvidence,
 }: {
   items: WorkspaceTimelineItem[];
   onSelect: (selection: WorkspaceDrawerSelection) => void;
   selectedGoal: WorkspaceGoal | null;
+  showManagerTeamResults?: boolean;
+  onOpenGoalEvidence?: (goalId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   if (items.length === 0) {
@@ -74,12 +80,17 @@ export function ChannelTimeline({
       return <ScheduleRow key={item.id} onSelect={() => onSelect({ item: item.schedule, kind: "schedule" })} schedule={item.schedule} />;
     }
     if (item.kind === "proposal") {
+      const appliedTeamPlan = item.proposal.actionKind === "team.plan" && item.proposal.status === "applied";
       return (
-        <button className={`personal-proposal-row is-${item.proposal.status}`} key={item.id} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
+        <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{item.proposal.actionKind} · {item.proposal.status}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
+          <span><small>{appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
+            : `${item.proposal.actionKind} · ${item.proposal.status}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review") : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
-        </button>
+        </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
+          && item.proposal.goalId && item.proposal.teamPlanTodoIds?.length
+          ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalEvidence}/>
+          : null}</Fragment>
       );
     }
     return (

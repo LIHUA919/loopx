@@ -86,7 +86,8 @@ def assert_sole_notification_authority(task_body: str, *, mode: str) -> None:
     body = normalized(task_body)
     assert "no-change=surface_only/no spend" in body, mode
     assert "material=outcome+vision" in body, mode
-    assert "缺则同轮按返回命令补齐再terminal" in body, mode
+    assert "缺则同轮checkpoint-context重判" in body, mode
+    assert "按凭据仅补vision；过期重读" in body, mode
     assert "unchanged→真实--vision-unchanged-reason" in body, mode
 
     if mode == "full":

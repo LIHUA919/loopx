@@ -10,7 +10,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -46,7 +48,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -125,13 +129,16 @@ jobs:
         working-directory: apps/presentation/dashboard
         run: |
           npm run build:chat
-          if [[ -n "$(git -C ../../.. status --short --untracked-files=all -- loopx/web/chat)" ]]; then
-            git -C ../../.. status --short --untracked-files=all -- loopx/web/chat
-            echo "Tracked packaged Dashboard assets differ from a clean source build." >&2
-            exit 1
-          fi
+          python ../../../scripts/chat_bundle.py verify --source
           ./node_modules/.bin/playwright install --with-deps chromium
           npm run smoke:personal-workspace-packaged
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontstage-chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install docs dependencies
         run: |

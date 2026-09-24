@@ -399,13 +399,19 @@ function authority(request: LifecycleDecisionRequest):
 
 type FenceRequest = Pick<LifecycleDecisionRequest,
   "todo" | "lease" | "registered_agents" | "handoff_mode" | "actor_agent_id" |
-  "lease_idempotency_key" | "lease_expected_version" | "allow_user_gate_auto_acquire">;
+  "lease_idempotency_key" | "lease_expected_version" | "allow_user_gate_auto_acquire"> & {
+    readonly command?: LifecycleCommand;
+  };
 
-function ownerEligible(request: FenceRequest, owner: string | null): boolean {
+function ownerIdentityEligible(request: FenceRequest, owner: string | null): boolean {
   const todo = request.todo;
-  return todo.status === "open" && owner !== null &&
+  return owner !== null &&
     request.registered_agents.includes(owner) && !todo.excluded_agents.includes(owner) &&
     (todo.claimed_by === null || todo.claimed_by === owner);
+}
+
+function ownerEligible(request: FenceRequest, owner: string | null): boolean {
+  return request.todo.status === "open" && ownerIdentityEligible(request, owner);
 }
 
 function terminalFence(
@@ -419,6 +425,20 @@ function terminalFence(
   const explicitFence = request.lease_idempotency_key !== null ||
     request.lease_expected_version !== null;
   const delegated = authorityMode === "delegated_orchestration_override";
+  // Deferred work cannot acquire a lease. Superseding a retired wait is a
+  // terminal lifecycle edit, not execution, and the provider CAS retires any
+  // expired lease lineage together with the Todo transition.
+  if (request.command === "supersede" && request.handoff_mode === "hard_lease" &&
+      request.todo.role === "agent" && request.todo.status === "deferred" &&
+      !delegated && !timeActive && !explicitFence &&
+      ownerIdentityEligible(request, request.actor_agent_id)) {
+    return result("apply", "terminal_fence_not_required", {
+      authority_mode: authorityMode,
+      lease_fence: "not_required",
+      next_lease: lease?.present && lease.status !== "released"
+        ? {...lease, active: false, status: "released"} : null,
+    });
+  }
   const autoAcquire = request.handoff_mode === "hard_lease" && !delegated &&
     request.allow_user_gate_auto_acquire && request.todo.role === "user" &&
     request.todo.task_class === "user_gate";
