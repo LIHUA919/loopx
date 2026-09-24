@@ -1,3 +1,4 @@
+import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
 import {readShadowDrainPlan} from "./coordination/shadow_drain_plan.ts";
@@ -9,8 +10,8 @@ import {projectPeerOrchestration} from "./quota/peer_orchestration.ts";
 import {inspectTaskLease} from "./work_items/task_lease_inspection.ts";
 import {evaluateTodoPriority} from "./todos/priority.ts";
 import {evaluateUserCompletion} from "./todos/user_completion.ts";
-import {projectTodoSuccession, projectTodoClosure} from "./todos/succession.ts";
-import {projectTodoSummaryLanes, projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
+import {projectTodoSuccession} from "./todos/succession.ts";
+import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
@@ -442,11 +443,10 @@ export function createEffectRuntimeHandlers(
     ["todo.priority.plan", evaluateTodoPriority],
     ["todo.public_update.plan", planPublicTodoUpdate],
     ["todo.standing_decision.project", evaluateStandingDecisionProjection],
-    ["todo.summary_lanes.project", projectTodoSummaryLanes],
+    ["todo.summary.project", projectTodoSummary],
     ["capabilities.periodic_report.progress.select", selectPeriodicReportProgress],
     ["capabilities.periodic_report.approval_retry.select", selectPeriodicReportApprovalRetry],
     ["todo.succession.project", projectTodoSuccession],
-    ["todo.succession.closure", projectTodoClosure],
     ["todo.work_counts.project", projectLegacyTodoWorkCounts],
     ["todo.decision_scope.evaluate", evaluateDecisionScope],
     ["todo.user_completion.plan", evaluateUserCompletion],

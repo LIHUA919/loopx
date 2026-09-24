@@ -1905,3 +1905,16 @@ This is a migration orchestration checkpoint, not completion of Stage 3 or a
 default-provider flip. Integrate claim-preserving migration separately, retain
 real-backend and captured-source qualification, and retire Python only where its
 actual callers have moved. [Operator contract](../../reference/reviewed-coordination-promotion.md).
+
+
+### Todo summary decision ownership
+
+One TS summary batch now owns selected-source counts, display allocation,
+recent-completion chronology, orchestration candidate positions and closure
+proofs. Python retains decoding, public field allowlists and rendering. The
+old Python claimant selector and aggregate branches are retired; the internal
+lane and closure RPC entries are replaced without retaining unused wire paths.
+Public `todo_summary_v0` and persisted records do not change. Full-source
+relationship evaluation is reused before selection, and source completeness is
+preserved independently of query matching. See [semantics and rollback](../../reference/todo-work-counts.md).
+This advances T3/L5; it does not replace D2/D3 or flip a provider default.

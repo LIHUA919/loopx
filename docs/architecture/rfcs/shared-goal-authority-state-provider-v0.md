@@ -3111,7 +3111,15 @@ This closes that T3/L5 consumer family, not D1 permanent display freshness,
 D2 durability, D3 whole-Goal qualification or default-provider selection. The
 conditional 7–9 remaining delivery-package estimate is unchanged.
 
-Summary/work-lane counts now remain independent of display limits and retain incomplete-source knowledge through Agent scoping; canonical list acceptance holds match status. This closes one L5 read consumer, not permanent projection freshness or D1–D3. See [count semantics](../../reference/todo-work-counts.md).
+The Todo summary consumer now uses one TS batch for scope, lanes, counts,
+claimant-balanced display and closure. It retires Python count/cap/allocation
+branches and two separate internal lane/closure calls. Recent completion uses
+actual completion instants, not edit time or ISO-string order; partial source
+knowledge cannot become a whole-source closure proof after selection. Public
+summary/persisted record schemas and display budgets stay unchanged. Real CLI
+and complete-graph provider readback qualify this read-model boundary, not
+permanent projection freshness or all D1–D3. See
+[count and chronology semantics](../../reference/todo-work-counts.md).
 
 The Goal Channel ownership observation consumes one complete provider revision before bounding display. It never repairs Markdown or revives old local leases; provider failures and truncation stay visible. This is a T3 read closure with shared TS interpretation, not D1/D2 qualification or D3 cutover. See [coordination observation](../../reference/coordination-observation.md).
 
@@ -3296,7 +3304,15 @@ merges qualifies default-on; unresolved acceptance evidence keeps its hold.
 | 6. Capture plus whole-Goal migration/rollback (1–2 PRs) | L7/L8: combine mixed-writer/event continuity, drain, old-writer fencing, canonical readback, fenced export/rollback and cohort migration. | One D3 packet binds exact profile, lineage, source digest and command inventory; existing-Goal cohort cutover remains explicit. |
 | 7. Default/onboarding and bounded Python retirement | L9/T4: make new-Goal creation, settings, installer and packaged clients choose the qualified local profile; publish migration/disable guidance and delete replaced final business writers. | Integrated L8 qualification, rollback and affected user-entrypoint readback. Preserve active rendering, host execution and import/export adapters. |
 
-After boundary 3 lands, **six planned PRs remain, potentially eight** under those
+At the 2026-09-24 reconciliation, #4870/#4888/#4920, #4922 (snapshot pagination),
+#4960 (qualified SQLite runtime admission) and #4961 (refresh display recovery)
+are merged, while #4931 (SQLite proof encoding) remains a separate in-review
+dependency and SQLite #4224 still retains failing/missing D2 evidence. This
+summary slice closes shared read-model decisions and advances boundary 4, not
+those delivery gates: requalify the combined accepted head before updating the
+estimate, and do not count each helper migration as one complete package.
+
+With boundary 3 landed, **six planned PRs remain, potentially eight** under those
 two named splits. Caller audit can expose additional missing effects, so this is
 an implementation estimate, not a guarantee. Small Python business-rule
 retirements accompany their TS owner; deleting all Python is neither the exit

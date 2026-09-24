@@ -79,10 +79,11 @@ read and continue to show the whole Goal; no new configuration editor is needed.
 Resume and succession are evaluated on the complete source before selection.
 The typed batch filters rows without renumbering their original source indexes,
 then builds lanes/counts, and only then applies display limits. Status/identity
-filters do not recompute dependencies from their smaller view. The v1 internal
-request composes this selection into the existing call; v0 unfiltered callers
-retain their wire contract. Python decodes legacy input and renders results,
-with no independent Agent-addressing rule.
+filters do not recompute dependencies from their smaller view. One internal `todo.summary.project` batch now composes selection, counts,
+visibility allocation and closure. Its transient request replaces the separate
+lane and closure RPC calls; it does not change persisted Todo or public summary
+schemas. Python decodes legacy input, validates source ordinals and materializes
+public fields, with no independent summary count, cap or claimant-allocation rule.
 
 ## 中文说明
 
@@ -112,3 +113,48 @@ claim/exclusion 筛选，可见不代表获准执行。
 当前列表。未筛选的整 Goal 视图仍显示这些记录。依赖和 succession 先在完整来源求值，
 TS 再筛选并保留原数组位置，最后生成 lanes、计数和有界展示；筛选后的数组位置不是原
 来源位置。无需新增 capability、配置、前端或 Lark 编辑入口，不增加一次筛选 RPC。
+
+## Summary chronology and source completeness
+
+The same TS projection now supplies `recent_completed_advancement_items`,
+claimant-balanced display lanes, orchestration candidate positions and closure
+proofs to legacy and canonical consumers. Display budgets are unchanged;
+`items` limits never change full-source counts. Full-source resume/succession
+evaluation still precedes filtering, and returned positions refer to the original
+array, not a newly numbered subset. Python retains public field allowlists,
+warning text, privacy redaction and Markdown parsing/rendering.
+
+**Intentional read behavior changes:** recent completions are ordered by the
+actual `completed_at` instant, preserving timezone offsets and microseconds.
+Later `updated_at` edits no longer make an old completion recent. Missing or
+invalid completion times remain in completed-work counts/history but do not
+claim a place in the recent-completion lane. Equal instants retain reverse
+source-coordinate order and stable ties. Succession warnings keep their
+last-change ordering, now comparing instants rather than timestamp strings;
+unknown instants follow known ones without discarding the warning.
+
+A source already marked partial cannot regain `source_proof` or
+`terminal_closure_proof` simply because a later selection matches all visible
+rows. Query scope and source completeness are independent conditions. These
+proofs remain read-only observations, not permission to settle a Goal.
+
+This changes status, Todo-list and quota summary readback for both legacy and
+promoted Goals without a flag. Existing frontend and Lark views consume these
+Core projections; no new setting or frontend asset is required. No provider,
+lease, registry or display writer is added. Rollback requires the matching
+Python/TS package but no data migration. Full L5 consumer acceptance, projection
+freshness, SQLite D2 and default/cutover gates remain separate.
+
+### 中文补充
+
+摘要的计数、展示上限、领取者之间的展示分配、编排候选位置及收尾证明，现由一个 TS
+批次决定；删除 Python 的重复汇总分支和仅为旧内部调用保留的 claim 分配 helper。
+Python 继续负责旧数据解码、公开字段筛选、隐私处理与文本展示。
+
+这是有意的读取语义修复：最近完成列表按 `completed_at` 的真实时刻排序，保留时区和
+微秒，不再把较晚编辑误作较晚完成。缺失／非法时间仍计入已完成总数和历史，但不进入
+最近完成列表。后继缺口警告仍按最后更新时间排序，未知时间靠后，不丢弃警告。
+已有 partial 来源不会因为再次筛选命中所有可见行，就重新获得整个来源的收尾证明。
+
+覆盖 legacy 与 canonical 的 status、Todo 查询和 quota 摘要；展示预算保持原值。
+没有新增设置、权限或 writer，不改变 provider 默认值，也不宣称完成整 Goal 迁移。

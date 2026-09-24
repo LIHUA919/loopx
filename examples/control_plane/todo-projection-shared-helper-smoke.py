@@ -33,7 +33,6 @@ from loopx.control_plane.goals.goal_frontier import (  # noqa: E402
     build_goal_frontier_projection_from_summaries,
 )
 from loopx.status import (  # noqa: E402
-    claimed_visibility_items as status_claimed_visibility_items,
     todo_item_is_deferred as status_todo_item_is_deferred,
     todo_projection_sort_key,
 )
@@ -42,7 +41,6 @@ from loopx.control_plane.todos.contract import (  # noqa: E402
     TODO_TASK_CLASS_MONITOR,
 )
 from loopx.control_plane.todos.projection import (  # noqa: E402
-    todo_claimed_visibility_items as shared_claimed_visibility_items,
     todo_item_claimed_by_agent_or_unclaimed as shared_todo_item_claimed_by_agent_or_unclaimed,
     todo_item_is_deferred as shared_todo_item_is_deferred,
     todo_projection_sort_key as shared_todo_projection_sort_key,
@@ -165,7 +163,7 @@ def assert_shared_ordering_parity(summary: dict) -> None:
     assert quota_todo_projection_sort_key(embedded_priority) == (50, 9), embedded_priority
 
 
-def assert_claimed_visibility_parity() -> None:
+def assert_claim_scope_parity() -> None:
     items = [
         quota_todo_item(
             todo_id="todo_a1",
@@ -199,18 +197,6 @@ def assert_claimed_visibility_parity() -> None:
             task_class=TODO_TASK_CLASS_ADVANCEMENT,
         ),
     ]
-    for selector in (
-        shared_claimed_visibility_items,
-        status_claimed_visibility_items,
-    ):
-        selected_two = selector(items, limit=2)
-        assert [item["todo_id"] for item in selected_two] == ["todo_a1", "todo_b1"], selected_two
-        selected_three = selector(items, limit=3)
-        assert [item["todo_id"] for item in selected_three] == [
-            "todo_a1",
-            "todo_a2",
-            "todo_b1",
-        ], selected_three
     claimed_by_current = items[0]
     claimed_by_other = items[2]
     unclaimed = items[3]
@@ -487,7 +473,7 @@ def main() -> int:
     summary = build_agent_todo_summary()
     assert_status_summary_lanes(summary)
     assert_shared_ordering_parity(summary)
-    assert_claimed_visibility_parity()
+    assert_claim_scope_parity()
     assert_agent_scope_frontier_routing_parity()
     assert_deferred_helper_parity()
     assert_monitor_item_collection_parity(summary)

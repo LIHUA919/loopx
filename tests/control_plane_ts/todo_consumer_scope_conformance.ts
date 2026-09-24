@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleConsumerScopeFixture} from "./production_scale_coordination_fixture.ts";
 
@@ -24,6 +25,7 @@ prefix=lambda values: sorted(row['todo_id'] for row in values if row['todo_id'].
 result={'selected':prefix(selected['items']), 'quota_delta':quota['open_count']-base_quota['open_count'],
  'limited':len(limited['items']), 'counts_equal':selected['total_count']==limited['total_count'],
  'whole':prefix(summary['items']),
+ 'recent':[row['todo_id'] for row in fields['agent_todos'].get('recent_completed_advancement_items', [])[:2]],
  'filtered_peer':filtered_todo_summary(summary,role='user',agent_id='agent-a',todo_id='todo_scope_peer_gate')['items'],
  'succession_gap':filtered_todo_summary(fields['agent_todos'],role='agent',todo_id=p['cases']['inferred_source']).get('completed_without_successor_count',0)}
 print(json.dumps(result))
@@ -32,6 +34,12 @@ export function registerTodoConsumerScopeConformance(name: string, factory: Auth
   for (const schema of ["native", "legacy"] as const) test(`${name}: full-source Agent read addressing (${schema})`, async context => {
     const {store} = await factory(context);
     const {projection, cases} = productionScaleConsumerScopeFixture("consumer-scope", schema);
+    const recent = (projection.todos as JsonObject[]).filter(todo => todo.status === "done" &&
+      todo.task_class === "advancement_task" && todo.archive_state !== "archive").slice(0, 2);
+    assert.equal(recent.length, 2);
+    recent[0].completed_at = "2099-01-01T10:00:00.000001+08:00";
+    recent[0].updated_at = "2099-12-01T00:00:00Z";
+    recent[1].completed_at = "2099-01-01T02:00:00.000002Z";
     assert.equal((await store.commitAuthority({operation_id: "scope-source", expected_provider_revision: null,
       next_projection: projection, events: [], receipts: []})).status, "applied");
     const before = await store.loadAuthority(); assert.equal(before.status, "loaded");
@@ -45,6 +53,7 @@ export function registerTodoConsumerScopeConformance(name: string, factory: Auth
     assert.equal(result.whole.length, 5); assert.deepEqual(result.filtered_peer, []);
     assert.equal(result.limited, 1); assert.equal(result.counts_equal, true);
     assert.equal(result.succession_gap, 0);
+    assert.deepEqual(result.recent, [recent[1].todo_id, recent[0].todo_id]);
     assert.deepEqual(await store.loadAuthority(), before, "read consumers must never mutate authority");
   });
 }

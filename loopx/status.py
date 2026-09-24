@@ -16,20 +16,20 @@ from .control_plane.status.collection import (
     collect_status as _collect_status_read_model,
 )
 from .control_plane.status.active_state_projection import (
-    STATE_EVENT_LOG_BASENAME,
+    STATE_EVENT_LOG_BASENAME as STATE_EVENT_LOG_BASENAME,
 )
 from .control_plane.status.contract_projection import (
-    STATUS_CONTRACT_RELOAD_HINT,
+    STATUS_CONTRACT_RELOAD_HINT as STATUS_CONTRACT_RELOAD_HINT,
 )
 from .control_plane.status.goal_attention_projection import (
-    PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION,
+    PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION as PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION,
 )
 # Refs #4447: one definition for this vocabulary. The control_plane projection
 # owns it because it feeds the monitor/attention read models; this module keeps
 # re-exporting each name for existing callers instead of restating its value.
 from .control_plane.status.monitor_display_projection import (
-    MONITOR_DISPLAY_FALLBACK_ACTION,
-    MONITOR_DISPLAY_STOP_CONDITION,
+    MONITOR_DISPLAY_FALLBACK_ACTION as MONITOR_DISPLAY_FALLBACK_ACTION,
+    MONITOR_DISPLAY_STOP_CONDITION as MONITOR_DISPLAY_STOP_CONDITION,
     MONITOR_SIGNAL_WAITING_ON,
 )
 from .control_plane.status.registry_health_projection import (
@@ -189,7 +189,6 @@ from .control_plane.todos.todo_summary import (
     active_state_todo_attention_item as _active_state_todo_attention_item_read_model,
     active_next_action_todo_ids,
     attach_dependency_blockers,
-    claimed_visibility_items as claimed_visibility_items,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
     first_open_todo_text,
@@ -234,7 +233,6 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
     "TODO_PROJECTION_VIEW_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
     "project_asset_summary_is_public_safe": "loopx.control_plane.work_items.project_asset",
-    "claimed_visibility_items": "loopx.control_plane.todos.todo_summary",
     "compact_todo_group": "loopx.control_plane.todos.todo_summary",
     "compact_todo_item": "loopx.control_plane.todos.todo_summary",
     "todo_lane_items": "loopx.control_plane.todos.todo_summary",

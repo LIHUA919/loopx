@@ -2422,6 +2422,14 @@ Scoped fallback 的选择与门禁关系也已复用同一 TS decision owner，�
 
 **D1 — 资格化永久投影交付，可与 T1/T2 重叠推进。**
 
+Todo 摘要现由一个 TS 批次决定范围、lanes、计数、claim 展示分配和收尾证明，删除
+Python 的重复汇总分支及分离的 lane／closure 内部调用。最近完成按真实完成时刻排序，
+不把编辑时间或 ISO 字符串顺序当作完成顺序；partial 来源不能在再次筛选后重新取得
+整源收尾证明。公开摘要／持久记录合同与展示预算保持不变。
+见[计数与时间语义](../../reference/todo-work-counts.md)。这关闭共享摘要决策，不宣称
+全部消费者、永久展示新鲜度或 D1–D3 已通过。
+
+
 摘要与 work-lane 计数已独立于展示上限，并在 Agent 筛选后保留来源不完整状态；canonical 列表的 acceptance 限制与 status 一致。这只闭合 L5 的一个读取消费者，不代表永久投影新鲜度或 D1–D3 完成。见[计数语义](../../reference/todo-work-counts.md)。
 
 Goal Channel 所有权观察先读取完整 provider revision，再限制展示；不修复 Markdown、不复活旧本地 lease，明确披露失败与截断。这是共用 TS 解释规则的 T3 读链路闭合，不完成 D1/D2 或 D3 切换，见 [coordination observation](../../reference/coordination-observation.md)。
@@ -2536,11 +2544,11 @@ provider 确认；权威空集合不回退到陈旧 Markdown。Legacy 与预览�
 | D／L9：新 Goal 默认与有界退役 | 单独 default-change PR 让新建／onboarding 选择合格本地 profile，配齐 settings／readback、installer 和打包客户端；最后 caller 与迁移窗口退出才删除旧业务 writer。 | L8 整体产品／回滚资格；区分新 Goal 默认和已有 Goal 迁移。发布兼容／停用说明，保留显式 provider、永久 renderer 和合法 import/export。T4 可在默认启用后继续收尾。 |
 
 **2026-09-24 基线核对。** 保留 claim 的 #4870、reviewed cutover #4888、shadow drain
-规划 #4920 已合并，快照分页 #4922 也已合并，后续应验收组合 head，而不是继续沿用
-旧的 PR hold；SQLite 读取证明优化 #4931 仍在评审。#4910 已加入更大测量轴；#4224
-实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR 当成 D2
-通过。本次刷新恢复推进下表中第 4 项投影恢复边界，但没有把其他调用方或默认切换
-标记完成。
+规划 #4920 已合并，快照分页 #4922、SQLite runtime 准入 #4960 与刷新显示恢复 #4961 也已
+合并，后续应验收组合 head，而不是继续沿用旧的 PR hold；SQLite 读取证明优化 #4931 仍在
+评审。#4224 实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR
+当成 D2 通过。本次摘要规则收口推进下表中第 4 项投影恢复边界，但没有把其他调用方或默认
+切换标记完成；数量估计应在组合 head 验收后更新，不能按 helper 迁移数量机械扣减。
 
 **开发节奏以证据推进。** 2026-09-23 将旧计划的五类粗粒度交付包细化为
 **七个明确 PR 边界；D2 和迁移各拆两批时最多九个**，其中包含本批一致性分页。
