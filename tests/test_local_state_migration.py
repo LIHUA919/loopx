@@ -10,7 +10,10 @@ from pathlib import Path
 import pytest
 
 from loopx import paths
-from loopx.control_plane.projects.registry_codec import load_project_registry
+from loopx.control_plane.projects.registry_codec import (
+    ProjectRegistryProtocolError,
+    load_project_registry,
+)
 from loopx.local_state_migration import (
     RECEIPT_NAME,
     migrate_local_state,
@@ -104,6 +107,30 @@ def test_existing_project_prompt_keeps_registered_goal_and_runtime_routes(tmp_pa
     assert f"--runtime-root {source}" in payload["quota_spend_command"]
     assert f"--runtime-root {source}" in payload["connect_command"]
     assert ".codex/goals/goal-0/ACTIVE_GOAL_STATE.md" in payload["prompt"]
+
+
+def test_project_prompt_rejects_lifecycle_only_registry(tmp_path: Path) -> None:
+    _source, _target, projects = _fixture(tmp_path, projects=1)
+    project = projects[0]
+    registry_path = project / ".loopx" / "registry.json"
+    registry = _read(registry_path)
+    registry["profile_id"] = "source_session_v1"
+    _write_json(registry_path, registry)
+
+    with pytest.raises(ProjectRegistryProtocolError, match="lifecycle-only profile"):
+        build_new_project_prompt(
+            project=project,
+            goal_doc=project / "GOAL.md",
+            goal_id="goal-0",
+            objective="Continue the registered Goal",
+            domain="example",
+            adapter_kind="read_only_project_map_v0",
+            adapter_status="connected-read-only",
+            next_probe=None,
+            spawn_allowed=False,
+            allowed_domains=None,
+            write_scope=None,
+        )
 
 
 def test_new_default_route_rejects_orphaned_legacy_state(tmp_path: Path) -> None:
