@@ -73,7 +73,7 @@ def _apply_selected_todo_guards(
 
     selected_todo = selected_todo_projection(
         agent_lane_next_action=route.agent_lane_next_action,
-        work_lane_contract=route.payload_work_lane_contract,
+        work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
         agent_scope_frontier=route.agent_scope_frontier,
     )
     summary = prepared.agent_todo_summary or {}
@@ -91,6 +91,7 @@ def _apply_selected_todo_guards(
         if (
             (route.normal_delivery_allowed or route.recovery_allowed)
             and not prepared.inbox_priority_due
+            and not route.replan_decision_allowed
             and (held_selection or no_runnable_work)
         ):
             prepared.normal_delivery_allowed = False

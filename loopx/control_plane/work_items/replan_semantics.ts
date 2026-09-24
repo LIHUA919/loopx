@@ -20,7 +20,7 @@ const KNOWN_OUTCOMES: ReadonlySet<string> = new Set([...PROGRESS_OUTCOMES, ...VI
 const PROGRESS_IDENTITY_OUTCOMES: ReadonlySet<string> = new Set(["new_surface", "new_hypothesis", "new_probe_family"]);
 const VISION_TRIGGERS = new Set([
   "vision_acceptance_gap", "vision_checkpoint_missing", "vision_outcome_checkpoint_required",
-  "vision_successor_required", "required_agent_vision_missing", "goal_acceptance_stale",
+  "vision_successor_required", "required_agent_vision_missing",
 ]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
@@ -43,14 +43,19 @@ function isExternalReview(obligation: JsonObject): boolean {
 
 /** One outcome policy for host projection and write-time discharge. */
 export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcome[] {
+  const kinds = triggerKinds(obligation);
+  const acceptanceHold = kinds.some(kind => kind === "goal_acceptance_stale" || kind === "goal_acceptance_unbound");
   const declared = strings(obligation.satisfying_semantic_outcomes);
   if (declared.length) {
     if (declared.some(value => !KNOWN_OUTCOMES.has(value))) {
       throw new EffectRuntimeRequestError("satisfying_semantic_outcomes contains an unknown typed outcome");
     }
+    if (acceptanceHold && declared.some(value => !["new_runnable_successor", "new_concrete_blocker"].includes(value))) {
+      throw new EffectRuntimeRequestError("acceptance recovery cannot widen its typed outcomes");
+    }
     return [...new Set(declared)] as SemanticOutcome[];
   }
-  const kinds = triggerKinds(obligation);
+  if (acceptanceHold) return ["new_runnable_successor", "new_concrete_blocker"];
   if (kinds.some(kind => VISION_TRIGGERS.has(kind))) return [...VISION_OUTCOMES];
   // Reviewing a long chain may retain existing runnable work. Its projected
   // vision decision must close the checkpoint without manufacturing another

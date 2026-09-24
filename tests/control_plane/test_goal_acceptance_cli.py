@@ -389,3 +389,30 @@ def test_preview_discloses_the_criteria_the_real_call_will_run(acceptance_goal):
     }
     assert "validation_argv" not in json.dumps(preview)
     assert cli("inspect")[1]["goal_acceptance_contract"]["verification"] is None
+
+
+def test_unbound_work_projects_recovery_without_changing_acceptance(acceptance_goal):
+    _, document_path, cli, run = acceptance_goal
+    code, monitor = run(
+        "todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+        "--text", "Observe the public release", "--task-class", "continuous_monitor",
+        "--action-kind", "monitor", "--claimed-by", "agent-a",
+        "--target-key", "release:acceptance-recovery", "--cadence", "30m",
+        "--next-due-at", "2000-01-01T00:00:00+00:00", "--watch-only",
+    )
+    assert code == 0, monitor
+    document = json.loads(document_path.read_text())
+    document["bindings"] = []
+    document_path.write_text(json.dumps(document))
+    _configure(cli, document_path)
+    before = cli("inspect")[1]
+    code, quota = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+    assert code == 0, quota
+    assert quota["decision"] == "autonomous_replan_required", quota
+    assert quota.get("selected_todo") is None
+    assert quota.get("agent_lane_next_action") is None
+    packet = quota["autonomous_replan_obligation"]
+    assert any(trigger["kind"] == "goal_acceptance_unbound" for trigger in packet["triggers"])
+    code, refused = run("todo", "complete", "--goal-id", "goal-acceptance", "--todo-id", "todo_export", "--agent-id", "agent-a")
+    assert code == 1 and refused["reason_code"] == "goal_acceptance_unbound", refused
+    assert cli("inspect")[1] == before

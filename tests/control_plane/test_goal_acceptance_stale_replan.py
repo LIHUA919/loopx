@@ -1,7 +1,12 @@
-"""A stale Goal Acceptance binding is agent-scoped replan evidence, not a silent rebind."""
+"""Held Goal Acceptance is agent-scoped recovery evidence, never a silent rebind."""
+
+import pytest
+
+from loopx.control_plane.goals.goal_frontier.acceptance import acceptance_gaps_from_held_goal_binding
+
+from loopx.control_plane.work_items.progress_observation import required_semantic_outcomes
 
 from loopx.control_plane.goals.goal_frontier import (
-    acceptance_gaps_from_stale_goal_binding,
     build_goal_frontier_projection_context_from_status,
     derive_goal_frontier_replan_obligation_from_summaries,
 )
@@ -24,7 +29,6 @@ def _summary(*, ready_alternative: bool = False):
             "enabled": True,
             "tasks": [
                 {"todo_id": "todo_stale", "state": "stale", "applicable": True},
-                {"todo_id": "todo_unbound", "state": "unbound", "applicable": True},
             ],
         },
     }
@@ -42,7 +46,7 @@ def _source():
 
 def test_stale_binding_routes_to_bounded_replan_only_when_frontier_is_empty():
     summary = _summary()
-    gaps = acceptance_gaps_from_stale_goal_binding(summary, _source(), agent_id="agent-a")
+    gaps = acceptance_gaps_from_held_goal_binding(summary, _source(), agent_id="agent-a")
     assert [gap["vision_todo_ids"] for gap in gaps] == [["todo_stale"]]
     assert gaps[0]["generated_at"] == "2026-09-23T08:02:52Z"
     assert len(gaps[0]["frontier_revision"]) == 64
@@ -55,7 +59,7 @@ def test_stale_binding_routes_to_bounded_replan_only_when_frontier_is_empty():
     assert obligation is not None
     assert obligation["triggers"][0]["kind"] == "goal_acceptance_stale"
     assert "todo_stale" in obligation["recommended_action"]
-    assert obligation["satisfying_semantic_outcomes"] == [
+    assert required_semantic_outcomes(obligation) == [
         "new_runnable_successor", "new_concrete_blocker",
     ]
 
@@ -63,16 +67,16 @@ def test_stale_binding_routes_to_bounded_replan_only_when_frontier_is_empty():
     assert derive_goal_frontier_replan_obligation_from_summaries(
         user_todo_summary={"open_count": 0}, agent_todo_summary=with_alternative,
         work_lane_contract=None, agent_id="agent-a", existing_replan_obligation=None,
-        acceptance_gaps=acceptance_gaps_from_stale_goal_binding(
+        acceptance_gaps=acceptance_gaps_from_held_goal_binding(
             with_alternative, _source(), agent_id="agent-a"),
     ) is None
 
 
 def test_stale_binding_cannot_replan_another_agents_work_or_disabled_contract():
-    assert acceptance_gaps_from_stale_goal_binding(_summary(), _source(), agent_id="agent-b") == []
+    assert acceptance_gaps_from_held_goal_binding(_summary(), _source(), agent_id="agent-b") == []
     disabled = _summary()
     disabled["goal_acceptance_contract"]["enabled"] = False
-    assert acceptance_gaps_from_stale_goal_binding(disabled, _source(), agent_id="agent-a") == []
+    assert acceptance_gaps_from_held_goal_binding(disabled, _source(), agent_id="agent-a") == []
 
 
 def test_stale_binding_reaches_quota_frontier_projection():
@@ -90,17 +94,21 @@ def test_stale_binding_reaches_quota_frontier_projection():
     assert obligation["triggers"][0]["frontier_revision"]
 
 
-def test_older_vision_ack_cannot_suppress_newer_stale_binding():
-    gaps = acceptance_gaps_from_stale_goal_binding(_summary(), _source(), agent_id="agent-a")
+@pytest.mark.parametrize("state", ["stale", "unbound"])
+def test_older_vision_ack_cannot_suppress_newer_binding_hold(state):
+    summary = _summary()
+    summary["goal_acceptance_contract"]["tasks"][0]["state"] = state
+    kind = f"goal_acceptance_{state}"
+    gaps = acceptance_gaps_from_held_goal_binding(summary, _source(), agent_id="agent-a")
     old_ack = {
         "generated_at": "2026-09-23T08:00:00Z",
         "recorded": True,
         "delta_contract": {"delta_kinds": ["goal_vision_patch"]},
         "semantic_delta": {
             "accepted": True,
-            "trigger_kinds": ["goal_acceptance_stale"],
+            "trigger_kinds": [kind],
             "trigger_checkpoints": [{
-                "kind": "goal_acceptance_stale",
+                "kind": kind,
                 "frontier_revision": gaps[0]["frontier_revision"],
             }],
             "satisfying_outcomes": ["new_runnable_successor"],
@@ -109,7 +117,7 @@ def test_older_vision_ack_cannot_suppress_newer_stale_binding():
 
     def derive(ack):
         return derive_goal_frontier_replan_obligation_from_summaries(
-            user_todo_summary={"open_count": 0}, agent_todo_summary=_summary(),
+            user_todo_summary={"open_count": 0}, agent_todo_summary=summary,
             work_lane_contract=None, agent_id="agent-a",
             existing_replan_obligation=None, acceptance_gaps=gaps,
             latest_replan_ack=ack,
@@ -121,6 +129,42 @@ def test_older_vision_ack_cannot_suppress_newer_stale_binding():
                                       "trigger_kinds": ["vision_acceptance_gap"]}}) is not None
     assert derive({**old_ack, "generated_at": "2026-09-23T08:03:00Z",
                    "semantic_delta": {**old_ack["semantic_delta"],
-                                      "trigger_checkpoints": [{"kind": "goal_acceptance_stale",
+                                      "trigger_checkpoints": [{"kind": kind,
                                                                "frontier_revision": "other-todo"}]}}) is not None
     assert derive({**old_ack, "generated_at": "2026-09-23T08:03:00Z"}) is None
+
+
+def test_unbound_binding_routes_to_replan_without_granting_execution():
+    summary = _summary()
+    summary["goal_acceptance_contract"]["tasks"] = [
+        {"todo_id": "todo_unbound", "state": "unbound", "applicable": True},
+    ]
+    source = [{**_source()[1], "updated_at": "2026-09-23T08:02:52Z"}]
+    gaps = acceptance_gaps_from_held_goal_binding(summary, source, agent_id="agent-a")
+    assert len(gaps) == 1
+    assert gaps[0]["kind"] == "goal_acceptance_unbound"
+    assert gaps[0]["vision_todo_ids"] == ["todo_unbound"]
+    obligation = derive_goal_frontier_replan_obligation_from_summaries(
+        user_todo_summary={"open_count": 0}, agent_todo_summary=summary,
+        work_lane_contract=None, agent_id="agent-a", existing_replan_obligation=None,
+        acceptance_gaps=gaps,
+    )
+    assert obligation is not None
+    assert obligation["todo_actions"] == []
+    assert "update_agent_vision" not in obligation["guidance_actions"]
+    assert "owner" in obligation["recommended_action"]
+    assert "never" in obligation["recommended_action"]
+
+
+def test_hold_checkpoints_survive_crowded_vision_trigger_projection():
+    summary = _summary()
+    holds = acceptance_gaps_from_held_goal_binding(summary, _source(), agent_id="agent-a")
+    crowded = [{"kind": "vision_acceptance_gap", "generated_at": "2026-09-23T08:00:00Z"}] * 4
+    obligation = derive_goal_frontier_replan_obligation_from_summaries(
+        user_todo_summary={"open_count": 0}, agent_todo_summary=summary,
+        work_lane_contract=None, agent_id="agent-a", existing_replan_obligation=None,
+        acceptance_gaps=crowded + holds,
+    )
+    assert len(obligation["triggers"]) == 3
+    assert obligation["triggers"][0]["kind"] == "goal_acceptance_stale"
+    assert obligation["triggers"][0]["frontier_revision"] == holds[0]["frontier_revision"]

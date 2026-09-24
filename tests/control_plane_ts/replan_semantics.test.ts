@@ -169,3 +169,15 @@ test("the identity rule is scoped to the external review source", () => {
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: prose,
     observation_delta: {delta_kinds: ["new_hypothesis"], evidence_novel: false}}).accepted, true);
 });
+
+
+test("acceptance holds use one typed recovery policy even without a projected outcome list", () => {
+  for (const kind of ["goal_acceptance_unbound", "goal_acceptance_stale"]) {
+    const held = {triggers: [{kind}]};
+    assert.deepEqual(requiredSemanticOutcomes(held), ["new_runnable_successor", "new_concrete_blocker"]);
+    assert.throws(() => requiredSemanticOutcomes({...held, satisfying_semantic_outcomes: ["fresh_vision_path_outcome"]}), /cannot widen/);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: held, agent_vision: vision}).accepted, false);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: held,
+      observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
+  }
+});

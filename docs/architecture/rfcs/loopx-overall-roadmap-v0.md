@@ -378,6 +378,14 @@ These priorities do not change live Goal quota or authorize experiments/cloud re
 - **Exit:** independent readback proves retained commitments; distinguish all-gap/partial/stale/rejected/committed; recovery neither duplicates nor expands work, and the initiating surface displays the exact outcome. Add independent semantic counterexamples, not only row-existence assertions.
 - **Rollback:** stop new plan production, keep old previews/receipts readable and unfinished reconciliation available; do not delete materialized work.
 
+**Recovery checkpoint (2026-09-24):** Enabled acceptance now routes missing as
+well as stale associations through bounded agent-scoped replan. Exact hold
+checkpoints survive crowded vision projections; a replan decision does not
+simultaneously select a candidate monitor. Owner binding and fresh completion
+validation remain required. This repairs R1/S2/S3 continuity, not R4's general
+intent-preserving amendment or provider promotion. Real File/SQLite CLI
+regressions cover recovery admission and continued refusal of unbound completion.
+
 ### R2: Continuous Small-team Execution
 
 **Product responsibility.** The steward owns the owner's cross-project context,
