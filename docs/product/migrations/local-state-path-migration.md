@@ -35,6 +35,9 @@ The default backup parent and any explicit `--backup-dir` must have no symlink
 or junction in their existing ancestors. Preview rejects such a route, and
 execution checks it again before creating and copying the private backup.
 Choose a real directory when a backup path is rejected.
+Goal destinations use the same redirect check: preview rejects existing
+symlink or Windows junction/reparse-point ancestors, and execution rechecks
+the route before moving a Goal directory.
 
 To apply the exact preview, use its `plan_id`:
 
