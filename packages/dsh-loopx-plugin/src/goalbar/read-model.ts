@@ -19,6 +19,10 @@ import type {
   GoalBarReadFaultCode,
   GoalBarSnapshotV1,
 } from './protocol.ts'
+import {
+  decodeGoalBarProjectRegistry,
+  ProjectRegistryWireError,
+} from './project-registry-wire.ts'
 
 export const GOALBAR_HOST_SURFACE = 'deepseek-harness-native' as const
 export const GOALBAR_PROJECT_REGISTRY = '.loopx/registry.json' as const
@@ -108,8 +112,11 @@ function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
 function registeredActiveStatePath(cwd: string, goalId: string, registry: Buffer): string {
   let payload: unknown
   try {
-    payload = JSON.parse(registry.toString('utf8')) as unknown
-  } catch {
+    payload = decodeGoalBarProjectRegistry(registry)
+  } catch (error: unknown) {
+    if (error instanceof ProjectRegistryWireError) {
+      throw new GoalBarSourceRevisionError(error.message)
+    }
     throw new GoalBarSourceRevisionError('project registry is invalid')
   }
   if (typeof payload !== 'object' || payload === null
