@@ -38,6 +38,9 @@ Choose a real directory when a backup path is rejected.
 Goal destinations use the same redirect check: preview rejects existing
 symlink or Windows junction/reparse-point ancestors, and execution rechecks
 the route before moving a Goal directory.
+The legacy runtime tree and Goal source directories are checked before backup
+and rename, and rollback rejects redirected legacy destinations or backup
+snapshots. Stop other writers for the full preview, execution, and rollback.
 
 To apply the exact preview, use its `plan_id`:
 
