@@ -462,6 +462,262 @@ def test_goal_destination_uses_shared_redirect_classifier(
     assert source.exists() and not target.exists()
 
 
+def test_goal_source_uses_shared_redirect_classifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_root = projects[0] / ".codex" / "goals"
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    original = migration._is_redirected_path
+    monkeypatch.setattr(
+        migration, "_is_redirected_path",
+        lambda path: path == goal_root or original(path),
+    )
+
+    with pytest.raises(ValueError, match="legacy Goal source.*symlink or junction"):
+        migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    with pytest.raises(ValueError, match="legacy Goal source.*symlink or junction"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert source.exists() and not target.exists()
+
+
+def test_goal_source_is_rechecked_immediately_before_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    project = projects[0]
+    goal_root = project / ".codex" / "goals"
+    target_parent = project / ".loopx" / "goals"
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    original_redirect = migration._is_redirected_path
+    original_mkdir = Path.mkdir
+    redirected = False
+
+    def classify(path: Path) -> bool:
+        return (redirected and path == goal_root) or original_redirect(path)
+
+    def inject_after_target_parent(
+        self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False,
+    ) -> None:
+        nonlocal redirected
+        original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+        if self == target_parent:
+            redirected = True
+
+    monkeypatch.setattr(migration, "_is_redirected_path", classify)
+    monkeypatch.setattr(Path, "mkdir", inject_after_target_parent)
+    with pytest.raises(RuntimeError, match="original routes were restored"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert redirected
+    assert source.exists() and not target.exists()
+
+
+def test_goal_source_is_rechecked_before_backup_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_root = projects[0] / ".codex" / "goals"
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    backup = Path(preview["backup_dir"])
+    original_redirect = migration._is_redirected_path
+    original_mkdir = Path.mkdir
+    redirected = False
+
+    def classify(path: Path) -> bool:
+        return (redirected and path == goal_root) or original_redirect(path)
+
+    def inject_after_backup_dir(
+        self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False,
+    ) -> None:
+        nonlocal redirected
+        original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+        if self == backup:
+            redirected = True
+
+    monkeypatch.setattr(migration, "_is_redirected_path", classify)
+    monkeypatch.setattr(Path, "mkdir", inject_after_backup_dir)
+    with pytest.raises(ValueError, match="legacy Goal source.*symlink or junction"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert redirected
+    assert source.exists() and not target.exists()
+
+
+@pytest.mark.parametrize("redirected_route", ["source_parent", "target_parent"])
+def test_runtime_root_rejects_redirected_ancestors_before_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redirected_route: str,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, default_target, _projects = _fixture(tmp_path, projects=1)
+    target = default_target if redirected_route == "source_parent" else tmp_path / "target-home" / ".loopx"
+    redirected = source.parent if redirected_route == "source_parent" else target.parent
+    original = migration._is_redirected_path
+    monkeypatch.setattr(
+        migration, "_is_redirected_path",
+        lambda path: path == redirected or original(path),
+    )
+
+    with pytest.raises(ValueError, match="symlink or junction"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            backup_dir=tmp_path / "safe-backup",
+        )
+    assert source.exists() and not target.exists()
+
+
+def test_runtime_digest_rejects_redirected_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    redirected = source / "goals" / "goal-0" / "runs"
+    original = migration._is_redirected_path
+    monkeypatch.setattr(
+        migration, "_is_redirected_path",
+        lambda path: path == redirected or original(path),
+    )
+
+    with pytest.raises(ValueError, match="migration source contains a symlink or junction"):
+        migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    assert source.exists() and not target.exists()
+
+
+@pytest.mark.parametrize("redirected_route", ["legacy_goal_parent", "backup_snapshot"])
+def test_rollback_preview_rejects_redirected_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redirected_route: str,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migration.migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    backup = Path(receipt["backup_dir"])
+    redirected = (
+        projects[0] / ".codex" / "goals"
+        if redirected_route == "legacy_goal_parent" else backup / "snapshot"
+    )
+    original = migration._is_redirected_path
+    monkeypatch.setattr(
+        migration, "_is_redirected_path",
+        lambda path: path == redirected or original(path),
+    )
+
+    with pytest.raises(ValueError, match="symlink or junction"):
+        migration.rollback_local_state_migration(backup / RECEIPT_NAME)
+    assert target.exists() and not source.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows junction regression")
+def test_windows_junction_goal_source_never_reads_or_moves_outside_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_root = projects[0] / ".codex" / "goals"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external_root = outside / "goals"
+    goal_root.rename(external_root)
+    external_state = external_root / "goal-0" / "ACTIVE_GOAL_STATE.md"
+    original_bytes = external_state.read_bytes()
+    original_digest = migration._digest
+    original_copy = migration._copy
+
+    def reject_external_read(path: Path) -> str:
+        resolved = path.resolve()
+        if resolved == external_root or external_root in resolved.parents:
+            raise AssertionError("migration read external Goal source bytes")
+        return original_digest(path)
+
+    def reject_external_copy(original: Path, copied: Path) -> None:
+        resolved = original.resolve()
+        if resolved == external_root or external_root in resolved.parents:
+            raise AssertionError("migration copied external Goal source bytes")
+        original_copy(original, copied)
+
+    monkeypatch.setattr(migration, "_digest", reject_external_read)
+    monkeypatch.setattr(migration, "_copy", reject_external_copy)
+
+    def make_junction() -> None:
+        subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(goal_root), str(external_root)],
+            check=True, capture_output=True, text=True,
+        )
+        assert goal_root.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+    make_junction()
+    try:
+        with pytest.raises(ValueError, match="legacy Goal source.*symlink or junction"):
+            migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+        assert source.exists() and not target.exists()
+        assert external_state.read_bytes() == original_bytes
+    finally:
+        goal_root.rmdir()
+
+    external_root.rename(goal_root)
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    goal_root.rename(external_root)
+    make_junction()
+    try:
+        with pytest.raises(ValueError, match="legacy Goal source.*symlink or junction"):
+            migration.migrate_local_state(
+                source_runtime_root=source, target_runtime_root=target,
+                expected_plan_id=preview["plan_id"], execute=True,
+            )
+        assert source.exists() and not target.exists()
+        assert external_state.read_bytes() == original_bytes
+    finally:
+        goal_root.rmdir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows junction regression")
+def test_windows_junction_rollback_destination_never_writes_outside_project(
+    tmp_path: Path,
+) -> None:
+    source, target, projects = _fixture(tmp_path, projects=1)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    legacy_parent = projects[0] / ".codex" / "goals"
+    legacy_parent.rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(legacy_parent), str(outside)],
+        check=True, capture_output=True, text=True,
+    )
+    assert legacy_parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    try:
+        with pytest.raises(ValueError, match="migration rollback destination.*symlink or junction"):
+            rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME)
+        assert target.exists() and not source.exists()
+        assert list(outside.iterdir()) == []
+    finally:
+        legacy_parent.rmdir()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native Windows junction regression")
 def test_windows_junction_goal_destination_never_writes_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
