@@ -156,6 +156,10 @@ LEGACY_WRITER_FENCE_CONSTANT_NAMES = {
 
 # One ordered binding map owns validation keys and both language exports.
 PROTOCOL_BINDINGS = {
+    "source_transfer_protocol": {
+        "request_schema": "COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA",
+        "result_schema": "COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA",
+    },
     "local_authority_protocol": {key: f"LOCAL_COORDINATION_{key.upper()}" for key in LOCAL_AUTHORITY_PROTOCOL_KEYS},
     "runtime_shadow_protocol": {key: f"COORDINATION_RUNTIME_SHADOW_{key.upper()}" for key in RUNTIME_SHADOW_PROTOCOL_KEYS},
     "local_authority_shadow_protocol": {key: f"LOCAL_AUTHORITY_SHADOW_{key.upper()}" for key in LOCAL_AUTHORITY_SHADOW_PROTOCOL_KEYS},
@@ -176,7 +180,7 @@ PROTOCOL_BINDINGS = {
 }
 EXPECTED_TOP_LEVEL_KEYS = {
     "schema_version", "todo_read_record", "todo_domain_record",
-    "todo_projection_metadata", "todo_priority", "compatibility", *PROTOCOL_BINDINGS,
+    "todo_projection_metadata", "todo_priority", "compatibility", "source_transfer_limits", *PROTOCOL_BINDINGS,
 }
 
 
@@ -198,6 +202,10 @@ def load_contract() -> dict[str, Any]:
         raise ValueError("coordination contract has unexpected top-level fields")
     if raw.get("schema_version") != "loopx_coordination_state_contract_v0":
         raise ValueError("coordination contract schema mismatch")
+    transfer = raw.get("source_transfer_limits")
+    if (not isinstance(transfer, dict) or set(transfer) != {"max_bytes"}
+        or type(transfer["max_bytes"]) is not int or not 0 < transfer["max_bytes"] <= 2**53 - 1):
+        raise ValueError("source transfer max_bytes must be a positive safe integer")
     priority = raw.get("todo_priority")
     if not isinstance(priority, dict) or set(priority) != {"values", "legacy_prefix_pattern", "legacy_label_pattern", "missing_rank"}:
         raise ValueError("Todo priority contract has unexpected fields")

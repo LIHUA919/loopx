@@ -601,8 +601,7 @@ or agent-scope wait decisions:
 - normalized progress shows no remaining advancement frontier;
 - monitor-only lanes have no material transition and acceptance remains open;
 - a cleared handoff has no successor or no-follow-up rationale;
-- the current agent lane owns at least 15 open advancement Todos, or 20 claimed
-  open Todos with claimed advancement work still present;
+- the current agent lane owns at least 15 open advancement Todos;
 - a periodic autonomous replan obligation is due;
 - the user objective or acceptance contract changed;
 - an approved dreaming proposal requires a delivery route.
@@ -611,19 +610,23 @@ The replan decision must not be disturbed by monitor quiet skip, scoped gate
 waiting, or a single agent having no runnable todo. Those may explain local
 lane state, but they cannot erase a required goal-level replan.
 
-Long-chain scope correction (#4667): Agent-scoped counts now exclude shared
-unclaimed candidates. They remain selectable, but do not create a replan duty
-for a lane that has not claimed them. Unscoped Goal observations retain the
-selectable-pool thresholds. Numeric thresholds and other replan sources are
-unchanged. The typed frontier owner supplies `obligation_identity_revision`
-from the owned material identity, keeping an open obligation stable across
+Long-chain scope corrections (#4667, #5001): Agent-scoped counts exclude shared
+unclaimed candidates and continuous monitors. Shared candidates remain selectable,
+but a new long-chain duty requires at least 15 claimed advancement Todos. The former
+20-claimed-open threshold no longer triggers an Agent lane. Unscoped Goal
+observations retain the selectable-pool thresholds; monitor due selection and
+no-change replan rules are unchanged. The typed frontier owner supplies
+`obligation_identity_revision` from the owned material identity, keeping an open obligation stable across
 peer/shared-pool churn; `frontier_revision` retains the full selectable-source
 checkpoint for diagnostics and historical ACK matching. Owned material changes
 still rearm. Timestamp/evidence bookkeeping does not. Existing accepted ACKs
-remain readable; an outstanding pre-upgrade Turn should refresh its guard.
+remain readable, including predecessor recovery for historical open-count
+obligations; an outstanding pre-upgrade Turn should refresh its guard.
 
-长链触发范围修正：Agent lane 只统计自己已认领的任务；共享未认领任务仍可选取，
-但不计入本 lane 的长链阈值。无 Agent 的 Goal 总览保留原可选池口径。
+长链触发范围修正：Agent lane 只在自己已认领的开放推进任务达到 15 项时触发；
+持续监控和共享未认领任务不计入该阈值，移除原 20 项已认领开放任务的触发分支。
+共享任务仍可选取；无 Agent 的 Goal 总览保留原可选池口径，监控到期和无变化重规划
+规则不变。历史开放任务计数 checkpoint 的读取与前置义务恢复保持兼容。
 义务身份使用 typed owner 给出的 owned 实质 revision，同伴修改共享池不会让正在
 处理的义务换 ID；自己任务的实质修改仍重新触发。证据补充或更新时间不重新触发。
 

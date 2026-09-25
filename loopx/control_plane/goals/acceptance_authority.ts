@@ -98,7 +98,16 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
   const previous = readGoalAcceptance(head.head, String(request.goal_id));
   let state: AcceptanceState | null = previous;
   if (document) {
+    // Historical receipts above remain replayable; new configurations must make
+    // the blast radius explicit, including updates to legacy contracts.
+    if (document.scope === undefined) return source(store, failure("goal_acceptance_scope_required",
+      "Select selected_work with todo_ids or explicitly choose all_advancement before configuring acceptance."));
     const todos = acceptanceTodos(head.head, String(request.goal_id));
+    if (document.scope?.kind === "selected_work") for (const todoId of document.scope.todo_ids) {
+      const todo = todos.get(todoId);
+      acceptanceRequire(todo && todo.role === "agent" && (todo.task_class == null || todo.task_class === "advancement_task"),
+        "acceptance scope must reference existing Agent advancement work");
+    }
     const revision = (previous?.revision ?? 0) + 1;
     acceptanceRequire(Number.isSafeInteger(revision), "acceptance revision exhausted");
     const bindings = document.bindings.map(binding => {
@@ -143,7 +152,7 @@ export async function commitGoalAcceptanceVerification(store: AuthorityStore, va
   normalizeAcceptanceResults(results, criterionIds);
   const verification: AcceptanceVerification = {operation_id: String(request.operation_id),
     contract_revision: state.revision, contract_digest: state.digest, todo_id: todoId,
-    work_digest: goalAcceptanceWorkDigest(head.head, goalId), results};
+    work_digest: goalAcceptanceWorkDigest(head.head, goalId, state.document.scope), results};
   return commit(store, request, head, {...state, verification}, command, "verify");
 }
 

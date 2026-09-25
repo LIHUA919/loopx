@@ -915,6 +915,19 @@ def list_lark_connections(
     target_payload = read_goal_channel_targets(target_path)
     rows: list[dict[str, Any]] = []
     health_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    targets = target_payload.get("targets")
+    targets = targets if isinstance(targets, Mapping) else {}
+    app_profiles: dict[str, set[str]] = {}
+    for target in targets.values():
+        if not isinstance(target, Mapping) or target.get("enabled") is not True:
+            continue
+        identity = target.get("identity")
+        if not isinstance(identity, Mapping):
+            continue
+        app_id = str(identity.get("bot_app_id") or "")
+        profile = str(identity.get("sender_profile") or "")
+        if app_id and profile:
+            app_profiles.setdefault(app_id, set()).add(profile)
     for goal_id, binding_path in binding_paths.items():
         try:
             goal = goal_from_registry(registry, goal_id)
@@ -957,6 +970,22 @@ def list_lark_connections(
                 if isinstance(runtime_health, Mapping)
                 else {}
             )
+            if (
+                isinstance(runtime_health, Mapping)
+                and listener.get("status") != "listening"
+            ):
+                # An App's profile aliases share one consumer. The standby
+                # alias is served by the listening App owner, not disconnected.
+                for alias in sorted(
+                    app_profiles.get(str(identity.get("bot_app_id") or ""), ())
+                ):
+                    candidate = runtime_health.get(alias)
+                    if (
+                        isinstance(candidate, Mapping)
+                        and candidate.get("status") == "listening"
+                    ):
+                        listener = candidate
+                        break
             listener_status = str(listener.get("status") or "")
             listener_ready = runtime_health is None or listener_status == "listening"
             last_event_status = str(listener.get("last_event_status") or "")

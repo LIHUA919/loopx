@@ -45,7 +45,7 @@ def register_goal_lifecycle_command(
     )
     parser.add_argument(
         "--expected-state-fingerprint",
-        help="SHA-256 registry fingerprint from a fresh goal-actions projection.",
+        help="Source-bound SHA-256 fingerprint from a fresh goal-actions projection.",
     )
     parser.add_argument(
         "--execute",

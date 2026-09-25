@@ -7,6 +7,7 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupBrowserSmoke, launchBrowser, loadPlaywright, waitForHttp } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 process.env.LOOPX_PLAYWRIGHT_PACKAGE ??= resolve(root, "apps/presentation/dashboard/node_modules/playwright");
 const require = createRequire(import.meta.url);
@@ -21,7 +22,7 @@ function snapshot(id) {
   payload.workspace_registry_revision = directory.registry_revision;
   return payload;
 }
-const server = spawn(process.env.LOOPX_PYTHON_BIN ?? "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" });
+const server = spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" });
 let browser;
 let releaseSlow;
 const slowGate = new Promise((done) => { releaseSlow = done; });

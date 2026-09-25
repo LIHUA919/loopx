@@ -17,7 +17,7 @@ import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/c
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {loadLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {shadowManagementStatePath} from "../../loopx/control_plane/coordination/shadow_management.ts";
-import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {authorityProjectionFixture, todoFixtureRecord} from "./authority_projection_fixture.ts";
 import {acceptanceCompletionRequirements, acceptanceWorkGuard, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest,
   normalizeGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance, validateAcceptanceCompletion} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {commitGoalAcceptanceVerification, commitLocalGoalAcceptance, commitLocalGoalAcceptanceVerification,
@@ -36,7 +36,7 @@ function todo(todo_id: string, extra: JsonObject = {}): JsonObject {
     text: `Implement ${todo_id}`, task_class: "advancement_task", action_kind: "implement", ...extra};
 }
 function document(): JsonObject {
-  return {objective: "Deliver independently validated work", non_goals: ["Grant additional permissions"],
+  return {scope: {kind: "all_advancement"}, objective: "Deliver independently validated work", non_goals: ["Grant additional permissions"],
     criteria: [{id: "prerequisite", description: "Prerequisite passes its own check", validation_argv: [process.execPath, "-e", "process.exit(0)"]},
       {id: "outcome", description: "Final outcome passes its check", validation_argv: [process.execPath, "-e", "process.exit(0)"]}],
     bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}, {todo_id: "todo_second", criterion_ids: ["outcome"]}]};
@@ -150,6 +150,81 @@ async function fixture(t: TestContext, provider: typeof providers[number]): Prom
 for (const provider of providers) {
   const options = {skip: (provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL) ||
     (provider === "sqlite" && !sqliteQualified)};
+  test(`${provider}: selected work isolates admission and verification without weakening its own guard`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]},
+      bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
+    const request = await configureRequest(store, {document: doc});
+    assert.equal((await configureGoalAcceptance(store, request)).status, "applied");
+    const first = (await head(store)).head;
+    assert.equal(acceptanceWorkGuard(first, goal, "todo_first")?.allowed, true);
+    assert.equal(acceptanceWorkGuard(first, goal, "todo_second"), null);
+    assert.equal(acceptanceCompletionRequirements(first, goal, "todo_second"), null);
+    assert.deepEqual((projectGoalAcceptance(first, goal).tasks as JsonObject[]).map(row => row.todo_id), ["todo_first"]);
+    assert.equal((await commitGoalAcceptanceVerification(store, await verifyRequest(store))).status, "applied");
+    await update(store, "todo_second", {text: "Independent work changed"});
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_new", todoFixtureRecord(todo("todo_new"), "native"));
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_new"), null);
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_first", {task_class: "continuous_monitor"});
+    const changed = (await head(store)).head;
+    assert.equal(acceptanceWorkGuard(changed, goal, "todo_first")?.allowed, false);
+    assert.throws(() => acceptanceCompletionRequirements(changed, goal, "todo_first"), /stale/);
+    assert.equal(projectGoalAcceptance(changed, goal).status, "held");
+    assert.equal((await configureGoalAcceptance(store, request)).status, "replayed", "old exact operation cannot rebind changed work");
+  });
+  test(`${provider}: explicit selection is not binding and cannot be edited away by the worker`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]}, bindings: []};
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: doc}))).status, "applied");
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_first")?.state, "unbound");
+    await update(store, "todo_first", {task_class: "continuous_monitor", status: "blocked"});
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_first")?.allowed, false);
+    const changed = (await head(store)).head;
+    assert.throws(() => acceptanceCompletionRequirements(changed, goal, "todo_first"), /unbound/);
+  });
+  test(`${provider}: legacy scope-free committed configuration still recovers its exact receipt`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const raw = document(); delete raw.scope;
+    const request = await configureRequest(store, {document: raw});
+    const basis = await head(store);
+    const doc = normalizeGoalAcceptanceDocument(raw);
+    const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+      document: doc, digest: canonicalAuthoritySha256(doc), verification: null,
+      bindings: doc.bindings.map(binding => ({...binding, revision: 1, confirmed_by: "owner",
+        todo_semantic_digest: goalAcceptanceTodoDigest((basis.head.todos as JsonObject[]).find(row => row.todo_id === binding.todo_id)!)}))};
+    const next = {...basis.head, goal_acceptance: state};
+    const receipt = {schema_version: "loopx_goal_acceptance_operation_v0", operation_id: request.operation_id,
+      goal_id: goal, request_sha256: canonicalAuthoritySha256({kind: "configure", ...request}),
+      result: {goal_id: goal, operation_id: request.operation_id, goal_acceptance_contract: projectGoalAcceptance(next, goal)}};
+    assert.equal((await store.commitAuthority({operation_id: String(request.operation_id),
+      expected_provider_revision: basis.provider_revision, next_projection: next, events: [], receipts: [receipt]})).status, "applied");
+    const committed = await head(store);
+    assert.equal((await configureGoalAcceptance(store, request)).status, "replayed");
+    assert.deepEqual(await head(store), committed);
+  });
+  test(`${provider}: owner configuration requires an explicit valid scope before any write`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const before = await head(store);
+    const missing = document(); delete missing.scope;
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: missing}))).reason_code,
+      "goal_acceptance_scope_required");
+    assert.deepEqual(await head(store), before);
+    for (const doc of [
+      {...document(), scope: {kind: "selected_work", todo_ids: []}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first", "todo_first"]}},
+      {...document(), scope: {kind: "all"}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_missing"]}, bindings: []}]) {
+      await assert.rejects(configureGoalAcceptance(store, await configureRequest(store, {document: doc})), /scope/);
+      assert.deepEqual(await head(store), before);
+    }
+    await assert.rejects(configureGoalAcceptance(store, await configureRequest(store, {
+      document: {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first", "todo_second"]}},
+      actor_agent_id: "agent-a"})), /trusted owner/);
+    assert.deepEqual(await head(store), before);
+  });
   test(`${provider}: default off, owner configure, private inspection and public held work`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const before = await head(store);
@@ -501,3 +576,18 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal})).status, "loaded");
   });
 }
+
+test("legacy omitted scope preserves document bytes, bindings and global admission", () => {
+  const raw = document(); delete raw.scope;
+  const doc = normalizeGoalAcceptanceDocument(raw);
+  assert.equal(Object.hasOwn(doc, "scope"), false);
+  const records = [todo("todo_first"), todo("todo_second"), todo("todo_new")];
+  const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+    document: doc, digest: canonicalAuthoritySha256(doc), verification: null,
+    bindings: doc.bindings.map(binding => ({...binding, revision: 1, confirmed_by: "owner",
+      todo_semantic_digest: goalAcceptanceTodoDigest(records.find(row => row.todo_id === binding.todo_id)!)}))};
+  const value = authorityProjectionFixture(goal, records, [], "native", {goal_acceptance: state});
+  assert.deepEqual(readGoalAcceptance(value, goal), state);
+  assert.equal(acceptanceWorkGuard(value, goal, "todo_first")?.allowed, true);
+  assert.equal(acceptanceWorkGuard(value, goal, "todo_new")?.state, "unbound");
+});

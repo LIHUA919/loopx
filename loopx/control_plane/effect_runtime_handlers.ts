@@ -193,6 +193,8 @@ import {evaluateStandingDecisionProjection} from "./todos/standing_decision.ts";
 import {evaluateDecisionScope} from "./todos/decision_scope.ts";
 import {agentCapabilityMemory} from "./agents/capability_memory.ts";
 import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
+import {projectCoordinationSource} from "./coordination/source_projection.ts";
+import {withCoordinationSourceTransfer} from "./coordination/source_transfer.ts";
 import {captureArchivedTodoDependencies} from "./todos/archive_capture.ts";
 import {projectAdvancementFrontier, evaluateLongTodoChain} from "./todos/frontier_revision.ts";
 import { evaluateCoordinationTodoSuccessorDerivation } from "./coordination/todo_successor_derivation.ts";
@@ -452,7 +454,8 @@ export function createEffectRuntimeHandlers(
     ["todo.user_completion.plan", evaluateUserCompletion],
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
-    ["todo.archive.capture_dependencies", captureArchivedTodoDependencies],
+    ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
+    ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],
     [
@@ -549,18 +552,18 @@ export function createEffectRuntimeHandlers(
     ["task_lease.inspect.native", inspectTaskLease],
     ["task_lease.lifecycle.decide", evaluateTaskLeaseLifecycleDecision],
     ["task_lease.lifecycle.native", executeTaskLeaseLifecycle],
-    ["coordination.runtime_shadow.bootstrap", bootstrapCoordinationRuntimeShadow],
-    ["coordination.runtime_shadow.commit", commitCoordinationRuntimeShadow],
-    ["coordination.runtime_shadow.inspect", inspectCoordinationRuntimeShadow],
-    ["coordination.runtime_shadow.qualify", qualifyCoordinationRuntimeShadow],
+    ["coordination.runtime_shadow.bootstrap", withCoordinationSourceTransfer("coordination.runtime_shadow.bootstrap", bootstrapCoordinationRuntimeShadow)],
+    ["coordination.runtime_shadow.commit", withCoordinationSourceTransfer("coordination.runtime_shadow.commit", commitCoordinationRuntimeShadow)],
+    ["coordination.runtime_shadow.inspect", withCoordinationSourceTransfer("coordination.runtime_shadow.inspect", inspectCoordinationRuntimeShadow)],
+    ["coordination.runtime_shadow.qualify", withCoordinationSourceTransfer("coordination.runtime_shadow.qualify", qualifyCoordinationRuntimeShadow)],
     [
       "coordination.runtime_shadow.todo_read_candidate",
-      readCoordinationRuntimeShadowTodoCandidate,
+      withCoordinationSourceTransfer("coordination.runtime_shadow.todo_read_candidate", readCoordinationRuntimeShadowTodoCandidate),
     ],
-    ["coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow],
+    ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
-    ["coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion],
+    ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
     ["coordination.local_authority.todo_claim", claimLocalCoordinationTodo],

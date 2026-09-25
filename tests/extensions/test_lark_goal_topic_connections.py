@@ -877,6 +877,54 @@ def test_starting_listener_is_not_presented_as_reply_ready(tmp_path: Path) -> No
     assert rows[0]["health_error_code"] == "lark_event_listener_starting"
 
 
+def test_profile_alias_uses_the_same_app_listener_health(tmp_path: Path) -> None:
+    state: dict[str, Any] = {}
+    runner = _runner(state)
+    target_path = tmp_path / "goal-channel-targets.json"
+    binding_path = tmp_path / "goal-channel.json"
+    connected = _connect_registered_agent(
+        registry=_registry(tmp_path),
+        goal_id="goal-alpha",
+        target_path=target_path,
+        binding_path=binding_path,
+        app_ref="mew",
+        chat_id=CHAT_ID,
+        chat_name="Product group",
+        incoming_mode="mentions",
+        runner=runner,
+        cli_bin="fake-lark",
+    )
+    assert connected["ok"] is True
+    targets = json.loads(target_path.read_text(encoding="utf-8"))
+    alias = json.loads(json.dumps(next(iter(targets["targets"].values()))))
+    alias["identity"]["sender_profile"] = "alias"
+    targets["targets"]["alias"] = alias
+    target_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    rows = list_lark_connections(
+        registry=_registry(tmp_path),
+        target_path=target_path,
+        binding_paths={"goal-alpha": binding_path},
+        runner=runner,
+        cli_bin="fake-lark",
+        runtime_health={
+            "mew": {
+                "status": "standby",
+                "error_code": "lark_event_consumer_owned_elsewhere",
+            },
+            "alias": {
+                "status": "listening",
+                "error_code": None,
+                "event_count": 1,
+                "last_event_status": "replied_and_acknowledged",
+            },
+        },
+    )
+    assert rows[0]["listener_status"] == "listening"
+    assert rows[0]["reply_ready"] is True
+    assert rows[0]["health_error_code"] is None
+
+
 def test_connect_preview_uses_verified_bot_identity_without_user_oauth(
     tmp_path: Path,
 ) -> None:

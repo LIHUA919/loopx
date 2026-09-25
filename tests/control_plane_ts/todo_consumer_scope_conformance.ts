@@ -4,8 +4,9 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleConsumerScopeFixture} from "./production_scale_coordination_fixture.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 
-const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
+const PYTHON = resolveTestPython();
 
 // The actual Python read consumer still hosts rendering; policy runs in TS.
 const CONSUMER = `

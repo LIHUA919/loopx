@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from .activation_service import (
     GoalActivationAuthorityRouteMode,
     GoalActivationSourceStatus,
     _source_and_target,
+    goal_activation_source_fingerprint,
 )
 
 
@@ -118,7 +118,11 @@ def build_goal_action_catalog(
         if authority_route.source_status is GoalActivationSourceStatus.AVAILABLE
         else None
     )
-    fingerprint = hashlib.sha256(source_bytes).hexdigest()
+    fingerprint = goal_activation_source_fingerprint(
+        goal_id=normalized_goal_id,
+        source_registry=authority_route.source_registry,
+        source_bytes=source_bytes,
+    )
     try:
         result = effect_runtime_result(
             "goal.operator_actions.project",

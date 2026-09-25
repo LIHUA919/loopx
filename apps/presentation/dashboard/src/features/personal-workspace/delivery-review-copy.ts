@@ -3,6 +3,7 @@ import type { ReviewExportLabels } from "../../data/delivery-review.js";
 export const goalAcceptanceContractCopy = {
   en: {
     title: "Goal acceptance contract", boundary: "Read-only owner contract. Task association and artifact checks are separate; neither automatically approves or completes the Goal.",
+    scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
     source: "Goal source", revision: "Contract revision", digest: "Contract digest", objective: "Objective", criteria: "Acceptance criteria", nonGoals: "Outside scope",
     tasks: "Task associations", verification: "Artifact verification", unknown: "Unknown", noTasks: "No task associations reported. Coverage is unknown.",
     noCriteria: "No acceptance criteria reported.", retained: "Retained snapshot; refresh to read current acceptance facts.",
@@ -14,6 +15,7 @@ export const goalAcceptanceContractCopy = {
   },
   "zh-CN": {
     title: "Goal 验收合同", boundary: "只读的所有者合同。任务关联与产物检查是独立事实，均不会自动批准或完成 Goal。",
+    scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
     source: "Goal 来源", revision: "合同版本", digest: "合同摘要", objective: "目标", criteria: "验收条件", nonGoals: "范围之外",
     tasks: "任务关联", verification: "产物验证", unknown: "未知", noTasks: "未提供任务关联，覆盖范围未知。",
     noCriteria: "未提供验收条件。", retained: "当前保留旧快照，请刷新读取最新验收事实。",

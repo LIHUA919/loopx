@@ -387,12 +387,21 @@ def main() -> int:
         for folder in ("loopx", "tests"):
             shutil.copytree(source / folder, frozen / folder,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
-        for name in ("package.json", "pyproject.toml"):
+        # TS oracles import the repository's supported-Python discovery helper.
+        # Freeze that dependency too; a missing import is not a killed mutant.
+        support_files = (
+            "package.json", "pyproject.toml", "scripts/test-python.mjs",
+            "scripts/loopx-python.sh",
+        )
+        for name in support_files:
+            (frozen / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source / name, frozen / name)
         if (source / "node_modules").is_dir():
             (frozen / "node_modules").symlink_to(source / "node_modules", target_is_directory=True)
         manifest = {str(path.relative_to(frozen)): hashlib.sha256(path.read_bytes()).hexdigest()
                     for folder in ("loopx", "tests") for path in (frozen / folder).rglob("*") if path.is_file()}
+        manifest.update({name: hashlib.sha256((frozen / name).read_bytes()).hexdigest()
+                         for name in support_files})
         (output / "source-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         for case in cases:
             originals = {path: (frozen / path).read_text() for path, _ in case.edits}

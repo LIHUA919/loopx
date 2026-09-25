@@ -188,7 +188,12 @@ def test_ineligible_routes_produce_no_hint(tmp_path, condition):
 def test_generated_command_previews_reviewed_event_and_rejects_scope_expansion(
     tmp_path, capsys
 ):
-    registry, _, _ = experiment(tmp_path)
+    registry, _, config = experiment(tmp_path)
+    raw = json.loads(config.read_text())
+    # Exercise the unavailable-provider preview regardless of the host's ov setup.
+    raw["project_provider_binding"]["provider_binary"] = str(tmp_path / "missing-ov")
+    config.write_text(json.dumps(raw))
+    _refresh_binding(registry, config)
     result = hint(registry)
     route = result["routes"][0]
     event = {

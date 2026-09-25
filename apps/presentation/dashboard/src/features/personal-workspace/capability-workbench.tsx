@@ -78,6 +78,7 @@ export function CapabilityCatalogNavigation({
   onSelect,
   scope,
   selectedCapabilityId,
+  showScope = true,
   t,
 }: Readonly<{
   capabilities: CapabilityDescriptor[];
@@ -85,6 +86,7 @@ export function CapabilityCatalogNavigation({
   onSelect: (capabilityId: string) => void;
   scope: "goal" | "machine";
   selectedCapabilityId: string;
+  showScope?: boolean;
   t: WorkspaceTranslate;
 }>) {
   return (
@@ -101,9 +103,9 @@ export function CapabilityCatalogNavigation({
             <span>
               <strong>{capability.display_name}</strong>
             </span>
-            <em>{t(capability.available_scopes.includes(scope)
+            {showScope ? <em>{t(capability.available_scopes.includes(scope)
               ? scope === "goal" ? "capabilities.goalScope" : "capabilities.machineScope"
-              : scope === "machine" ? "capabilities.goalScope" : "capabilities.machineScope")}</em>
+              : scope === "machine" ? "capabilities.goalScope" : "capabilities.machineScope")}</em> : null}
           </button>
         );
       })}

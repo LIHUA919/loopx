@@ -61,6 +61,7 @@ def acceptance_goal(tmp_path, monkeypatch, request):
         runtime, "goal-acceptance", projection, state_path=state, provider=request.param
     )
     document = {
+        "scope": {"kind": "all_advancement"},
         "objective": "Produce a usable export",
         "non_goals": ["No unrelated code cleanup"],
         "criteria": [
@@ -416,3 +417,41 @@ def test_unbound_work_projects_recovery_without_changing_acceptance(acceptance_g
     code, refused = run("todo", "complete", "--goal-id", "goal-acceptance", "--todo-id", "todo_export", "--agent-id", "agent-a")
     assert code == 1 and refused["reason_code"] == "goal_acceptance_unbound", refused
     assert cli("inspect")[1] == before
+
+
+def test_owner_scope_correction_restores_independent_work_through_real_cli(acceptance_goal):
+    project, document_path, cli, run = acceptance_goal
+    from loopx.control_plane.goals.goal_frontier.acceptance import acceptance_gaps_from_held_goal_binding
+
+    document = json.loads(document_path.read_text())
+    _configure(cli, document_path)
+    code, added = run("todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+                      "--text", "Review independent public sources", "--claimed-by", "agent-a")
+    assert code == 0, added
+    code, listed = run("todo", "list", "--goal-id", "goal-acceptance", "--role", "agent")
+    assert code == 0, listed
+    independent = next(row for row in listed["todos"] if row["todo_id"] != "todo_export")
+    todo_id = independent["todo_id"]
+    assert independent["goal_acceptance_guard"]["state"] == "unbound"
+    claim = ("todo", "claim", "--goal-id", "goal-acceptance", "--todo-id", todo_id,
+             "--agent-id", "agent-a", "--claimed-by", "agent-a")
+    refused_code, refused = run(*claim)
+    assert refused_code == 1 and "goal_acceptance_unbound" in json.dumps(refused), refused
+    document["scope"] = {"kind": "selected_work", "todo_ids": ["todo_export"]}
+    document_path.write_text(json.dumps(document))
+    configured = _configure(cli, document_path)
+    contract = configured["goal_acceptance_contract"]
+    assert contract["scope"] == document["scope"]
+    code, claimed = run(*claim)
+    assert code == 0, claimed
+    after = run("todo", "list", "--goal-id", "goal-acceptance", "--role", "agent")[1]
+    recovered = next(row for row in after["todos"] if row["todo_id"] == todo_id)
+    assert "goal_acceptance_guard" not in recovered
+    assert acceptance_gaps_from_held_goal_binding(
+        {"goal_acceptance_contract": contract}, after["todos"], agent_id="agent-a") == []
+    # The scoped work's real validator still fails with no artifact; narrowing
+    # the scope does not confer acceptance or manufacture validation receipts.
+    code, verified = cli("verify", "--execute")
+    assert code == 1 and verified["checks_passed"] is False
+    (project / "artifact.txt").write_text("accepted")
+    assert cli("verify", "--execute")[0] == 0

@@ -30,6 +30,8 @@ sys.stdout.write(result['output'])
 sys.exit(result['exit_code'])
 """
 
+_COMMAND_TIMEOUT_SECONDS = 120
+
 
 def shell_isolation_available() -> bool:
     return (sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()) or bool(shutil.which("bwrap"))
@@ -125,15 +127,18 @@ class VisionShellHost:
                 self._active = True
             process = subprocess.Popen([*self._sandbox(), "/bin/sh", "-c", command], cwd=self.project, env=env,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            group_killed = False
             try:
-                code = process.wait(timeout=120)
+                code = process.wait(timeout=_COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
+                group_killed = True
                 process.wait()
                 code = 124
             finally:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if not group_killed:
+                        os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 with self._invocation_lock:

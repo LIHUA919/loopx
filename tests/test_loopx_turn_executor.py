@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from loopx.cli_commands import turn as turn_command
-from loopx.cli_commands.turn import ManagedCadenceStart, managed_cadence_start
+from loopx.cli_commands import turn_cadence
+from loopx.cli_commands.turn_cadence import ManagedCadenceStart, managed_cadence_start
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.turn_driver import executor as turn_executor
 from loopx.control_plane.turn_driver import (
@@ -1066,7 +1066,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_first_journal_wr
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_command, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common
@@ -1111,7 +1111,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     assert calls == {"host": 0, "writeback": 0, "spend": 0, "scheduler": 0}
 
     started_at_ms = int(_cadence_starts(runtime_root)[0]["started_at_ms"])
-    monkeypatch.setattr(turn_command, "time", _FrozenTurnClock(started_at_ms + 120_000))
+    monkeypatch.setattr(turn_cadence, "time", _FrozenTurnClock(started_at_ms + 120_000))
     restart = _managed_cadence(runtime_root)
     recovered = run_loopx_turn_once(
         plan, admit_start=restart.admit, confirm_start=restart.confirm, **common

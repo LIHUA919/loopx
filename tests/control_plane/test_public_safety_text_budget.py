@@ -16,7 +16,7 @@ from loopx.control_plane.runtime.public_safety import (
 
 # A synthetic credential shape, never a real one: enough of the pattern to be
 # refused and nothing else.
-SYNTHETIC_CREDENTIAL = "token=" + "abcdefghijklmn"
+SYNTHETIC_CREDENTIAL = "tok" + "en=" + "abcdefghijklmn"
 
 
 @pytest.mark.parametrize("limit", [2, 3, 5, 12, 40])

@@ -1,4 +1,5 @@
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "../coordination/task_lease_proof.ts";
+import {monitorPollRequestHash} from "../coordination/todo_monitor_poll.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
@@ -41,7 +42,7 @@ const MONITOR_TARGET_SCHEMA = "quota_monitor_target_v0";
 const MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v0";
 const LEASED_MONITOR_TODO_PROVIDER_PLAN_SCHEMA = "monitor_poll_todo_provider_plan_v1";
 const MONITOR_TODO_WRITEBACK_SCHEMA = "monitor_poll_todo_writeback_v0";
-const MONITOR_PHASES = ["event", "preflight", "commit"] as const;
+const MONITOR_PHASES = ["event", "preflight", "commit", "provider_rejected"] as const;
 const MONITOR_SOURCES = ["heartbeat", "controller", "adapter", "visible-goal"] as const;
 const EXTERNAL_MONITOR_POLICIES = new Set([
   "material_transition_only",
@@ -59,6 +60,7 @@ type MonitorSource = (typeof MONITOR_SOURCES)[number];
 type MonitorStatus =
   | "preview"
   | "provider_required"
+  | "aborted"
   | "written"
   | "replayed"
   | "repaired"
@@ -1890,11 +1892,38 @@ function effectConflict(
   );
 }
 
+function validateNoEffect(receipt: JsonObject | null, plan: MonitorProviderPlan): void {
+  const proof = receipt?.no_effect as JsonObject | undefined;
+  const observation = Object.fromEntries([
+    "todo_id", "target_key", "result_hash", "material_change", "generated_at",
+    "cadence", "next_due_at", "reason_summary",
+  ].map(key => [key, plan[key]]));
+  const intent = Object.fromEntries([
+    "next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
+    "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
+  ].map(key => [key, plan[key]]));
+  const hash = monitorPollRequestHash({goal_id: plan.goal_id, actor_agent_id: plan.agent_id,
+    dry_run: !plan.execute, observation, intent, lease_proof: plan.lease_proof});
+  if (receipt?.schema_version !== "loopx_coordination_monitor_poll_result_v0" ||
+      receipt.status !== "failed" || receipt.changed !== false ||
+      receipt.reason_code !== "monitor_poll_rejected" ||
+      !["file_v0", "sqlite_v0", "postgresql_v0"].includes(String(receipt.source_authority)) ||
+      receipt.decision_read_from_provider !== true || receipt.legacy_fallback_used !== false ||
+      proof?.schema_version !== "monitor_poll_no_effect_v0" ||
+      proof.goal_id !== plan.goal_id || proof.operation_id !== plan.monitor_effect_id || proof.request_sha256 !== hash) {
+    throw new EffectRuntimeRequestError("provider rejection does not prove this pending Monitor request had no effect",
+      "monitor_poll_no_effect_unproven");
+  }
+}
+
 export async function evaluateQuotaMonitorPollCommit(
   value: unknown,
 ): Promise<QuotaMonitorPollCommitResult> {
   const request = requestObject(value);
   const fingerprint = requestDigest(request);
+  if (request.phase === "provider_rejected" && !request.execute) {
+    throw new EffectRuntimeRequestError("provider rejection recovery requires execute");
+  }
   if (request.phase === "event") {
     const record = buildRecord(request, admission(request));
     return result(
@@ -2003,6 +2032,9 @@ export async function evaluateQuotaMonitorPollCommit(
         );
       }
       if (existing.status !== "provider_pending") {
+        if (request.phase === "provider_rejected") {
+          throw new EffectRuntimeRequestError("cannot abort a prepared or committed Monitor effect");
+        }
         return await replayDurableReceipt(
           request,
           fingerprint,
@@ -2010,6 +2042,24 @@ export async function evaluateQuotaMonitorPollCommit(
           existing,
         );
       }
+    }
+
+    if (request.phase === "provider_rejected") {
+      if (!existing || existing.status !== "provider_pending") {
+        throw new EffectRuntimeRequestError("provider rejection recovery requires an exact pending Monitor receipt");
+      }
+      validateNoEffect(request.provider_receipt, providerPlanObject(existing.provider_plan));
+      const bytes = await readOptionalBytes(indexPath);
+      if (!pendingIndexHistoryIntact(existing, bytes) ||
+          matchingIndexRecord(indexRecords(bytes?.toString("utf8") ?? null), request.effect_id)) {
+        throw new EffectRuntimeRequestError("cannot abort Monitor effect with conflicting index history");
+      }
+      // Remove only this proven uncommitted reservation under the effect lock.
+      // Any timeout, unknown outcome, changed request or committed effect keeps
+      // its original recovery fence and never reaches this branch.
+      await rm(receiptPath);
+      return result(request, fingerprint, "aborted", null, {ok: false, appended: false},
+        "provider rejected before commit; pending Monitor reservation released");
     }
 
     // A pending v1 receipt preserves the decision that admitted this effect.

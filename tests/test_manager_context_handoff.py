@@ -69,6 +69,64 @@ def test_project_conversation_delivers_only_to_its_registered_goal(fixture):
     assert not pending(root, "other", "peer")["items"]
 
 
+def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
+    root, registry, session, turn, request = fixture
+    assert request in authority(root, registry, session, turn)["targets"]
+    first = deliver(root, registry, session=session, turn=turn, request=request)
+
+    data = json.loads(registry.read_text())
+    data["goals"][0]["activation_state"] = "stopped"
+    registry.write_text(json.dumps(data))
+    assert authority(root, registry, session, turn)["targets"] == [
+        {"goal_id": "other", "agent_id": "peer"}
+    ]
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=session, turn=turn, request=request)
+    assert len(pending(root, "research", "worker")["items"]) == 1
+
+    data["goals"][0]["activation_state"] = "active"
+    registry.write_text(json.dumps(data))
+    assert deliver(root, registry, session=session, turn=turn, request=request) == {
+        **first, "replayed": True
+    }
+
+
+def test_stopped_or_invalid_goal_is_excluded_from_lark_and_goal_chat(fixture):
+    root, registry, session, turn, request = fixture
+    data = json.loads(registry.read_text())
+    data["goals"][0]["activation"] = {
+        "schema_version": "loopx_goal_activation_v1", "state": "stopped"
+    }
+    registry.write_text(json.dumps(data))
+
+    goal_session = {**session, "channel_id": "goal.research", "goal_id": "research"}
+    assert authority(root, registry, goal_session, turn)["targets"] == []
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=goal_session, turn=turn, request=request)
+
+    lark_session = {**session, "channel_id": "manager.external.group"}
+    lark_turn = {**turn, "origin": "lark"}
+    _write(_root(root) / "policy.json", {
+        "schema_version": POLICY_SCHEMA,
+        "sources": {lark_session["channel_id"]: {
+            "sender_ids": ["owner"], "targets": [request]
+        }},
+    })
+    register_ingress(root, session_id=session["session_id"],
+                     client_turn_id=turn["client_turn_id"],
+                     channel=lark_session["channel_id"], sender_id="owner",
+                     message=turn["message"], source_id="lark:original")
+    assert authority(root, registry, lark_session, lark_turn)["targets"] == []
+    with pytest.raises(ValueError, match="not authorized"):
+        deliver(root, registry, session=lark_session, turn=lark_turn, request=request)
+
+    data["goals"][0]["activation"]["state"] = "unreadable"
+    registry.write_text(json.dumps(data))
+    assert authority(root, registry, session, turn)["targets"] == [
+        {"goal_id": "other", "agent_id": "peer"}
+    ]
+
+
 @pytest.mark.parametrize("changes", [
     {"channel_id": "goal.other"}, {"goal_id": "other"}, {"goal_id": ""},
 ])

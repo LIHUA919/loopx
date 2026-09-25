@@ -4,10 +4,9 @@ from ..control_plane.quota.effective_action import EffectiveAction
 import argparse
 import json
 import shlex
-import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from ..cli_rollout import append_cli_rollout_event
 from ..capabilities.explore.composition_frontier import (
@@ -21,7 +20,6 @@ from ..capabilities.reward_memory import (
 )
 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
-from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
@@ -46,8 +44,6 @@ from ..control_plane.todos.durable_completion import (
     read_persisted_todo_record_with_source,
 )
 from ..control_plane.turn_driver import (
-    LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
-    TurnRecoveryBlockedError,
     build_loopx_turn_command_validator,
     build_loopx_turn_plan,
     codex_cli_session_binding,
@@ -62,6 +58,7 @@ from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..todos import resolve_todo_state_path
 from .lark_inbox import dispatch_goal_lark_turn_start_hooks
+from .turn_cadence import managed_cadence_start
 from .turn_decision import (
     build_fresh_turn_decision_owner,
     collect_turn_status_payload,
@@ -71,6 +68,7 @@ from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_managed_step import handle_turn_managed_step
 from .turn_rendering import (
+    build_turn_error_payload,
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
 )
@@ -89,88 +87,6 @@ PrintPayload = Callable[
     None,
 ]
 FormatSelector = Callable[..., str]
-
-
-class ManagedCadenceStart(NamedTuple):
-    """Owner-cadence callbacks for one managed Turn start.
-
-    `admit` reserves (or resumes) the interval slot before any host or journal
-    attempt; `confirm` marks that reservation as a real host attempt once the
-    Turn journal is durable. Keeping them separate means a crash in between
-    leaves a resumable reservation rather than a permanently rejected Turn.
-    """
-
-    admit: Callable[[Mapping[str, Any]], dict[str, Any]]
-    confirm: Callable[[], None]
-
-
-def managed_cadence_start(
-    *,
-    runtime_root: Path,
-    goal_id: str,
-    agent_id: str | None,
-    automation_id: str | None,
-    manual_reason: str | None,
-    on_admitted: Callable[[], None] | None = None,
-) -> ManagedCadenceStart:
-    """Bind one managed Turn start to the TypeScript owner-cadence store."""
-
-    admitted_request: dict[str, Any] = {}
-
-    def admit(identity: Mapping[str, Any]) -> dict[str, Any]:
-        now_ms = time.time_ns() // 1_000_000
-        request_id = f"{identity['turn_key']}:{identity['attempt']}"
-        admission = effect_runtime_result(
-            "quota.automation_cadence.admit",
-            {
-                "runtime_root": str(runtime_root),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "automation_id": automation_id,
-                "request_id": request_id,
-                "trigger_at_ms": now_ms,
-                "now_ms": now_ms,
-                "manual_reason": manual_reason,
-            },
-            retry_safe=False,
-        )
-        admitted_request.clear()
-        if admission.get("admitted") is True:
-            admitted_request["request_id"] = request_id
-            admitted_request["reserved"] = admission.get("reserved") is True
-            if on_admitted is not None:
-                on_admitted()
-        return {
-            key: admission.get(key)
-            for key in (
-                "admitted", "reserved", "resumed", "reason", "next_eligible_at_ms",
-                "min_interval_minutes", "pre_model_admission",
-            )
-        }
-
-    def confirm() -> None:
-        request_id = admitted_request.get("request_id")
-        if admitted_request.get("reserved") is not True or not isinstance(request_id, str):
-            return
-        confirmation = effect_runtime_result(
-            "quota.automation_cadence.confirm_start",
-            {
-                "runtime_root": str(runtime_root),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "automation_id": automation_id,
-                "request_id": request_id,
-            },
-            retry_safe=True,
-        )
-        if confirmation.get("confirmed") is not True:
-            raise ValueError(
-                "managed Turn start could not be confirmed against the owner cadence store"
-            )
-
-    return ManagedCadenceStart(admit=admit, confirm=confirm)
-
-
 
 
 def handle_turn_command(
@@ -1174,44 +1090,7 @@ def handle_turn_command(
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")
     except Exception as exc:  # noqa: BLE001 - CLI boundary renders typed JSON failure
-        planned_transaction = (
-            payload.get("transaction")
-            if isinstance(payload.get("transaction"), Mapping)
-            else {}
-        )
-        planned_turn_key = str(planned_transaction.get("turn_key") or "")
-        payload = {
-            **({"error_code": exc.code, **getattr(exc, "payload", {})} if isinstance(getattr(exc, "code", None), str) else {}),
-            "ok": False,
-            "schema_version": (
-                LOOPX_TURN_EXECUTION_SCHEMA_VERSION
-                if args.turn_command == "run-once"
-                else "loopx_turn_plan_v0"
-            ),
-            "mode": "run_once" if args.turn_command == "run-once" else "plan",
-            "error": str(exc),
-            "effects": {
-                "host_invoked": False,
-                "state_written": False,
-                "scheduler_acknowledged": False,
-                "quota_spent": False,
-            },
-            **(
-                {
-                    "resume_turn_key": planned_turn_key,
-                    "journal_ref": (
-                        f"turn:{planned_turn_key.removeprefix('sha256:')[:16]}"
-                    ),
-                }
-                if args.turn_command == "run-once" and planned_turn_key
-                else {}
-            ),
-            **(
-                {"recovery_decision": exc.decision}
-                if isinstance(exc, TurnRecoveryBlockedError)
-                else {}
-            ),
-        }
+        payload = build_turn_error_payload(payload, exc, turn_command=args.turn_command)
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"

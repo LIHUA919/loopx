@@ -85,6 +85,7 @@ def record_quota_monitor_poll_for_cli(
         next_claimed_by=args.next_claimed_by,
         task_lease_idempotency_key=getattr(args, "task_lease_idempotency_key", None),
         task_lease_expected_version=getattr(args, "task_lease_expected_version", None),
+        use_current_task_lease=bool(getattr(args, "use_current_task_lease", False)),
         turn_instance_id=turn_instance_id,
         receipt_bound_todo_id=_receipt_bound_monitor_todo_id(
             args,

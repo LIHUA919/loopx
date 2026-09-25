@@ -389,7 +389,9 @@ const en = {
   "drawer.unconfigured": "Not configured",
   "drawer.workspaceCandidates": "Available workspaces",
   "files.emptySummary": "Public-safe output",
-  "files.empty": "No files, outputs, or verified reports yet.",
+  "files.empty": "No delivered files or verified reports yet. Run and validation status remain in Tasks.",
+  "files.checkingTeam": "Checking this Goal conversation for verified team results…",
+  "files.teamLoadFailed": "Could not check team results from this Goal conversation.",
   "files.loadingReports": "Loading verified milestone reports…",
   "files.reportDelta": "+{added} added · {changed} changed",
   "files.reportAdded": "added",
@@ -763,19 +765,11 @@ const en = {
   "projection.agentStopped": "Stopped by you; history, Todos, and evidence are preserved",
   "projection.agentWaitingExternal": "Waiting for an external condition",
   "projection.confirmAgentDecision": "Confirm the permission or decision the Agent needs next",
-  "projection.events24h": "{count} events in the last 24 hours",
   "projection.firstReadOnlyAdapterCheck": "Run the first read-only adapter check and save progress",
-  "projection.goalVerified": "Goal state, Todos, and registration information verified",
-  "projection.latestRun": "Latest run",
-  "projection.latestValidation": "Latest validation",
   "projection.nextUpdatePending": "Waiting for LoopX to update the next step",
-  "projection.publicSafeProjection": "Public-safe status projection",
   "projection.refreshState": "Refresh LoopX status and confirm the current progress is still valid",
-  "projection.runEvidenceAvailable": "Run evidence is available",
-  "projection.runRecorded": "The latest LoopX run is recorded",
   "projection.statusRefreshNeeded": "LoopX status needs to be refreshed",
   "projection.todoStatusUpdated": "Todo status updated; confirming the next step",
-  "projection.validationRecorded": "The latest validation is recorded",
   "runs.completed": "Completed",
   "runs.failed": "Needs review",
   "runs.interrupted": "Interrupted",
@@ -977,9 +971,12 @@ const en = {
   "settings.eyebrow": "Workspace preferences",
   "settings.general": "General",
   "settings.goalConnections": "Goal connections",
+  "settings.agentGroup": "Agents and models",
+  "settings.workspaceGroup": "Workspace",
+  "settings.steward": "Steward",
   "settings.language": "Language",
   "settings.modelProvider": "Model provider",
-  "settings.globalCapabilities": "Global capabilities",
+  "settings.globalCapabilities": "Capability Center",
   "settings.languageDescription": "Choose the language used by the LoopX desktop workspace.",
   "settings.languageEnglishDescription": "Use English for navigation, settings, and workspace controls.",
   "settings.languageEnglish": "English",
@@ -1506,7 +1503,9 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "drawer.unconfigured": "未配置",
   "drawer.workspaceCandidates": "可选择的工作区",
   "files.emptySummary": "公开安全产出",
-  "files.empty": "还没有文件、产出或已验证的阶段周报。",
+  "files.empty": "还没有已交付文件或已验证报告。运行和验证状态请在任务中查看。",
+  "files.checkingTeam": "正在检查当前 Goal 会话的已验证团队成果…",
+  "files.teamLoadFailed": "无法核验当前 Goal 会话的团队成果。",
   "files.loadingReports": "正在加载已验证的阶段周报…",
   "files.reportDelta": "+{added} 新增 · {changed} 变化",
   "files.reportAdded": "新增",
@@ -1880,19 +1879,11 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "projection.agentStopped": "已由你停止；历史、Todo 和证据仍保留",
   "projection.agentWaitingExternal": "正在等待外部条件",
   "projection.confirmAgentDecision": "请确认 Agent 下一步需要的权限或决策",
-  "projection.events24h": "24 小时内 {count} 个事件",
   "projection.firstReadOnlyAdapterCheck": "执行首次只读适配检查并保存进度",
-  "projection.goalVerified": "Goal 状态、Todo 与注册信息已验证",
-  "projection.latestRun": "最近运行",
-  "projection.latestValidation": "最近验证",
   "projection.nextUpdatePending": "等待 LoopX 更新下一步",
-  "projection.publicSafeProjection": "公开安全状态投影",
   "projection.refreshState": "刷新 LoopX 状态，确认当前进度仍然有效",
-  "projection.runEvidenceAvailable": "存在可查看的运行证据",
-  "projection.runRecorded": "最近一次 LoopX 运行已经记录",
   "projection.statusRefreshNeeded": "LoopX 状态需要刷新",
   "projection.todoStatusUpdated": "Todo 状态已经更新，正在确认下一步",
-  "projection.validationRecorded": "最近验证已经记录",
   "runs.completed": "已完成",
   "runs.failed": "需检查",
   "runs.interrupted": "已中断",
@@ -2094,9 +2085,12 @@ const zhCN: Record<WorkspaceMessageKey, string> = {
   "settings.eyebrow": "工作区偏好",
   "settings.general": "通用",
   "settings.goalConnections": "Goal 连接",
+  "settings.agentGroup": "Agent 与模型",
+  "settings.workspaceGroup": "工作区",
+  "settings.steward": "管家",
   "settings.language": "语言",
   "settings.modelProvider": "模型 Provider 配置",
-  "settings.globalCapabilities": "全局能力配置",
+  "settings.globalCapabilities": "能力中心",
   "settings.languageDescription": "选择 LoopX Desktop 工作区使用的界面语言。",
   "settings.languageEnglishDescription": "使用英文显示导航、设置和工作区控件。",
   "settings.languageEnglish": "English",
@@ -2259,10 +2253,19 @@ function formatMessage(template: string, values?: Record<string, string | number
 
 export function readWorkspaceLocale(): WorkspaceLocale {
   try {
-    return window.localStorage.getItem(workspaceLocaleStorageKey) === "en" ? "en" : "zh-CN";
+    const stored = window.localStorage.getItem(workspaceLocaleStorageKey);
+    if (stored === "en" || stored === "zh-CN") return stored;
   } catch {
-    return "zh-CN";
+    // Browser preferences still apply when persistent storage is unavailable.
   }
+  if (typeof navigator === "undefined") return "en";
+  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const language of languages) {
+    const primaryLanguage = language?.split("-")[0].toLowerCase();
+    if (primaryLanguage === "en") return "en";
+    if (primaryLanguage === "zh") return "zh-CN";
+  }
+  return "en";
 }
 
 export type WorkspaceTranslate = (key: WorkspaceMessageKey, values?: Record<string, string | number>) => string;

@@ -67,7 +67,7 @@ export const automationCadenceScenario = {
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       const target = page.locator(".personal-settings-goal-target");
       await target.getByText("Product Release", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "全局能力配置" }).click();
+      await page.getByRole("button", { name: "能力中心" }).click();
       if (await target.count()) throw new Error("Machine settings retained a Goal-specific target");
       await page.getByRole("button", { name: "自动执行间隔" }).click();
       await target.getByText("Product Release", { exact: true }).waitFor();

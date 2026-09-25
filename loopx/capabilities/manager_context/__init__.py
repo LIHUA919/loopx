@@ -10,6 +10,7 @@ from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.goals.activation import goal_is_stopped
 
 # Retained imports are the shipped manager-context API; the shared owner is neutral.
 from ...control_plane.collaboration.inbox import (
@@ -75,12 +76,17 @@ def authority(
             raise ValueError("invalid registry")
     except (OSError, ValueError, TypeError):
         return {"mode": "unavailable", "targets": []}
-    available = {
-        (g["id"], a): g
-        for g in registry.get("goals", [])
-        if isinstance(g, dict) and g.get("id")
-        for a in registered_agent_ids_for_goal(g)
-    }
+    available = set()
+    for goal in registry.get("goals", []):
+        if not isinstance(goal, dict) or not goal.get("id"):
+            continue
+        try:
+            if goal_is_stopped(goal):
+                continue
+        except ValueError:
+            # An unreadable activation state cannot grant a new handoff.
+            continue
+        available.update((goal["id"], agent) for agent in registered_agent_ids_for_goal(goal))
     scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
     if scope["private_conversation"] and turn.get("origin") == "web":
         allowed = {target for target in available
@@ -112,7 +118,7 @@ def authority(
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return {"mode": "unavailable", "targets": []}
     targets = [
-        {"goal_id": g, "agent_id": a} for g, a in sorted(allowed & set(available))
+        {"goal_id": g, "agent_id": a} for g, a in sorted(allowed & available)
     ]
     return {
         "mode": "context_only",

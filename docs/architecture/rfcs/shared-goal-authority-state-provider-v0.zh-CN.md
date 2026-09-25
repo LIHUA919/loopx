@@ -20,6 +20,12 @@
 - 语言说明：[英文版](./shared-goal-authority-state-provider-v0.md)与本中文版互为
   语义镜像；两者不一致属于缺陷
 
+## 当前交付边界（2026-09-24）
+
+剩余 PR 估算已按 `d64c4d377` 和开放 PR 重新核对，旧“5–8 / 6–8 / 7–9”数字撤回。
+已合入实现、六个相关在途 PR、四个拟新增批次（含当前完整来源传输）和 D1–D3
+验收分开记录；四批不是承诺总计只剩四个 PR。唯一当前清单见[实现核对与退出证据](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)。
+
 ## 管家规模化的持久化路线（2026-09-16）
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R5 复用本 RFC 的 D1 投影、D2 真实 backend/容量/适用十日 soak、D3 fenced cutover；R6 再把所选 shared profile 接入认证的本地/云端路径。R1–R3 可在已支持 profile 上前进，不等待 PostgreSQL 或整 Goal 默认晋升。
@@ -31,7 +37,7 @@
 终结 caller 现将审核与验证绑定 canonical 来源，历史回执恢复不再依赖私有 argv。
 Agent 完成和 Monitor 停止复用普通编辑的当前 head 显示确认。
 [调用与恢复合同](../../reference/canonical-terminal-review.zh-CN.md)。此批推进 L2/L5，
-未闭合 executor-held fence、D1–D3 或默认 onboarding，下文有条件的 7–9 批估算不变。
+未闭合 executor-held fence、D1–D3 或默认 onboarding；剩余工作使用当前核对表。
 
 本地 registry witness 现经同一 TS owner 覆盖 canonical create/claim/update、
 Monitor poll 与 terminal mutation；File、SQLite、service-injected PostgreSQL
@@ -2528,8 +2534,8 @@ provider 确认；权威空集合不回退到陈旧 Markdown。Legacy 与预览�
 也已合并，#4224 继续由 contributor 负责 D2。组合前重读实际 head，不能把已合并
 祖先再次算成新变化。
 
-下表编号表示**计划 PR 包**，不是预留 GitHub 编号。可沿真实 effect／兼容边界拆分；
-仅换语言或移动 helper 不构成一个包的退出条件。
+下表编号保留**领域归属和验收边界**，不表示剩余 PR 或预留 GitHub 编号。
+新增实现以当前核对表为准；仅换语言或移动 helper 不构成退出条件。
 
 | 波次／PR 包 | 完整交付内容与 TS 归属收益 | 依赖与退出证据 |
 | --- | --- | --- |
@@ -2547,28 +2553,13 @@ provider 确认；权威空集合不回退到陈旧 Markdown。Legacy 与预览�
 规划 #4920 已合并，快照分页 #4922、SQLite runtime 准入 #4960 与刷新显示恢复 #4961 也已
 合并，后续应验收组合 head，而不是继续沿用旧的 PR hold；SQLite 读取证明优化 #4931 仍在
 评审。#4224 实测 1 MiB receipt/scan 超预算，恢复和自然时间资格仍有缺项，不能将优化 PR
-当成 D2 通过。本次摘要规则收口推进下表中第 4 项投影恢复边界，但没有把其他调用方或默认
-切换标记完成；数量估计应在组合 head 验收后更新，不能按 helper 迁移数量机械扣减。
+当成 D2 通过。摘要规则收口推进投影恢复边界，但没有把其他调用方或默认切换标记完成；
+剩余工作按当前核对表归类，不再按 helper 迁移数量机械扣减。
 
-**开发节奏以证据推进。** 2026-09-23 将旧计划的五类粗粒度交付包细化为
-**七个明确 PR 边界；D2 和迁移各拆两批时最多九个**，其中包含本批一致性分页。
-独立列出分页与投影恢复、caller 与 executor effect，是为了让验收和回滚更清楚，
-不是以合并数量替代资格证明。
-
-| 顺序 / PR | 归属与改动 | 退出证据 |
-| --- | --- | --- |
-| 1. canonical caller 收尾 | L2/L4：盘点 CLI/Turn/Chat，补齐带 lease 的 metadata、委托和 effect-owned 动作，调用既有 TS 事务，删除替代的 Python admission。 | 实际命令在 legacy/File/SQLite 成功与拒绝一致，含权限和恢复反例。 |
-| 2. 外部 effect 执行围栏 | L3：执行真实外部 effect 期间持有并重新验证当前 execution proof，覆盖接管、超时、进程退出和不确定完成。 | 旧 executor 不能执行或结算被围栏的 effect；执行与业务 receipt 恢复仍有明确 owner。 |
-| 3. canonical 一致性分页（本批） | T3/L5：完整 Todo、归档、lease 和验收 guard 分页，绑定 identity/revision/query/progress，不提高 RPC 上限。 | File/SQLite 真实 RPC/CLI 与跨 provider conformance 无丢失；并发提交拒绝混合版本，不代表活跃 Goal 已晋升。 |
-| 4. 投影恢复与客户端闭合 | L5/D1：审计 Turn/quota/Dashboard/Chat/Lark，复用 outbox 完成永久展示新鲜度与恢复。 | 缺失、陈旧、权威空状态、pending 与打包客户端读回；删除最后的晋升后 fallback caller。 |
-| 5. SQLite D2（1–2 PR） | #4224/#4328 contributor owner；先对齐已有 capacity PR，再补同一 profile 的 crash/restore/upgrade/platform 证据。 | capacity ledger 和单独授权、真实经过 >=10 天的合成 soak；缺失项仍为 hold。 |
-| 6. capture 与整 Goal 迁移回滚（1–2 PR） | L7/L8：混合 writer/event 连续性、drain、旧 writer 围栏、canonical 读回、fenced export/rollback 和 cohort 迁移。 | 一份 D3 packet 绑定 profile/lineage/source digest/command inventory；存量 cohort 切换仍需明确授权。 |
-| 7. 默认/onboarding 与有界 Python 退役 | L9/T4：新 Goal、settings、installer 与打包客户端选择合格本地 profile；发布迁移和停用指导，删除已替代的最后业务 writer。 | L8 整体验证、回滚和受影响入口读回；保留仍有调用方的渲染、宿主执行与 import/export。 |
-
-第 3 项合入后，按此计划还剩 **6 个主 PR，必要时 8 个**。caller 盘点可能揭示其他
-缺失 effect，因此这不是数量保证。Python 业务规则随 TS owner 收敛即可删除，
-不把删除全部 Python 当作默认化门槛。PostgreSQL 的 service、credential、tenant、
-restore、capacity 资格是独立中期路线；跨 provider 测试通过不等于生产可切换。
+**当前开发节奏。** 上述 L1–L9 是领域分工，不是剩余 PR 数。原七行 PR 计划
+已被[逐项核对表](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)取代：已合入的分页与恢复不再列为新 PR，
+caller 在途工作先整合，D2 自然时间资格单列。新增代码依次按完整来源、executor fence、
+event writer/整 Goal 迁移、默认/有界 Python 退役四个边界组织。
 
 本批的[分页合同](../../reference/canonical-snapshot-pagination.md)共用既有 TS
 collection validation 与 acceptance owner；Python 只校验并组装传输，保持公开返回
@@ -2602,7 +2593,7 @@ User gate/action 及 Agent claim 范围规则；legacy 和 canonical 消费者�
 列表谓词已删除。完整来源上的 resume/succession 与筛选后的计数不受展示上限影响。
 这只闭合 L5 的一个消费者，不代表 D1 永久新鲜度或 provider 晋升。见[读取合同](../../reference/todo-work-counts.md)。
 剩余 caller/executor、consumer recovery、contributor D2、capture/整 Goal 演练和默认
-onboarding 仍按 **7–9 个完整 PR** 条件估计，不能按本次修复机械递减。
+onboarding 按当前核对表分别归为代码、在途 PR 和验收活动，不再混算 PR 数。
 
 ## 附录 D：执行账本
 
@@ -2616,3 +2607,7 @@ onboarding 仍按 **7–9 个完整 PR** 条件估计，不能按本次修复机
 [`2026-09-19-shared-goal-authority-entries-get-a-ledger.zh-CN.md`](ledger/shared-goal-authority-state-provider-v0/2026-09-19-shared-goal-authority-entries-get-a-ledger.zh-CN.md)。
 
 `examples/docs-governance-smoke.py` 校验条目的命名、每条旁边的中文镜像，以及账本目录所指向的这份附录确实存在。
+
+2026-09-24：[完整源捕获的 TS 组装与剩余交付包](ledger/shared-goal-authority-state-provider-v0/2026-09-24-source-capture.zh-CN.md)统一源构造、身份拒绝和当前图成员规则；不关闭 L7/D2/D3 或启用默认 provider。
+
+2026-09-24: [带租约接力与剩余本地默认交付包](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.zh-CN.md).

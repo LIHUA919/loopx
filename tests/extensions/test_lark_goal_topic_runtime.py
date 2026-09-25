@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1128,6 +1129,183 @@ def test_runtime_service_uses_one_consumer_for_reused_app_profile(
     service.close()
     assert stopped.wait(1)
     assert service.active_profiles() == []
+
+
+def test_same_lark_app_aliases_share_one_machine_consumer(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    started = threading.Event()
+    calls: list[str] = []
+    app_id = "cli_public_fixture"
+
+    def snapshot(profile: str) -> dict[str, Any]:
+        return {
+            "target_payload": {
+                "targets": {
+                    profile: {
+                        "enabled": True,
+                        "channel": {"chat_id": "oc_public_fixture"},
+                        "identity": {
+                            "sender_profile": profile,
+                            "bot_app_id": app_id,
+                            "cli_bin": "fake-lark",
+                        },
+                    }
+                }
+            },
+            "binding_payloads": {
+                "goal-alpha": {
+                    "bindings": {
+                        "goal-alpha": {
+                            "goal_id": "goal-alpha",
+                            "provider": "lark",
+                            "enabled": True,
+                            "target_ref": profile,
+                            "topic": {"root_message_id": "om_topic_alpha"},
+                        }
+                    }
+                }
+            },
+            "goal_contexts": {},
+        }
+
+    def fake_stream(**kwargs: Any) -> dict[str, Any]:
+        calls.append(str(kwargs["profile"]))
+        started.set()
+        kwargs["stop"].wait(2)
+        return {"ok": True, "status": "stopped"}
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", fake_stream)
+    first = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("app-id-profile"),
+        runtime_root=tmp_path / "first",
+        runtime_controller=object(),
+    )
+    second = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("alias-profile"),
+        runtime_root=tmp_path / "second",
+        runtime_controller=object(),
+    )
+    first.refresh()
+    assert started.wait(1)
+    second.refresh()
+    for _ in range(100):
+        if second.health_snapshot().get("alias-profile", {}).get("status") == "standby":
+            break
+        threading.Event().wait(0.01)
+    assert calls == ["app-id-profile"]
+    assert second.health_snapshot()["alias-profile"]["error_code"] == (
+        "lark_event_consumer_owned_elsewhere"
+    )
+    second.close()
+    first.close()
+
+    successor = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot("alias-profile"),
+        runtime_root=tmp_path / "successor",
+        runtime_controller=object(),
+    )
+    successor.refresh()
+    for _ in range(100):
+        if len(calls) == 2:
+            break
+        threading.Event().wait(0.01)
+    assert calls == ["app-id-profile", "alias-profile"]
+    successor.close()
+
+
+def test_alias_consumer_routes_all_chats_of_its_bot_app() -> None:
+    from loopx.extensions.lark.goal_topic_runtime import _target_for_profile_chat
+    from loopx.extensions.lark.team_plan_confirmation import active_profile_chat_ids
+
+    snapshot = {
+        "target_payload": {
+            "targets": {
+                profile: {
+                    "enabled": True,
+                    "channel": {"chat_id": chat_id},
+                    "identity": {
+                        "sender_profile": profile,
+                        "bot_app_id": "cli_public_fixture",
+                    },
+                }
+                for profile, chat_id in (
+                    ("canonical", "oc_first"),
+                    ("alias", "oc_second"),
+                )
+            }
+        },
+        "binding_payloads": {
+            profile: {
+                "bindings": {
+                    profile: {
+                        "goal_id": profile,
+                        "provider": "lark",
+                        "enabled": True,
+                        "target_ref": profile,
+                    }
+                }
+            }
+            for profile in ("canonical", "alias")
+        },
+    }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+        )[0]
+        == "alias"
+    )
+    assert active_profile_chat_ids(snapshot, "canonical") == [
+        "oc_first",
+        "oc_second",
+    ]
+    snapshot["target_payload"]["targets"]["canonical"]["channel"]["chat_id"] = "oc_second"
+    for profile in ("canonical", "alias"):
+        snapshot["binding_payloads"][profile]["bindings"][profile]["topic"] = {
+            "root_message_id": f"om_{profile}"
+        }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            root_id="om_alias",
+            binding_payloads=snapshot["binding_payloads"],
+        )[0]
+        == "alias"
+    )
+    for profile in ("canonical", "alias"):
+        snapshot["binding_payloads"][profile]["bindings"][profile]["routing"] = {
+            "conversation_kind": "manager"
+        }
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            binding_payloads=snapshot["binding_payloads"],
+        )
+        is None
+    )
+    assert (
+        _target_for_profile_chat(
+            snapshot["target_payload"],
+            profile="canonical",
+            bot_app_id="cli_public_fixture",
+            chat_id="oc_second",
+            active_target_refs={"alias"},
+        )[0]
+        == "alias"
+    )
 
 
 def test_runtime_service_restarts_profile_when_callback_chats_change(
@@ -2323,6 +2501,70 @@ def test_manager_receives_reaction_before_answer_and_preserves_sender(tmp_path, 
     before = list(stages)
     assert runtime.process_lark_goal_topic_event(**kwargs)["status"] == "already_acknowledged"
     assert stages == before
+
+
+def test_concurrent_manager_delivery_answers_one_source_message_once(tmp_path, monkeypatch):
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "bindings.json"
+    _seed_legacy_topic(target_path, binding_path)
+    original_decide = runtime.decide_lark_topic_event
+
+    def manager_decision(**kwargs):
+        result = original_decide(**kwargs)
+        result["route"] = {
+            **result["route"],
+            "conversation_kind": "manager",
+            "authority_mode": "turn_authorized",
+            "ingress_mode": "session_queue",
+        }
+        return result
+
+    monkeypatch.setattr(runtime, "decide_lark_topic_event", manager_decision)
+    monkeypatch.setattr(
+        runtime, "ensure_lark_event_inbox_received_reaction",
+        lambda **_kwargs: {"ok": True, "status": "already_received"},
+    )
+    entered, release = threading.Event(), threading.Event()
+    answers: list[str] = []
+    state: dict[str, Any] = {}
+
+    def answer(_route, _text):
+        answers.append("answer")
+        entered.set()
+        assert release.wait(5)
+        return "One verified answer."
+
+    kwargs = dict(
+        target_payload=read_goal_channel_targets(target_path),
+        binding_payloads={"goal-alpha": read_goal_channel_binding(binding_path)},
+        event={
+            "event_id": "evt_one_source", "message_id": "om_one_source",
+            "chat_id": "oc_public_fixture", "root_id": "om_topic_alpha",
+            "create_time": "2026-08-14T21:00:00Z", "content": "@linkmacbot question",
+            "sender_type": "user", "sender_id": "ou_owner_fixture",
+        },
+        runtime_root=tmp_path / "runtime",
+        answer=answer,
+        reply_runner=_reply_runner(state),
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runtime.process_lark_goal_topic_event, **kwargs)
+        assert entered.wait(5)
+        second = pool.submit(runtime.process_lark_goal_topic_event, **kwargs)
+        try:
+            with pytest.raises(FutureTimeoutError):
+                second.result(timeout=0.1)
+        finally:
+            release.set()
+        assert first.result(timeout=5)["status"] == "replied_and_acknowledged"
+        assert second.result(timeout=5)["status"] == "already_acknowledged"
+    assert answers == ["answer"]
+    sends = [
+        call for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call
+    ]
+    assert len(sends) == 1
 
 
 @pytest.mark.parametrize("error_code,label", [

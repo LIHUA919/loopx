@@ -76,6 +76,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                  'reason',
                                  'completed_at',
                                  'completion_turn_key',
+                                 'completion_result',
                                  'updated_at',
                                  'superseded_by',
                                  'completion_validation_required',
@@ -201,7 +202,13 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                 'lifecycle_reentry_result_schema': 'todo_lifecycle_settlement_reentry_v0'},
  'compatibility': {'unknown_field_policy': 'reject',
                    'field_removal_policy': 'maintainer_approval_required',
-                   'markdown_role': 'human_workbench_and_compatibility_projection'}})
+                   'markdown_role': 'human_workbench_and_compatibility_projection'},
+ 'source_transfer_protocol': {'request_schema': 'loopx_coordination_source_transfer_v0',
+                              'result_schema': 'loopx_coordination_source_transfer_result_v0'},
+ 'source_transfer_limits': {'max_bytes': 16777216}})
+COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_source_transfer_v0'
+COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA: Final[str] = 'loopx_coordination_source_transfer_result_v0'
+
 LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA: Final[str] = 'loopx_local_coordination_todo_read_request_v0'
 LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA: Final[str] = 'loopx_local_coordination_todo_read_result_v0'
 LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA: Final[str] = 'loopx_local_coordination_todo_list_request_v0'

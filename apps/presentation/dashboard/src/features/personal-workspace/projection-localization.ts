@@ -6,19 +6,11 @@ export type ProjectionMessageKey =
   | "projection.agentStopped"
   | "projection.agentWaitingExternal"
   | "projection.confirmAgentDecision"
-  | "projection.events24h"
   | "projection.firstReadOnlyAdapterCheck"
-  | "projection.goalVerified"
-  | "projection.latestRun"
-  | "projection.latestValidation"
   | "projection.nextUpdatePending"
-  | "projection.publicSafeProjection"
   | "projection.refreshState"
-  | "projection.runEvidenceAvailable"
-  | "projection.runRecorded"
   | "projection.statusRefreshNeeded"
-  | "projection.todoStatusUpdated"
-  | "projection.validationRecorded";
+  | "projection.todoStatusUpdated";
 
 export type ProjectionTranslate = (
   key: ProjectionMessageKey,
@@ -69,26 +61,4 @@ export function agentStatusSentence(status: ProjectionAgentStatus, t: Projection
     waiting_external: "projection.agentWaitingExternal",
   };
   return t(keyByStatus[status]);
-}
-
-export function runEvidenceCopy(
-  {
-    eventCount,
-    hasArtifact,
-    hasLatestValidation,
-  }: {
-    eventCount: number;
-    hasArtifact: boolean;
-    hasLatestValidation: boolean;
-  },
-  t: ProjectionTranslate,
-) {
-  return {
-    label: t(hasLatestValidation ? "projection.latestValidation" : "projection.latestRun"),
-    metadata: eventCount > 0
-      ? t("projection.events24h", { count: eventCount })
-      : hasArtifact
-        ? t("projection.runEvidenceAvailable")
-        : t("projection.publicSafeProjection"),
-  };
 }

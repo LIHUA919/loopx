@@ -57,6 +57,29 @@ def _release_id(requested: str | None, releases_dir: Path) -> str:
     return candidate
 
 
+def _ensure_chat_bundle(
+    *,
+    bundle_builder: Path,
+    source_root: Path,
+    python: Path,
+    pointer: Path,
+) -> None:
+    command = [str(python), str(bundle_builder), "ensure"]
+    if pointer.is_file():
+        pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
+        previous_root = pointer_payload.get("release_root")
+        if isinstance(previous_root, str) and previous_root.strip():
+            previous = Path(previous_root) / "loopx/web/chat"
+            if (previous / "index.html").is_file():
+                command.extend(["--previous", str(previous)])
+    subprocess.run(
+        command,
+        cwd=source_root,
+        check=True,
+        stdout=sys.stderr,
+    )
+
+
 def _copy_release(source_root: Path, target: Path) -> None:
     ignored = shutil.ignore_patterns(
         "__pycache__", "*.pyc", "node_modules", ".next", "dist", "build", "coverage"
@@ -277,13 +300,13 @@ def install_windows(
 
     with exclusive_file_lock(install_root / ".install-guard"):
         if bundle_builder.is_file():
-            command = [str(python), str(bundle_builder), "ensure"]
             pointer = install_root / "current-release.json"
-            if pointer.is_file():
-                previous = Path(json.loads(pointer.read_text(encoding="utf-8"))["release_root"]) / "loopx/web/chat"
-                if (previous / "index.html").is_file():
-                    command.extend(["--previous", str(previous)])
-            subprocess.run(command, cwd=source_root, check=True)
+            _ensure_chat_bundle(
+                bundle_builder=bundle_builder,
+                source_root=source_root,
+                python=python,
+                pointer=pointer,
+            )
         release_id = _release_id(requested_release_id, releases_dir)
         release_root = releases_dir / release_id
         temporary = Path(tempfile.mkdtemp(prefix=f".{release_id}.", dir=releases_dir))

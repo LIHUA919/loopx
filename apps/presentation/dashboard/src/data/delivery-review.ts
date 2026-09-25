@@ -94,7 +94,7 @@ export function reviewNodeColumn(node: ReviewNode) {
 }
 
 type EnabledContract = Extract<GoalAcceptanceContract, { enabled: true }>;
-type ContractExportLabels = Record<"title" | "boundary" | "source" | "revision" | "digest" | "objective" | "criteria"
+type ContractExportLabels = Record<"title" | "boundary" | "scope" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
   | "nonGoals" | "tasks" | "verification" | "unknown" | "noTasks" | "noCriteria" | "notApplicable"
   | "heldTasks" | "receipt" | "receiptNote" | "operation" | "verificationScope" | "allCriteria" | "passed" | "failed" | "exitCode", string> & {
   taskState: Record<EnabledContract["tasks"][number]["state"], string>;
@@ -158,6 +158,7 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
   if (contract?.enabled === true) {
     const copy = labels.contract;
     rows.push("", `## ${copy.title}`, "", copy.boundary,
+      `${copy.scope}: ${contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}`,
       `${copy.source}: ${line(snapshot.goal_id)}`, `${copy.revision}: ${contract.revision}`, `${copy.digest}: ${line(contract.digest)}`,
       "", `### ${copy.objective}`, line(contract.objective || copy.unknown), "", `### ${copy.criteria}`);
     if (contract.non_goals.length) rows.push(`${copy.nonGoals}: ${line(contract.non_goals.join("; "))}`);

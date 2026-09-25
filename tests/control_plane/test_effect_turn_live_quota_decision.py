@@ -1160,11 +1160,17 @@ def test_retained_selection_reentry_stays_packet_free_and_signed(
     assert envelope["writeback"]["spend_after_validation"] is False
 
 
+@pytest.mark.parametrize(
+    ("advancement_count", "requires_replan"),
+    [(1, False), (14, False), (15, True)],
+)
 def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    advancement_count: int,
+    requires_replan: bool,
 ) -> None:
-    """A retained choice must see the same fresh frontier that deferred it."""
+    """Refresh retained choices before applying the claimed advancement threshold."""
 
     agent_id = "agent-provider-frontier"
     selected_todo_id = "todo_provider_selected"
@@ -1199,12 +1205,14 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
             "text": (
                 "[P1] Continue the selected delivery."
                 if index == 0
-                else f"[P1] Preserve blocker context {index}."
+                else f"[P1] Provider frontier item {index}."
             ),
             "role": "agent",
             "status": "open",
             "priority": "P1",
-            "task_class": "advancement_task" if index == 0 else "blocker",
+            "task_class": (
+                "advancement_task" if index < advancement_count else "blocker"
+            ),
             "claimed_by": agent_id,
             "updated_at": f"2026-09-{(index % 9) + 1:02d}T00:00:00Z",
         }
@@ -1247,9 +1255,14 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
     )
 
     assert reads == ["provider"]
-    assert payload["decision"] == "autonomous_replan_required"
+    assert payload["selected_todo"]["todo_id"] == selected_todo_id
     assert payload["retained_action_selection"]["disposition"] == (
         "preserve_retained_todo"
     )
-    assert payload["replan_action_packet"]["obligation_id"]
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    if requires_replan:
+        assert payload["decision"] == "autonomous_replan_required"
+        assert payload["replan_action_packet"]["obligation_id"]
+    else:
+        assert payload["decision"] == "run"
+        assert not payload.get("replan_action_packet")

@@ -923,6 +923,28 @@ export function readLoopXTeamWork(sessionId: string, operationId: string) {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
   });
 }
+export type ManagedGoalResultRow = {
+  todo_id: string; title: string; producer_agent_id: string; sha256: string;
+  content_type: string; size_bytes: number; completed_at?: string | null;
+};
+export type ManagedGoalResultPage = {
+  ok: true; items: ManagedGoalResultRow[]; total: number; next_cursor: string | null;
+  unavailable_count: number; unavailable_todo_ids: string[];
+};
+export type ManagedGoalResultRead = {
+  ok: true; goal_id: string; todo_id: string; text: string;
+  result: {sha256: string; content_type: string; producer_agent_id: string};
+};
+export function fetchManagedGoalResults(goalId: string, cursor?: string) {
+  const params = new URLSearchParams({goal_id: goalId});
+  if (cursor) params.set("cursor", cursor);
+  return requestJson<ManagedGoalResultPage>(`/api/chat/goal-results?${params}`);
+}
+export function readManagedGoalResult(goalId: string, todoId: string) {
+  return requestJson<ManagedGoalResultRead>(
+    `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
+  );
+}
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
 export function delegationStateLabel(row: {status: string; worker_active?: boolean; recovery_required: boolean | null}, zh: boolean) {
   if (row.status === "unavailable") return zh ? "无法核验" : "Unavailable";

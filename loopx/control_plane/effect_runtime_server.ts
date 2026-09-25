@@ -115,6 +115,11 @@ function writeResponse(socket: Socket, response: JsonObject): void {
 const server = createServer((socket) => {
   resetIdleTimer(server);
   socket.setEncoding("utf8");
+  // A caller may close while a response is still buffered (for example after
+  // reaching its byte budget). That socket's failure must not kill the shared
+  // runtime or another in-flight operation. Business receipt recovery stays
+  // with the caller; disconnecting never retries or reverses the handler.
+  socket.on("error", () => socket.destroy());
   let raw = "";
   let receivedBytes = 0;
   socket.on("data", (chunk: string) => {

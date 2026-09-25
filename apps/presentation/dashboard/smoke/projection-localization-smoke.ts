@@ -1,7 +1,6 @@
 import {
   agentStatusSentence,
   projectionSentence,
-  runEvidenceCopy,
 } from "../src/features/personal-workspace/projection-localization.js";
 
 type Values = Record<string, string | number>;
@@ -14,19 +13,11 @@ const english = {
   "projection.agentStopped": "Stopped by you; history, Todos, and evidence are preserved",
   "projection.agentWaitingExternal": "Waiting for an external condition",
   "projection.confirmAgentDecision": "Confirm the permission or decision the Agent needs next",
-  "projection.events24h": "{count} events in the last 24 hours",
   "projection.firstReadOnlyAdapterCheck": "Run the first read-only adapter check and save progress",
-  "projection.goalVerified": "Goal state, Todos, and registration information verified",
-  "projection.latestRun": "Latest run",
-  "projection.latestValidation": "Latest validation",
   "projection.nextUpdatePending": "Waiting for LoopX to update the next step",
-  "projection.publicSafeProjection": "Public-safe status projection",
   "projection.refreshState": "Refresh LoopX status and confirm the current progress is still valid",
-  "projection.runEvidenceAvailable": "Run evidence is available",
-  "projection.runRecorded": "The latest LoopX run is recorded",
   "projection.statusRefreshNeeded": "LoopX status needs to be refreshed",
   "projection.todoStatusUpdated": "Todo status updated; confirming the next step",
-  "projection.validationRecorded": "The latest validation is recorded",
 } as const;
 
 const chinese = {
@@ -96,17 +87,5 @@ equal(
   "Stopped by you; history, Todos, and evidence are preserved",
   "English stopped status",
 );
-
-const latestRun = runEvidenceCopy({ eventCount: 0, hasArtifact: true, hasLatestValidation: false }, en);
-equal(latestRun.label, "Latest run", "English latest-run label");
-equal(latestRun.metadata, "Run evidence is available", "English run-evidence metadata");
-
-const latestValidation = runEvidenceCopy({ eventCount: 3, hasArtifact: false, hasLatestValidation: true }, en);
-equal(latestValidation.label, "Latest validation", "English latest-validation label");
-equal(latestValidation.metadata, "3 events in the last 24 hours", "English event-count metadata");
-
-const chineseRun = runEvidenceCopy({ eventCount: 0, hasArtifact: false, hasLatestValidation: false }, zhCN);
-equal(chineseRun.label, "最近运行", "Chinese latest-run label");
-equal(chineseRun.metadata, "公开安全状态投影", "Chinese public-safe metadata");
 
 console.log("projection localization smoke passed");

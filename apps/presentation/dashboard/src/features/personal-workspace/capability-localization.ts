@@ -13,11 +13,11 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string }
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
     manager_runtime: {
-      displayName: "Manager runtime",
+      displayName: "Runtime",
       description: "Selects the persistent host-tool profile used by owner manager conversations.",
     },
     steward_executor: {
-      displayName: "Steward executor",
+      displayName: "Model and executor",
       description: "Guides the steward executor, model, and selection boundary for this machine. A pinned route blocks substitution; a flexible pool permits only authorized fallback.",
     },
     todo_replan_cadence: { displayName: "Goal review cadence", description: "Configures the Goal review cadence." },
@@ -77,11 +77,11 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   },
   "zh-CN": {
     manager_runtime: {
-      displayName: "管家 Runtime",
+      displayName: "运行环境",
       description: "选择管家会话持续生效的宿主工具模式。",
     },
     steward_executor: {
-      displayName: "管家执行器",
+      displayName: "模型与执行器",
       description: "配置本机管家的执行器、模型与选择边界；锁定路径禁止替代，灵活池只允许在已授权范围内回退。",
     },
     todo_replan_cadence: { displayName: "Goal 复核周期", description: "配置 Goal 的复核周期。" },

@@ -1,3 +1,4 @@
+import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
@@ -125,11 +126,17 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     throw new ShadowManagementError("shadow_source_runtime_root_mismatch");
   }
-  exact(request.projection, ["schema_version", "goal_id", "source_authority", "handoff_mode", "todos", "leases", "todo_read_model", "partitions"], "source projection");
-  if (request.projection.schema_version !== schemas.LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA ||
-      request.projection.goal_id !== request.goal_id || request.projection.source_authority !== "legacy_markdown_and_task_lease" ||
-      typeof request.projection.handoff_mode !== "string" ||
-      !canonicalAuthorityBytes(request.projection.partitions).equals(canonicalAuthorityBytes({ todos: null, leases: null }))) {
+  const rebuilt = projectCoordinationSource({
+    schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA, kind: "snapshot",
+    goal_id: request.goal_id, handoff_mode: request.projection.handoff_mode,
+    todos: request.projection.todos, leases: request.projection.leases,
+    read_model_schema: canonicalAuthorityObject(request.projection.todo_read_model, "source Todo read model").schema_version,
+  }).projection as JsonObject;
+  // Assembly publishes the current manifest. A persisted pre-extension
+  // manifest remains valid under the existing reader compatibility rule;
+  // verify it before retaining its exact bytes, never silently upgrade it.
+  rebuilt.todo_read_model = validateCoordinationTodoReadModel(request.projection, request.goal_id);
+  if (!canonicalAuthorityBytes(rebuilt).equals(canonicalAuthorityBytes(request.projection))) {
     throw new ShadowManagementError("source_projection_invalid");
   }
   const bytes = await optionalBytes(String(snapshot.state_path));
@@ -142,10 +149,7 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
   }
   const inventory: JsonObject[] = [];
   const leases: JsonObject[] = [];
-  const currentTodoIds = new Set(
-    (request.projection.todos as JsonObject[]).filter(todo => todo.archive_state === "active").map((todo) =>
-      String(canonicalAuthorityObject(todo, "source Todo").todo_id)),
-  );
+  const currentTodoIds = currentGraphTodoIds(request.projection.todos as JsonObject[]);
   // ASCII filenames must use the same ordinal order as Python's source snapshot.
   const leaseNames = names.filter((name) => /^[A-Za-z0-9_.-]+\.json$/.test(name)).sort((left, right) => {
     if (left < right) return -1;
@@ -174,7 +178,6 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     const data = await optionalBytes(path);
     if ((data === null ? null : bytesDigest(data)) !== evidence.bytes_sha256) throw new ShadowManagementError("source_changed_retry");
   }
-  validateCoordinationTodoReadModel(request.projection, request.goal_id);
 }
 
 export async function bootstrapCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {

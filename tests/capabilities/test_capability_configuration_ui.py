@@ -7,7 +7,44 @@ from loopx.capabilities.configuration_ui import (
     capability_configuration_editor,
     resolve_capability_configuration,
 )
-from loopx.configuration_catalog import build_goal_configuration_catalog
+from loopx.capabilities.machine_configuration.builtins import (
+    build_builtin_machine_configuration_registry,
+)
+from loopx.configuration_catalog import (
+    build_configuration_capability_descriptors,
+    build_goal_configuration_catalog,
+)
+
+
+def test_machine_catalog_only_uses_dashboard_supported_editor_kinds() -> None:
+    """A Goal-only descriptor must not make the whole machine page unreadable."""
+
+    catalog = build_capability_configuration_catalog(
+        machine_namespaces=build_builtin_machine_configuration_registry().public_catalog()[
+            "namespaces"
+        ],
+        goal_features=build_configuration_capability_descriptors(),
+    )
+    supported = {
+        "boolean",
+        "number",
+        "select",
+        "string_list",
+        "text",
+        "periodic_report_schedule",
+    }
+    fields = {
+        (capability["capability_id"], field["key"]): field
+        for capability in catalog["capabilities"]
+        for field in capability["configuration_editor"]["fields"]
+    }
+    assert fields[("progress_review", "drift_threshold")]["input_kind"] == "number"
+    unsupported = {
+        key: field["input_kind"]
+        for key, field in fields.items()
+        if field["input_kind"] not in supported
+    }
+    assert unsupported == {}
 
 
 def test_periodic_report_editor_is_shared_across_machine_and_goal_scopes() -> None:

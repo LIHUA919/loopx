@@ -7,20 +7,22 @@ import {GoalTeamLineage} from "./goal-team-lineage";
 type Selection = {operationId: string; ref?: string; sha256?: string};
 const readableRows = (page: DelegationInventory) => page.items.filter(row =>
   row.operation_id && row.status === "accepted" && !row.recovery_required && row.artifacts?.length);
+const AUTO_DISCOVERY_PAGES = 3;
+const MAX_INSPECTED_PAGES = 10;
 
 /** Read-only entry in the original conversation, using the same scoped delegation API. */
 export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string; zh: boolean; refreshKey: string}) {
-  const [page, setPage] = useState<DelegationInventory | null>(null);
+  const [pages, setPages] = useState<DelegationInventory[]>([]);
   const [selection, setSelection] = useState<{result: DelegationReadback; artifact: TeamArtifact} | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
   const chosen = useRef<Selection | null>(null);
-  const cursor = useRef<string | undefined>(undefined);
+  const inspectedPages = useRef(1);
   const focusReport = useRef(false);
   const report = useRef<HTMLDivElement>(null);
-  useEffect(() => {chosen.current = null; cursor.current = undefined;}, [sessionId]);
-  useEffect(() => {void list(cursor.current); return () => {generation.current++;};}, [sessionId, refreshKey]);
+  useEffect(() => {chosen.current = null; inspectedPages.current = 1;}, [sessionId]);
+  useEffect(() => {void list(); return () => {generation.current++;};}, [sessionId, refreshKey]);
   useEffect(() => {
     if (selection && focusReport.current) {report.current?.focus(); focusReport.current = false;}
   }, [selection]);
@@ -39,21 +41,33 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
       setSelection({result: value, artifact});
     }
   }
-  async function list(nextCursor?: string, nextPage = false) {
+  async function list(nextPage = false) {
     const current = ++generation.current;
     if (nextPage) chosen.current = null;
-    cursor.current = nextCursor;
+    const minimumPages = Math.min(MAX_INSPECTED_PAGES, inspectedPages.current + (nextPage ? 1 : 0));
     focusReport.current = false;
-    setBusy(true); setError(""); setPage(null); setSelection(null);
+    setBusy(true); setError(""); setPages([]); setSelection(null);
     try {
-      const value = await fetchLoopXTeamWork(sessionId, nextCursor);
-      if (current !== generation.current) return;
-      setPage(value);
+      const observed: DelegationInventory[] = [];
+      let nextCursor: string | undefined;
+      while (observed.length < minimumPages ||
+          (!chosen.current && !observed.some(page => readableRows(page).length) && observed.length < AUTO_DISCOVERY_PAGES)) {
+        const value = await fetchLoopXTeamWork(sessionId, nextCursor);
+        if (current !== generation.current) return;
+        observed.push(value);
+        if (!value.has_more) break;
+        if (!value.next_cursor || (nextCursor && value.next_cursor <= nextCursor)) {
+          throw new Error(zh ? "执行分页无法继续核验；请重新读取。" : "Execution paging cannot be verified; refresh the list.");
+        }
+        nextCursor = value.next_cursor;
+      }
+      inspectedPages.current = observed.length;
+      setPages(observed);
       // Keep the reader's exact version. A refresh must never silently replace
       // it with a newer artifact or move to a different member's result.
       let target = chosen.current;
       if (!target) {
-        const first = readableRows(value)[0];
+        const first = observed.flatMap(readableRows)[0];
         const artifact = first?.artifacts?.find(row => isMarkdownArtifact(row.ref)) ?? first?.artifacts?.[0];
         if (first?.operation_id && artifact) target = {operationId: first.operation_id, ...artifact};
       }
@@ -74,7 +88,8 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
     catch (failure) {if (current === generation.current) setError(`${zh ? "无法核验，已清除上次报告。" : "Cannot verify; previous report cleared."} ${String(failure)}`);}
     finally {if (current === generation.current) setBusy(false);}
   }
-  const rows = page ? readableRows(page) : [];
+  const rows = pages.flatMap(readableRows);
+  const lastPage = pages.at(-1);
   const adoptions = selection?.result.adoptions ?? [];
   const currentAdoptions = adoptions.filter(row => row.state === "current").length;
   const unavailableAdoptions = adoptions.length - currentAdoptions;
@@ -89,18 +104,21 @@ export function GoalTeamResults({sessionId, zh, refreshKey}: {sessionId: string;
           : (zh ? "尚无采用记录 · 查看验收与版本依据" : "No adoption recorded · inspect acceptance and versions");
   return <section className="goal-team-results" aria-label={zh ? "团队成果" : "Team results"} aria-busy={busy}>
     <header><h3>{zh ? "团队成果" : "Team results"}</h3>
-      <button type="button" disabled={busy} onClick={() => void list(cursor.current)}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新成果" : "Refresh results"}</button></header>
+      <button type="button" disabled={busy} onClick={() => void list()}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新成果" : "Refresh results"}</button></header>
     {busy ? <p role="status">{zh ? "正在核验产物…" : "Verifying artifacts…"}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
-    {page && !page.page_readback_complete ? <p role="status">{zh ? "部分工作无法核验，请在团队执行中检查。" : "Some work cannot be verified; inspect Team execution."}</p> : null}
+    {pages.some(page => !page.page_readback_complete) ? <p role="status">{zh ? "已检查的工作中有无法核验的记录；当前报告只代表它自己的验收，不代表整个团队。" : "Some inspected work cannot be verified. This report reflects only its own acceptance, not the whole team."}</p> : null}
     <div className="goal-team-results-layout">
-      {page ? <nav className="goal-team-result-list" aria-label={zh ? "选择团队产物" : "Choose a team artifact"}>{rows.map(row => {
+      {pages.length ? <nav className="goal-team-result-list" aria-label={zh ? "选择团队产物" : "Choose a team artifact"}>{rows.map(row => {
         const artifact = row.artifacts!.find(item => isMarkdownArtifact(item.ref)) ?? row.artifacts![0];
         return <button type="button" key={row.record_id} disabled={busy} aria-label={`${row.agent_id} · ${artifact.ref}`} aria-pressed={selection?.result.operation_id === row.operation_id}
           onClick={() => void read(row.operation_id!, artifact)}><FileText size={16} aria-hidden="true"/><span><strong>{row.agent_id}</strong><small>{artifact.ref}</small></span><Check className="goal-team-result-check" size={14} aria-hidden="true"/></button>;
       })}
-        {!rows.length ? <p>{zh ? "本页没有可读取的已验收产物。" : "No accepted artifact is available on this page."}</p> : null}
-        {page.has_more && page.next_cursor ? <button type="button" disabled={busy} onClick={() => void list(page.next_cursor!, true)}>{zh ? "下一页成果" : "Next results page"}</button> : null}
+        {!rows.length ? <p>{zh ? "已检查的页面没有可读取的已验收产物。" : "No accepted artifact is available in the inspected pages."}</p> : null}
+        {lastPage?.has_more && lastPage.next_cursor && pages.length < MAX_INSPECTED_PAGES ? <button type="button" disabled={busy} onClick={() => void list(true)}>{zh ? "继续查找成果" : "Find more results"}</button> : null}
+        {lastPage?.has_more ? <p>{pages.length >= MAX_INSPECTED_PAGES
+          ? (zh ? "已达到有界查找上限；更多工作请在团队执行中按操作检查。" : "Bounded search limit reached; inspect further work by operation in Team execution.")
+          : (zh ? `已检查 ${pages.length} 页；还有未检查的工作。` : `${pages.length} pages inspected; more work remains unseen.`)}</p> : null}
       </nav> : null}
       {selection ? <div ref={report} tabIndex={-1} className="goal-team-result-reader" aria-label={zh ? "当前报告" : "Current report"}>
         <details><summary>{adoptionSummary}</summary><GoalTeamLineage result={selection.result} zh={zh} onInspect={operationId => void read(operationId)}/></details>

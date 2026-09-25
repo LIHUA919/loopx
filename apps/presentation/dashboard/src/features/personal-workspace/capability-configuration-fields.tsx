@@ -54,11 +54,14 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     );
   }
   const numeric = field.input_kind === "number";
+  const modelSuggestions = field.key === "executor_model"
+    ? ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] : [];
   return (
     <label htmlFor={id}>
       <span>{label}</span>
       <input
         id={id}
+        list={modelSuggestions.length ? `${id}-suggestions` : undefined}
         max={field.maximum}
         min={field.minimum}
         onChange={onChange ? (event) => onChange(field.key, numeric ? Number(event.target.value) : event.target.value) : undefined}
@@ -67,6 +70,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
         type={numeric ? "number" : "text"}
         value={typeof value === "number" || typeof value === "string" ? value : ""}
       />
+      {modelSuggestions.length ? <datalist id={`${id}-suggestions`}>{modelSuggestions.map((model) => <option key={model} value={model} />)}</datalist> : null}
     </label>
   );
 }

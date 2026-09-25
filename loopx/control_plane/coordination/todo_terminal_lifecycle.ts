@@ -104,6 +104,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly validation_receipt: JsonObject | null;
   readonly goal_acceptance_source_binding?: JsonObject | null;
   readonly goal_acceptance_validation_receipts?: unknown;
+  readonly completion_result?: JsonObject | null;
   readonly completion_policy_request: JsonObject | null;
   readonly dry_run: boolean;
   readonly now: Date;
@@ -476,6 +477,7 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     successor_intents: input.successor_intents,
     clear_claim: input.clear_claim,
     completion_policy_request: completionPolicyIdentity,
+    ...(input.completion_result == null ? {} : {completion_result: input.completion_result}),
     validation_declaration_sha256: input.user_update !== undefined ? null :
       input.validation_declaration_sha256 ?? (input.validation_declaration === null
         ? null : canonicalAuthoritySha256(input.validation_declaration)),
@@ -674,6 +676,27 @@ function acceptanceCompletionEvidence(head: JsonObject, input: ResolvedCoordinat
   });
   acceptanceRequire(evidence !== null, "Acceptance completion requirements disappeared.");
   return {source_binding: binding, ...evidence, validation_receipts: validationReceipts};
+}
+
+function acceptedCompletionResult(input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject, acceptanceEvidence: JsonObject | null): JsonObject | null {
+  if (input.completion_result == null) return null;
+  const row = canonicalAuthorityObject(input.completion_result, "completion result");
+  acceptanceRequire(input.command === "complete" && todo.role === "agent" &&
+    acceptanceEvidence !== null && input.actor_agent_id === todo.claimed_by,
+    "A result requires an independently accepted Agent Todo owned by its producer.");
+  const fields = ["content_type", "provider", "sha256", "size_bytes"];
+  acceptanceRequire(Object.keys(row).length === fields.length && fields.every(field => Object.hasOwn(row, field)) &&
+    row.provider === "local_runtime_v0" &&
+    ["application/json", "text/markdown", "text/plain"].includes(String(row.content_type)) &&
+    typeof row.sha256 === "string" && /^[a-f0-9]{64}$/.test(row.sha256) &&
+    Number.isSafeInteger(row.size_bytes) && Number(row.size_bytes) > 0 && Number(row.size_bytes) <= 128000,
+    "Completion result must be a bounded local content-addressed object.");
+  return {...row, schema_version: "loopx_completion_result_v0",
+    producer_agent_id: input.actor_agent_id, todo_id: input.todo_id,
+    completion_operation_id: input.operation_id,
+    acceptance_contract_digest: acceptanceEvidence.contract_digest,
+    acceptance_contract_revision: acceptanceEvidence.contract_revision};
 }
 
 /** Keep the runner's typed failure at the public boundary without exposing its
@@ -910,6 +933,7 @@ function terminalTarget(
   input: ResolvedCoordinationTodoTerminalLifecycleInput,
   completion: ReturnType<typeof reduceTodoCompletionTransaction> | null,
   successorIds: readonly string[],
+  acceptedResult: JsonObject | null,
 ): { todo: JsonObject; clear_fields: string[] } {
   const updatedAt = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");
   const next: JsonObject = {
@@ -925,6 +949,7 @@ function terminalTarget(
     ...(input.decision_outcome === null ? {} : {decision_outcome: input.decision_outcome}),
     ...(input.requested_no_followup ? {no_followup: true} : {}),
     ...(successorIds.length === 0 ? {} : {successor_todo_ids: successorIds}),
+    ...(acceptedResult === null ? {} : {completion_result: acceptedResult}),
   };
   if (input.command === "supersede") {
     next.note = input.note ?? "superseded";
@@ -1445,7 +1470,14 @@ export async function executeCoordinationTodoTerminalLifecycle(
 
   const currentLease = projection.leases.get(input.todo_id);
   const released = releasedLease(currentLease, authority, input);
-  const target = terminalTarget(todo, input, completion, successorIds);
+  let completionResult: JsonObject | null;
+  try {
+    completionResult = acceptedCompletionResult(input, todo, acceptanceEvidence);
+  } catch (error) {
+    return terminalFailure("completion_result_rejected",
+      error instanceof Error ? error.message : "Completion result rejected", {}, "decision_rejection");
+  }
+  const target = terminalTarget(todo, input, completion, successorIds, completionResult);
   if (edit !== null) target.clear_fields = [...new Set([...edit.clearFields, ...target.clear_fields])];
   const followthrough = input.command === "complete" && todo.role === "user"
     ? planUserCompletion(todo, [...projection.todos.values()], input.decision_outcome) : null;
@@ -1471,6 +1503,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the
     // real call still gates. Name the criteria the real call must run; never

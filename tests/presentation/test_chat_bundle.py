@@ -215,12 +215,33 @@ def test_windows_drive_paths_are_not_portable_bundle_names():
     assert not builder.contract.safe_relative("C:escape.js")
 
 
-def test_source_fingerprints_normalize_windows_pwa_text_but_not_binary(tmp_path):
+def test_source_fingerprints_normalize_windows_text_but_not_binary(tmp_path):
     manifest = tmp_path / "manifest.webmanifest"
     assert builder.contract.source_digest(
         manifest, b"{}\r\n"
     ) == builder.contract.source_digest(manifest, b"{}\n")
+    placeholder = tmp_path / ".gitkeep"
+    assert builder.contract.source_digest(
+        placeholder, b"\r\n"
+    ) == builder.contract.source_digest(placeholder, b"\n")
     image = tmp_path / "image.png"
     assert builder.contract.source_digest(
         image, b"image\r\n"
     ) != builder.contract.source_digest(image, b"image\n")
+
+
+def test_frontend_source_inputs_ignore_placeholder_checkout_line_endings(tmp_path):
+    public = tmp_path / "apps/presentation/dashboard/public"
+    public.mkdir(parents=True)
+    placeholder = public / ".gitkeep"
+    asset = public / "icon.svg"
+    placeholder.write_bytes(b"\n")
+    asset.write_bytes(b"<svg/>\n")
+    original = builder.contract.source_inputs(tmp_path)
+
+    placeholder.write_bytes(b"\r\n")
+    assert builder.contract.source_inputs(tmp_path) == original
+    assert "apps/presentation/dashboard/public/.gitkeep" not in original
+
+    asset.write_bytes(b"<svg><path/></svg>\n")
+    assert builder.contract.source_inputs(tmp_path) != original

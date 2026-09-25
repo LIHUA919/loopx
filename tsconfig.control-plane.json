@@ -153,6 +153,7 @@
     "tests/control_plane_ts/shared_goal_alignment.test.ts",
     "tests/control_plane_ts/replan_history.test.ts",
     "tests/control_plane_ts/goal_amendment_proposal.test.ts",
-    "tests/control_plane_ts/goal_instance_identity.test.ts"
+    "tests/control_plane_ts/goal_instance_identity.test.ts",
+    "tests/control_plane_ts/test_python_runtime.test.ts"
   ]
 }

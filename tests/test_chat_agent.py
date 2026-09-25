@@ -355,6 +355,37 @@ def test_typed_terminal_errors_preserve_category_without_promoting_partial_answe
         assert "不会自动重放" in caught.value.gate["next_action"]
 
 
+def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> None:
+    error = chat_agent._terminal_turn_error(
+        {
+            "codexErrorInfo": "other",
+            "message": json.dumps(
+                {
+                    "type": "error",
+                    "status": 400,
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "private upstream model detail",
+                    },
+                }
+            ),
+        },
+        "generic fallback",
+    )
+    assert error.error_code == "upstream_invalid_request"
+    assert "private upstream" not in str(error) + json.dumps(error.gate)
+    assert "模型" in error.gate["next_action"]
+
+
+def test_unstructured_upstream_error_stays_generic() -> None:
+    error = chat_agent._terminal_turn_error(
+        {"codexErrorInfo": "other", "message": "private upstream error"},
+        "generic fallback",
+    )
+    assert error.error_code == "host_gate"
+    assert "private upstream" not in str(error) + json.dumps(error.gate)
+
+
 def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(
     monkeypatch, tmp_path
 ):

@@ -35,6 +35,14 @@ export interface CoordinationMonitorPollInput {
   now?: Date;
 }
 
+/** The request identity used by both business receipts and no-effect replies. */
+export function monitorPollRequestHash(input: Pick<CoordinationMonitorPollInput,
+  "goal_id" | "observation" | "intent" | "actor_agent_id" | "dry_run" | "lease_proof">): string {
+  return canonicalAuthoritySha256({goal_id: input.goal_id, observation: input.observation,
+    intent: input.intent, actor_agent_id: input.actor_agent_id, dry_run: input.dry_run,
+    ...(input.lease_proof ? {lease_proof: input.lease_proof} : {})});
+}
+
 function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof COORDINATION_MONITOR_POLL_RESULT_SCHEMA} {
   return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason};
 }
@@ -170,9 +178,7 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   try { input = normalize(raw); }
   catch (error) { return failure("invalid_monitor_poll_request", String(error)); }
   // Original wire identity, before any normalization/default route inference.
-  const hash = canonicalAuthoritySha256({goal_id: input.goal_id, observation: input.observation,
-    intent: input.intent, actor_agent_id: input.actor_agent_id, dry_run: input.dry_run,
-    ...(input.lease_proof ? {lease_proof: input.lease_proof} : {})});
+  const hash = monitorPollRequestHash(input);
   const receipt = monitorReceipt(input, hash);
   const previous = await receipt.read(store);
   if (previous) return previous;
@@ -183,7 +189,13 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   if (head.status !== "loaded") return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, ...head};
   let plan: ReturnType<typeof planWriteback>;
   try { plan = planWriteback(input, head.head); }
-  catch (error) { return failure("monitor_poll_rejected", error instanceof Error ? error.message : String(error)); }
+  catch (error) {
+    // Receipt lookup succeeded and planning failed before commit. Only this
+    // boundary can certify no effect; outages and commit failures cannot.
+    return {...failure("monitor_poll_rejected", error instanceof Error ? error.message : String(error)),
+      no_effect: {schema_version: "monitor_poll_no_effect_v0", goal_id: input.goal_id,
+        operation_id: input.operation_id, request_sha256: hash}};
+  }
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (input.dry_run) return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA,
     status: "planned", changed: true, writeback: plan.writeback, provider_revision: head.provider_revision};

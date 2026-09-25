@@ -152,11 +152,17 @@ def _requested_quota_action_selection_preflight(
         interaction.get("agent_channel") if isinstance(interaction, Mapping) else None
     )
     agent_channel = agent_channel if isinstance(agent_channel, Mapping) else {}
+    # These two facts are what decide admission, so read them once and keep them
+    # for the refusal: a caller that is told "not admitted" has to be able to see
+    # which side of the delivery boundary refused it without re-deriving it from
+    # prose.
+    agent_must_attempt = agent_channel.get("must_attempt") is True
+    agent_delivery_allowed = agent_channel.get("delivery_allowed") is not False
     selected_todo_id, admitted = current_action_selection_admission(
         payload,
         requested_todo_id=requested_todo_id,
-        agent_must_attempt=agent_channel.get("must_attempt") is True,
-        agent_delivery_refused=agent_channel.get("delivery_allowed") is False,
+        agent_must_attempt=agent_must_attempt,
+        agent_delivery_refused=not agent_delivery_allowed,
     )
     if receipt_bound_replan_obligation_id:
         if not receipt_identity_upgraded:
@@ -170,7 +176,10 @@ def _requested_quota_action_selection_preflight(
             QuotaActionSelectionConflictKind.CONFLICT,
             requested_todo_id=requested_todo_id,
             selected_todo_id=receipt_pending_action_todo_id,
-            qualification_state="retained_selection",
+            qualification_state=(
+                "retained_selection" if receipt_pending_action_todo_id else None
+            ),
+            receipt_replan_obligation_id=receipt_bound_replan_obligation_id,
         )
     if admitted:
         return None
@@ -187,6 +196,29 @@ def _requested_quota_action_selection_preflight(
         )
     qualification_state = str(qualification.get("state") or "")
     if qualification_state not in {"deferred", "rejected"}:
+        if selected_todo_id == requested_todo_id:
+            # The projection selects exactly what was requested, so there is no
+            # selection to reconcile: the Turn simply was not admitted to settle
+            # it.  Naming a conflict here would put the same id on both sides of
+            # the sentence and hide the refusal that actually happened, so name
+            # the admission facts instead, and the unsettled prior Turn when the
+            # same payload already carries that typed recovery.
+            recovery_value = payload.get("unsettled_host_turn_recovery")
+            recovery: Mapping[str, object] = (
+                recovery_value if isinstance(recovery_value, Mapping) else {}
+            )
+            prior_turn_id = str(recovery.get("prior_turn_instance_id") or "") or None
+            repair = str(recovery.get("repair") or "") or None
+            raise QuotaActionSelectionConflictError(
+                QuotaActionSelectionConflictKind.NOT_ADMITTED,
+                requested_todo_id=requested_todo_id,
+                selected_todo_id=selected_todo_id,
+                qualification_state=qualification_state,
+                unsettled_prior_turn_instance_id=prior_turn_id,
+                unsettled_repair=repair,
+                admission_must_attempt=agent_must_attempt,
+                admission_delivery_allowed=agent_delivery_allowed,
+            )
         raise QuotaActionSelectionConflictError(
             QuotaActionSelectionConflictKind.CONFLICT,
             requested_todo_id=requested_todo_id,

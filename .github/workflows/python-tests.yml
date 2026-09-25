@@ -555,6 +555,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -e ".[test]"
 
+      - name: Verify native Windows test Python discovery
+        run: node --no-warnings --experimental-strip-types --test tests/control_plane_ts/test_python_runtime.test.ts
+
       - name: Run native Windows lifecycle tests
         run: >-
           python -m pytest -q
@@ -567,6 +570,7 @@ jobs:
           tests/control_plane/test_effect_runtime_integration.py
           tests/control_plane/test_local_authority_shadow_outbox.py
           tests/test_self_update_runtime_activation.py
+          tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
       - name: Set up the qualified SQLite runtime

@@ -371,12 +371,7 @@ def main() -> int:
                     "reviews": [
                         {
                             "state": "APPROVED",
-                            "body": (
-                                "## 动机\n动机。\n\n## 改动思路\n思路。\n\n"
-                                "## 具体改动\n改动。\n\n## 对主干的风险\n风险。\n\n"
-                                "## 我的整体评价\n通过。\n\n"
-                                f"English verdict: APPROVE at exact head {merge_head}."
-                            ),
+                            "body": (REPO_ROOT / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", merge_head).replace("VERDICT", "APPROVE"),
                             "author": {"login": "maintainer"},
                             "commit": {"oid": merge_head},
                             "submittedAt": "2026-09-09T11:14:01Z",
@@ -511,13 +506,7 @@ def main() -> int:
             "reviews": [
                 {
                     "state": review_state,
-                    "body": (
-                        f"{title}\n\n"
-                        "## 动机\n动机。\n\n## 改动思路\n思路。\n\n"
-                        "## 具体改动\n改动。\n\n## 对主干的风险\n风险。\n\n"
-                        "## 我的整体评价\n通过。\n\n"
-                        f"English verdict: {verdict} at exact head {approval_head}."
-                    ),
+                    "body": title + "\n\n" + (REPO_ROOT / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", approval_head).replace("VERDICT", verdict),
                     "author": {"login": "maintainer"},
                     "commit": {"oid": approval_head},
                     "submittedAt": "2026-09-09T11:14:01Z",
@@ -640,7 +629,7 @@ def main() -> int:
         assert section["word_hint"], section
         assert section["agent_instruction"], section
         assert "quota.py" not in section["agent_instruction"], section
-    assert all("无最低字数" in section["word_hint"] for section in template["sections"])
+    assert all(section["minimum_prose_characters"] > 0 for section in template["sections"])
     concrete_change = next(
         section for section in template["sections"] if section["label"] == "具体改动"
     )
@@ -1334,11 +1323,11 @@ def main() -> int:
     assert "template below is intentionally blank" in markdown, markdown
     assert "- 推荐阅读顺序:" in markdown, markdown
     assert "- 五块模板（留空给 agentloop 填写）:" in markdown, markdown
-    assert "动机（按证据需要；无最低字数）" in markdown, markdown
-    assert "改动思路（按证据需要；无最低字数）" in markdown, markdown
-    assert "具体改动（按证据需要；无最低字数）" in markdown, markdown
-    assert "对主干的风险（按证据需要；无最低字数）" in markdown, markdown
-    assert "我的整体评价（按证据需要；无最低字数）" in markdown, markdown
+    assert "动机（至少 " in markdown, markdown
+    assert "改动思路（至少 " in markdown, markdown
+    assert "具体改动（至少 " in markdown, markdown
+    assert "对主干的风险（至少 " in markdown, markdown
+    assert "我的整体评价（至少 " in markdown, markdown
     assert "main regression risk:" not in markdown, markdown
     assert "## Combined Review Sequence" in markdown, markdown
     assert "PR #771" in markdown, markdown

@@ -1,9 +1,12 @@
 import {useEffect, useState} from "react";
-import {ChatApiError, fetchChatSessions, fetchLoopXMode, fetchLoopXTeamWork, readLoopXTeamWork} from "../../data/chat";
-import {TeamArtifactReport, isMarkdownArtifact, type TeamArtifact} from "./team-artifact-content";
+import {ChatApiError, fetchChatSessions, fetchLoopXMode, fetchLoopXTeamWork, fetchManagedGoalResults, readLoopXTeamWork, readManagedGoalResult, type ManagedGoalResultRow} from "../../data/chat";
+import {TeamArtifactReport, isMarkdownArtifact, managedReportArtifact, type TeamArtifact} from "./team-artifact-content";
 
 type Readback = {kind: "waiting" | "unavailable" | "multiple"} | {
   kind: "adopted"; artifact: TeamArtifact; agentId: string;
+};
+type ManagedReadback = {kind: "waiting" | "unavailable" | "multiple"} | {
+  kind: "accepted"; artifact: TeamArtifact; agentId: string; title: string;
 };
 
 /**
@@ -21,6 +24,11 @@ const WORK_INDEX_WINDOW_MS = 30_000;
 const RELATED_SESSION_LIMIT = 8;
 const workIndexes = new Map<string, GoalWorkIndex>();
 const workIndexReads = new Map<string, Promise<GoalWorkIndex>>();
+/** Goal-wide inventory plus the exact Todo ids the server could not verify, so a
+ *  plan scopes its readback to its own ids instead of the whole Goal's health. */
+type ManagedGoalIndex = {readAt: number; rows: ManagedGoalResultRow[]; unavailableTodoIds: Set<string>};
+const managedIndexes = new Map<string, ManagedGoalIndex>();
+const managedIndexReads = new Map<string, Promise<ManagedGoalIndex>>();
 
 /** A 4xx is the server declining this conversation's team readback: without a
  *  coordinator identity it cannot own delegation work, so it is unrelated rather
@@ -154,11 +162,87 @@ async function readAdoptedResult(goalId: string, todoIds: Set<string>, force: bo
   return adopted.values().next().value ?? {kind: "waiting"};
 }
 
+async function collectManagedGoalIndex(goalId: string): Promise<ManagedGoalIndex> {
+  let cursor: string | undefined;
+  let total: number | undefined;
+  const rows: ManagedGoalResultRow[] = [];
+  const unavailableTodoIds = new Set<string>();
+  // Page until the snapshot ends. The previous fixed eight-page budget hid a
+  // matching report that happened to sort later in the Goal's history.
+  for (;;) {
+    const page = await fetchManagedGoalResults(goalId, cursor);
+    if (!Array.isArray(page.items) || !Number.isInteger(page.total) || page.total < 0 ||
+      (total !== undefined && page.total !== total) ||
+      !Number.isInteger(page.unavailable_count) || page.unavailable_count < 0 ||
+      !Array.isArray(page.unavailable_todo_ids) ||
+      page.unavailable_count !== page.unavailable_todo_ids.length ||
+      (page.next_cursor !== null && (!page.next_cursor || typeof page.next_cursor !== "string"))) {
+      throw new Error("managed inventory incomplete");
+    }
+    total = page.total;
+    rows.push(...page.items);
+    for (const todoId of page.unavailable_todo_ids) {
+      if (typeof todoId !== "string" || !todoId) throw new Error("managed inventory incomplete");
+      unavailableTodoIds.add(todoId);
+    }
+    if (!page.next_cursor) return {readAt: Date.now(), rows, unavailableTodoIds};
+    if (page.next_cursor === cursor) throw new Error("managed cursor repeated");
+    if (page.items.length === 0 && page.unavailable_count === 0) {
+      throw new Error("managed inventory made no progress");
+    }
+    cursor = page.next_cursor;
+  }
+}
+
+/** Share the Goal inventory across plan cards; manual refresh always bypasses the short cache. */
+async function readManagedGoalIndex(goalId: string, force: boolean): Promise<ManagedGoalIndex> {
+  const running = managedIndexReads.get(goalId);
+  if (running) return running;
+  const cached = managedIndexes.get(goalId);
+  if (!force && cached && Date.now() - cached.readAt < WORK_INDEX_WINDOW_MS) return cached;
+  const read = collectManagedGoalIndex(goalId)
+    .then(index => {managedIndexes.set(goalId, index); return index;})
+    .finally(() => {managedIndexReads.delete(goalId);});
+  managedIndexReads.set(goalId, read);
+  return read;
+}
+
+/** A confirmed plan supplies the only Todo ids that may return to its source conversation. */
+async function readManagedPlanResult(goalId: string, todoIds: Set<string>, force: boolean): Promise<ManagedReadback> {
+  try {
+    const index = await readManagedGoalIndex(goalId, force);
+    // Only a plan-owned unreadable row can hide this plan's report; unrelated
+    // historical rows stay the server's and the Files view's concern.
+    for (const todoId of todoIds) {
+      if (index.unavailableTodoIds.has(todoId)) return {kind: "unavailable"};
+    }
+    const matched = new Map<string, ManagedGoalResultRow>();
+    for (const row of index.rows) {
+      if (!todoIds.has(row.todo_id)) continue;
+      if (!row.sha256 || !row.producer_agent_id || !row.title) return {kind: "unavailable"};
+      const previous = matched.get(row.todo_id);
+      if (previous && previous.sha256 !== row.sha256) return {kind: "unavailable"};
+      matched.set(row.todo_id, row);
+    }
+    if (matched.size > 1) return {kind: "multiple"};
+    const row = matched.values().next().value;
+    if (!row) return {kind: "waiting"};
+    const read = await readManagedGoalResult(goalId, row.todo_id);
+    if (read.goal_id !== goalId || read.todo_id !== row.todo_id ||
+      read.result.sha256 !== row.sha256 || read.result.producer_agent_id !== row.producer_agent_id ||
+      read.result.content_type !== row.content_type || typeof read.text !== "string") return {kind: "unavailable"};
+    return {kind: "accepted", artifact: managedReportArtifact(row.content_type, row.sha256, read.text),
+      agentId: row.producer_agent_id, title: row.title};
+  } catch { /* A failed inventory or exact read cannot keep an earlier report visible. */ }
+  return {kind: "unavailable"};
+}
+
 /** Return only an accepted, currently adopted report to the manager conversation. */
 export function ManagerTeamResult({goalId, todoIds, zh, onOpenGoalEvidence}: {
   goalId: string; todoIds: string[]; zh: boolean; onOpenGoalEvidence: (goalId: string) => void;
 }) {
   const [result, setResult] = useState<{key: string; readback: Readback} | null>(null);
+  const [managed, setManaged] = useState<{key: string; readback: ManagedReadback} | null>(null);
   const [request, setRequest] = useState({count: 0, force: false});
   const todoKey = [...todoIds].sort().join(",");
   // A new read must withdraw the previous accepted report immediately. The
@@ -170,6 +254,9 @@ export function ManagerTeamResult({goalId, todoIds, zh, onOpenGoalEvidence}: {
     void readAdoptedResult(goalId, new Set(todoKey.split(",")), request.force)
       .then(value => {if (!cancelled) setResult({key, readback: value});})
       .catch(() => {if (!cancelled) setResult({key, readback: {kind: "unavailable"}});});
+    void readManagedPlanResult(goalId, new Set(todoKey.split(",")), request.force)
+      .then(value => {if (!cancelled) setManaged({key, readback: value});})
+      .catch(() => {if (!cancelled) setManaged({key, readback: {kind: "unavailable"}});});
     return () => {cancelled = true;};
   }, [goalId, todoKey, key, request.force]);
   useEffect(() => {
@@ -179,16 +266,25 @@ export function ManagerTeamResult({goalId, todoIds, zh, onOpenGoalEvidence}: {
     return () => window.clearInterval(timer);
   }, []);
   const readback = result?.key === key ? result.readback : null;
+  const managedReadback = managed?.key === key ? managed.readback : null;
   if (!goalId || !todoKey) return null;
-  return <section className={`personal-manager-team-result is-${readback?.kind ?? "loading"}`} aria-label={zh ? "团队结果回到管家" : "Team result returned to manager"} aria-busy={!readback}>
+  return <section className={`personal-manager-team-result is-${readback?.kind ?? "loading"}`} aria-label={zh ? "团队结果回到管家" : "Team result returned to manager"} aria-busy={!readback || !managedReadback}>
     {!readback ? <p role="status">{zh ? "正在核验团队结果…" : "Verifying team result…"}</p> : readback.kind === "adopted" ? <>
       <header><strong>{zh ? "团队验收结果" : "Team result"}</strong><small>{goalId} · {readback.agentId}</small></header>
       <TeamArtifactReport artifact={readback.artifact} zh={zh} heading={zh ? "依据已采用 · 结果已验收" : "Source adopted · Result accepted"}/>
-    </> : <p role="status">{readback.kind === "unavailable"
+    </> : readback.kind === "waiting" && managedReadback?.kind === "accepted" ? null : <p role="status">{readback.kind === "unavailable"
       ? (zh ? "团队结果或采用证据无法核验，请到 Goal 查看版本关系。" : "Team result or adoption evidence cannot be verified; inspect versions in the Goal.")
       : readback.kind === "multiple"
         ? (zh ? "有多个已验收的下游结果，请到 Goal 选择要采用的结论。" : "Multiple downstream results are accepted; choose the conclusion in the Goal.")
       : (zh ? "团队任务已分配，尚无可核验的已采用结果。" : "Team work is assigned; no verifiable adopted result yet.")}</p>}
+    {managedReadback?.kind === "accepted" ? <div className="personal-manager-managed-report">
+      <header><strong>{zh ? "托管团队报告 · 已验收，采用尚未核验" : "Managed report · Accepted, adoption not verified"}</strong>
+        <small>{managedReadback.agentId}</small></header>
+      <TeamArtifactReport artifact={managedReadback.artifact} zh={zh} heading={managedReadback.title}/>
+    </div> : managedReadback?.kind === "multiple" ? <p role="status">{zh
+      ? "这次分配已有多份托管报告；请到 Goal 选择结论。" : "This assignment has multiple managed reports; choose a conclusion in the Goal."}</p>
+      : managedReadback?.kind === "unavailable" ? <p role="status">{zh
+        ? "托管报告无法核验；旧内容已撤回。" : "Managed report cannot be verified; previous content was withdrawn."}</p> : null}
     <div className="personal-manager-team-result-actions">
       <button type="button" onClick={() => onOpenGoalEvidence(goalId)}>{zh ? "查看证据与任务" : "Inspect evidence and tasks"}</button>
       <button type="button" disabled={!readback} onClick={() => setRequest(previous => ({count: previous.count + 1, force: true}))}>{zh ? "刷新结果" : "Refresh result"}</button>

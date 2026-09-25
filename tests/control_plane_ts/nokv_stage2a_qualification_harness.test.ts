@@ -27,11 +27,12 @@ import {
 import {
   NoKVJsonLinesTransport,
 } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 
 const REPOSITORY_HELPER = fileURLToPath(
   new URL("../../loopx/control_plane/coordination/nokv_jsonl_helper.py", import.meta.url),
 );
-const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
+const PYTHON = resolveTestPython();
 
 /** Minimal module that satisfies helper admission and records that it was imported. */
 const STAND_IN_SDK_SOURCE = `import os

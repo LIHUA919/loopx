@@ -6,6 +6,7 @@ import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "nod
 import { existsSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dashboardDir = resolve(repoRoot, "apps/presentation/dashboard");
@@ -463,7 +464,7 @@ async function main() {
   await copyPublicSiteRoutes(siteDir);
   const interactivePages = await copyInteractiveCasePages(siteDir);
 
-  const projectionOutput = run("python3", [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
+  const projectionOutput = run(resolveTestPython(), [resolve(repoRoot, "examples/goal-channel-frontstage-fixture.py"), "--format", "json"], {
     capture: true,
     cwd: repoRoot,
   });

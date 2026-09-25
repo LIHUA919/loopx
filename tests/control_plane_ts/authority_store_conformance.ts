@@ -1,3 +1,4 @@
+import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
 import {registerCanonicalSnapshotConformance} from "./canonical_snapshot_conformance.ts";
 import {registerClaimAcquisitionProofConformance} from "./claim_acquisition_proof_conformance.ts";
 import {registerCommandObservationConformance} from "./command_observation_conformance.ts";
@@ -250,6 +251,35 @@ export function registerAuthorityStoreConformance(
   providerName: string,
   factory: AuthorityStoreConformanceFactory,
 ): void {
+  test(`${providerName} conformance: captured complete source survives provider reopen and readback`, async (t) => {
+    const {store, contender} = await factory(t);
+    const goalId = "goal-production-scale";
+    const source = productionScaleCoordinationFixture(goalId, "legacy").projection;
+    const captured = projectCoordinationSource({schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA,
+      kind: "snapshot", goal_id: goalId, handoff_mode: source.handoff_mode ?? "hard_lease",
+      read_model_schema: TODO_CANONICAL_READ_RECORD_SCHEMA,
+      todos: source.todos, leases: [...source.leases as JsonObject[],
+        {goal_id: goalId, todo_id: "retired-source-history", version: 19, status: "released"}],
+    }).projection as JsonObject;
+    assert.equal((captured.todos as JsonObject[]).length, (source.todos as JsonObject[]).length);
+    assert.deepEqual(captured.leases, source.leases);
+    const result = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
+    assert.equal(result.status, "applied");
+    const read = await listLocalCoordinationTodos({schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
+      runtime_root: "/unused", goal_id: goalId, include_leases: true}, {createStore: () => contender});
+    assert.equal(read.status, "loaded");
+    assert.deepEqual(read.todos, captured.todos);
+    assert.deepEqual(read.leases, captured.leases);
+    if (result.status !== "applied") return;
+    const replay = await store.commitAuthority({expected_provider_revision: result.provider_revision,
+      operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
+    assert.equal(replay.status, "conflict");
+    if (replay.status === "conflict") assert.equal(replay.conflict_kind, "operation_id_exists");
+    const retained = await contender.readReceipt("capture-source");
+    assert.equal(retained.status, "found");
+    if (retained.status === "found") assert.equal(retained.cursor, "1");
+  });
   registerProjectionConfirmationConformance(providerName, factory);
   registerPeriodicReportConformance(providerName, factory);
   registerLeaseLifecycleConformance(providerName, factory);

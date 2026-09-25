@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+import hashlib
 import logging
 from pathlib import Path
 import threading
 from typing import Any
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+from ...file_lock import try_exclusive_file_lock
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
 from .team_plan_confirmation import (
@@ -218,26 +220,48 @@ class LarkGoalTopicRuntimeService:
                             action_store_root=self.runtime_root
                             / "chat"
                             / "actions",
-                            profile=profile,
                             profile_config=profile_config,
                         )
 
-                    result = runtime.stream_lark_goal_topic_profile(
-                        profile=profile,
-                        snapshot_provider=self.snapshot_provider,
-                        stop=stop,
-                        runtime_root=self.runtime_root,
-                        answer=answer,
-                        proposal_deliverer=deliver_proposals,
-                        review_callback_handler=(
-                            handle_review_callback
-                            if self.action_service is not None
-                            else None
-                        ),
-                        health_sink=lambda update: self._update_health(
-                            profile, **dict(update)
-                        ),
+                    profile_config = (
+                        runtime._active_profile_configs(self.snapshot_provider()).get(
+                            profile
+                        )
+                        or {}
                     )
+                    # A bot App can have several local profile aliases and Chat
+                    # servers can use different runtime roots or ports. The
+                    # consumer lease must therefore be machine/App scoped.
+                    app_id = str(profile_config.get("bot_app_id") or profile)
+                    digest = hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
+                    lease = Path.home() / ".loopx" / "lark-consumers" / digest
+                    with try_exclusive_file_lock(
+                        lease, operation="lark_event_consumer"
+                    ) as acquired:
+                        if acquired is None:
+                            self._update_health(
+                                profile,
+                                status="standby",
+                                error_code="lark_event_consumer_owned_elsewhere",
+                            )
+                            stop.wait(5)
+                            continue
+                        result = runtime.stream_lark_goal_topic_profile(
+                            profile=profile,
+                            snapshot_provider=self.snapshot_provider,
+                            stop=stop,
+                            runtime_root=self.runtime_root,
+                            answer=answer,
+                            proposal_deliverer=deliver_proposals,
+                            review_callback_handler=(
+                                handle_review_callback
+                                if self.action_service is not None
+                                else None
+                            ),
+                            health_sink=lambda update: self._update_health(
+                                profile, **dict(update)
+                            ),
+                        )
                     if result.get("status") == "configuration_removed":
                         self._update_health(
                             profile,

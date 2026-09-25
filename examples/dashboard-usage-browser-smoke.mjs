@@ -12,6 +12,7 @@ import {
   startViteDashboardServer,
   waitForHttp,
 } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,7 +71,7 @@ async function main() {
   await mkdir(outputDir, { recursive: true });
   const { chromium } = loadPlaywright();
   const server = packaged
-    ? spawn(process.env.LOOPX_PYTHON_BIN || "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web")], { stdio: "ignore" })
+    ? spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web")], { stdio: "ignore" })
     : startViteDashboardServer({ dashboardDir, port });
   let browser;
   try {

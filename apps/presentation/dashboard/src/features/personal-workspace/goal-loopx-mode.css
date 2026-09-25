@@ -53,6 +53,15 @@
 .goal-team-lineage ul { list-style: none; padding: 0; margin: 12px 0; }
 .goal-team-lineage li { display: grid; gap: 8px; padding: 0 0 16px 16px; border-left: 2px solid var(--pw-line, #ebebeb); overflow-wrap: anywhere; }
 .goal-team-lineage button { justify-self: start; max-width: 100%; overflow-wrap: anywhere; text-align: start; }
+.goal-team-episode { margin-block: 20px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 10px; padding: 16px; background: var(--pw-bg, #fafafa); }
+.goal-team-episode-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.goal-team-episode > p { color: var(--pw-muted, #666); line-height: 1.5; }
+.goal-team-episode ol { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; padding: 0; margin: 16px 0 0; background: var(--pw-line, #ebebeb); border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; overflow: hidden; }
+.goal-team-episode li { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; padding: 12px; background: var(--pw-surface, #fff); overflow-wrap: anywhere; }
+.goal-team-episode li > span:first-child { font-size: 11px; color: var(--pw-muted, #666); }
+.goal-team-episode li > strong { font-size: 13px; }
+.goal-team-episode li > button { margin-top: auto; }
+@media (max-width: 780px) { .goal-team-episode ol { grid-template-columns: 1fr; } }
 .goal-loopx-dialog:has(.goal-team-comparison) { width: min(1040px, calc(100vw - 32px)); }
 .goal-team-comparison { margin-block: 24px; }
 .goal-team-comparison-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
@@ -92,6 +101,7 @@
 .goal-team-results p { font-size: 12px; line-height: 1.7; color: var(--pw-muted); }
 .goal-team-results [role="alert"] { color: var(--pw-red, #b42318); }
 .goal-team-results button, .goal-team-results select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 6px; background: var(--pw-surface, #fff); color: inherit; font: inherit; cursor: pointer; }
+.goal-managed-results > header button { flex-shrink: 0; white-space: nowrap; }
 .goal-team-results button[aria-pressed="true"] { border-color: var(--pw-text); }
 .goal-team-results button:disabled { opacity: .5; cursor: default; }
 .goal-team-results summary { cursor: pointer; padding: 12px 0; font-size: 12px; min-height: 44px; }

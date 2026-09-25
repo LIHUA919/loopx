@@ -158,6 +158,7 @@ def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
     assert auxiliary_cli["spend_policy"] == "no_spend"
     assert f"--turn-instance-id {turn_instance_id}" in auxiliary_cli["command"]
     assert "--todo-id todo_watch_due" in auxiliary_cli["command"]
+    assert "--use-current-task-lease" in auxiliary_cli["command"]
     assert '--result-hash "${LOOPX_MONITOR_RESULT_HASH:?}"' in auxiliary_cli[
         "command"
     ]
@@ -176,6 +177,11 @@ def test_due_watch_only_monitor_is_an_auxiliary_no_spend_route() -> None:
             "required": True,
             "unchanged_command_key": "command",
             "changed_command_key": "material_change_command",
+        },
+        "task_lease_proof": {
+            "required_when": "canonical_hard_lease",
+            "source": "canonical_lease_or_same_turn_receipt",
+            "acquires_or_renews_lease": False,
         },
     }
 

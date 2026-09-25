@@ -107,6 +107,7 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
     wide_goal, monkeypatch
 ):
     runtime, state, registry, projection = wide_goal
+    runtime_pid = effect_runtime_result("runtime.ping", {})["pid"]
     # Same stored workload: old one-shot endpoint really crosses the fixed budget.
     with pytest.raises(RuntimeError) as oversized:
         effect_runtime_result(
@@ -134,6 +135,9 @@ def test_real_rpc_keeps_budget_and_cli_recovers_complete_display(
         result = native_read(runtime)
     assert len(measured) > 1 and max(measured) <= 1792 * 1024
     assert result["todos"] == projection["todos"]
+    # A rejected oversized read may close a socket with buffered response bytes.
+    # It must not take down the shared runtime used by the paged successor.
+    assert effect_runtime_result("runtime.ping", {})["pid"] == runtime_pid
     before_revision = result["provider_revision"]
     listed = cli(registry, "todo", "list", "--goal-id", "goal-a", "--role", "agent")
     assert len(listed["todos"]) == 160

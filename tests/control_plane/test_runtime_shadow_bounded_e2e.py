@@ -292,6 +292,7 @@ def test_reviewed_promotion_survives_restart_and_enables_managed_codex_preflight
         json.dumps(
             {
                 "objective": "Validate managed worker acceptance after restart",
+                "scope": {"kind": "selected_work", "todo_ids": [delegated["todo_id"]]},
                 "non_goals": ["Start the managed worker during inspection"],
                 "criteria": [
                     {

@@ -75,11 +75,8 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("TurnEnvelope action signature is missing or does not match")
 
     action = _mapping(envelope.get("action"))
-    primary_action = _bounded(
-        action.get("primary_action"),
-        limit=TEXT_LIMITS["recommended_action"],
-    )
-    if not primary_action:
+    primary_action = action.get("primary_action")
+    if not isinstance(primary_action, str) or not primary_action.strip():
         raise ValueError("signed TurnEnvelope has no primary_action")
 
     boundary = _mapping(envelope.get("boundary"))

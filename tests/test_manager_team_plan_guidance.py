@@ -39,8 +39,8 @@ def test_manager_guidance_orders_one_team_preview_before_any_effect() -> None:
     assert "instead of inventing a lane, an Agent, a capability, or an action kind" in prose
 
 
-def test_the_owner_visible_failure_names_the_executor_that_refused() -> None:
-    """A host gate is the executor's refusal, not a defect in the manager."""
+def test_the_owner_visible_failure_does_not_guess_why_the_host_failed() -> None:
+    """A generic host gate cannot establish quota or authorization."""
 
     from loopx.extensions.lark.manager_context import manager_failure_reply
 
@@ -50,8 +50,20 @@ def test_the_owner_visible_failure_names_the_executor_that_refused() -> None:
     code, text = manager_failure_reply(_Refused("upstream refused"))
 
     assert code == "host_gate"
-    assert "上游执行器" in text
+    assert "执行器未能完成" in text
+    assert "额度或授权" not in text
     assert "管家处理失败" not in text
+
+    class _Restarted(RuntimeError):
+        error_code = "server_restarted"
+
+    assert "服务在处理过程中重启" in manager_failure_reply(_Restarted())[1]
+
+    class _InvalidRequest(Exception):
+        error_code = "upstream_invalid_request"
+
+    assert "模型与 Codex CLI" in manager_failure_reply(_InvalidRequest())[1]
+
     # An unmapped code still falls back to the bounded generic label.
     class _Unknown(RuntimeError):
         error_code = "some_future_code"

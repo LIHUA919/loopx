@@ -65,6 +65,7 @@
       "reason",
       "completed_at",
       "completion_turn_key",
+      "completion_result",
       "updated_at",
       "superseded_by",
       "completion_validation_required",
@@ -230,5 +231,12 @@
     "unknown_field_policy": "reject",
     "field_removal_policy": "maintainer_approval_required",
     "markdown_role": "human_workbench_and_compatibility_projection"
+  },
+  "source_transfer_protocol": {
+    "request_schema": "loopx_coordination_source_transfer_v0",
+    "result_schema": "loopx_coordination_source_transfer_result_v0"
+  },
+  "source_transfer_limits": {
+    "max_bytes": 16777216
   }
 }

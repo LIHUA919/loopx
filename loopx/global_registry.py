@@ -58,34 +58,30 @@ def _global_registry_backup_path(global_path: Path, label: str) -> Path:
     return global_path.with_name(f"{global_path.name}.{label}-{timestamp}.bak")
 
 
-def mutate_global_registry(
+def _mutate_global_registry_locked(
     global_path: Path,
-    operation: str,
     reducer: Callable[[dict[str, Any]], GlobalRegistryReduction],
 ) -> dict[str, Any]:
-    """Apply one authoritative global-registry read-modify-write transaction."""
+    current = _load_global_registry(global_path)
+    reduction = reducer(copy.deepcopy(current))
+    if not isinstance(reduction, GlobalRegistryReduction):
+        raise TypeError(
+            "global registry reducer must return GlobalRegistryReduction"
+        )
+    if not isinstance(reduction.payload, dict):
+        raise TypeError("global registry reducer payload must be a JSON object")
 
-    with exclusive_file_lock(global_path, operation=operation):
-        current = _load_global_registry(global_path)
-        reduction = reducer(copy.deepcopy(current))
-        if not isinstance(reduction, GlobalRegistryReduction):
-            raise TypeError(
-                "global registry reducer must return GlobalRegistryReduction"
-            )
-        if not isinstance(reduction.payload, dict):
-            raise TypeError("global registry reducer payload must be a JSON object")
-
-        wrote = reduction.payload != current
-        backup_path = None
-        if wrote and reduction.backup_label and global_path.exists():
-            backup = _global_registry_backup_path(
-                global_path,
-                reduction.backup_label,
-            )
-            write_json(backup, current)
-            backup_path = str(backup)
-        if wrote:
-            write_json(global_path, reduction.payload)
+    wrote = reduction.payload != current
+    backup_path = None
+    if wrote and reduction.backup_label and global_path.exists():
+        backup = _global_registry_backup_path(
+            global_path,
+            reduction.backup_label,
+        )
+        write_json(backup, current)
+        backup_path = str(backup)
+    if wrote:
+        write_json(global_path, reduction.payload)
 
     return {
         "before": current,
@@ -94,6 +90,17 @@ def mutate_global_registry(
         "backup_path": backup_path,
         "wrote": wrote,
     }
+
+
+def mutate_global_registry(
+    global_path: Path,
+    operation: str,
+    reducer: Callable[[dict[str, Any]], GlobalRegistryReduction],
+) -> dict[str, Any]:
+    """Apply one authoritative global-registry read-modify-write transaction."""
+
+    with exclusive_file_lock(global_path, operation=operation):
+        return _mutate_global_registry_locked(global_path, reducer)
 
 
 def global_write_denied_payload(
@@ -631,6 +638,7 @@ def sync_project_registry_to_global(
     goal_id: str | None = None,
     dry_run: bool = False,
     allow_route_replacement: bool = False,
+    _global_registry_lock_held: bool = False,
 ) -> dict[str, Any]:
     registry_path = registry_path.expanduser()
     if not registry_path.exists():
@@ -744,15 +752,25 @@ def sync_project_registry_to_global(
                 else None
             )
         else:
-            mutation = mutate_global_registry(
-                global_path,
-                "sync_global_registry",
-                lambda current: _sync_global_registry_reduction(
+            def reduce_current(current: dict[str, Any]) -> GlobalRegistryReduction:
+                return _sync_global_registry_reduction(
                     current,
                     incoming,
                     incoming_projects,
                     **merge_kwargs,
-                ),
+                )
+
+            mutation = (
+                _mutate_global_registry_locked(
+                    global_path,
+                    reduce_current,
+                )
+                if _global_registry_lock_held
+                else mutate_global_registry(
+                    global_path,
+                    "sync_global_registry",
+                    reduce_current,
+                )
             )
             receipt = mutation["receipt"]
             merged_goals = receipt["merged_goals"]

@@ -138,17 +138,39 @@ def quota_failure_payload(
         # The requested Todo could not be reconciled with the projection. Report
         # the real conflict and the next read to make, rather than the generic
         # "quota collection failed" and a pointer at receipt writeback.
+        selection_conflict: dict[str, object] = {
+            "kind": error.kind.value,
+            "requested_todo_id": error.requested_todo_id,
+            "selected_todo_id": error.selected_todo_id,
+            "qualification_state": error.qualification_state,
+        }
+        if error.unsettled_prior_turn_instance_id:
+            selection_conflict["unsettled_prior_turn_instance_id"] = (
+                error.unsettled_prior_turn_instance_id
+            )
+        if error.unsettled_repair:
+            selection_conflict["unsettled_repair"] = error.unsettled_repair
+        if (
+            error.admission_must_attempt is not None
+            or error.admission_delivery_allowed is not None
+        ):
+            selection_conflict["admission"] = {
+                "agent_must_attempt": error.admission_must_attempt,
+                "delivery_allowed": error.admission_delivery_allowed,
+            }
+        if error.retained_selection:
+            selection_conflict["retained_selection"] = True
+            selection_conflict["retained_selection_todo_id"] = error.selected_todo_id
+        if error.receipt_replan_obligation_id:
+            selection_conflict["receipt_replan_obligation_id"] = (
+                error.receipt_replan_obligation_id
+            )
         payload.update(
             {
                 "reason": str(error),
                 "status": "quota_action_selection_conflict",
                 "recommended_action": error.recommended_action,
-                "action_selection_conflict": {
-                    "kind": error.kind.value,
-                    "requested_todo_id": error.requested_todo_id,
-                    "selected_todo_id": error.selected_todo_id,
-                    "qualification_state": error.qualification_state,
-                },
+                "action_selection_conflict": selection_conflict,
             }
         )
     if isinstance(error, QuotaIdentityPreconditionError):

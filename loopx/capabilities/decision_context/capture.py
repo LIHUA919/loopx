@@ -41,7 +41,9 @@ def _open_spool(path: Path, *, goal_id: str, agent_id: str) -> sqlite3.Connectio
     descriptor = os.open(
         path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600
     )
-    os.fchmod(descriptor, 0o600)
+    # Windows has no fchmod; os.open already applied the mode above.
+    if hasattr(os, "fchmod"):
+        os.fchmod(descriptor, 0o600)
     os.close(descriptor)
     db = sqlite3.connect(path, timeout=1)
     db.row_factory = sqlite3.Row

@@ -159,7 +159,7 @@ def main() -> int:
             "required replan is evaluated before",
             "An acknowledgement without a vision, todo, acceptance, or no-follow-up",
             "`vision_checkpoint_missing`",
-            "owns 15 open advancement todos",
+            "at least 15 open advancement todos",
             "bounded public research when local evidence is insufficient",
             "goal-vision-replan-contract-v0.md",
         ],

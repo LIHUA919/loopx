@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from loopx.cli import build_parser
+from loopx.control_plane import operator_provider
 from loopx.control_plane.operator_credential import configured_operator_credential
 from loopx.control_plane.turn_driver.host_binding import (
     INDIVIDUAL_TURN_HOST,
@@ -16,6 +17,12 @@ from loopx.control_plane.turn_driver.host_binding import (
     resolve_default_turn_host,
     selected_turn_host,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_machine_credential_store(tmp_path, monkeypatch):
+    """CLI default tests must not read the developer machine's provider store."""
+    monkeypatch.setattr(operator_provider, "DEFAULT_RUNTIME_ROOT", tmp_path / "machine")
 
 
 def test_managed_credential_selects_the_managed_default_host():

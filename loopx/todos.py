@@ -1555,6 +1555,7 @@ def complete_goal_todo(
     role: str | None = None,
     decision_outcome: str | None = None,
     evidence: str | None = None,
+    completion_result_file: Path | None = None,
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,

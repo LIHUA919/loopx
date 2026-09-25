@@ -421,3 +421,63 @@ for (const native of [false, true]) {
     assert.deepEqual(updated.todos, [changed]);
   });
 }
+
+// The release that added the validator revision fields wrote exactly the
+// frozen manifest with those two fields restored; upstream inserted both
+// directly after completion_validation_sha256. Its persisted heads must stay
+// readable once a later release adds another additive field, otherwise an
+// ordinary upgrade loses every Goal's Todo list.
+const previousReleaseFields: string[] = [...historicalFields.canonical_fields];
+previousReleaseFields.splice(
+  previousReleaseFields.indexOf("completion_validation_sha256") + 1, 0,
+  "completion_validation_revision", "completion_validation_revision_history");
+
+for (const native of [false, true]) {
+  test(`Todo head written before a later additive field stays readable (${native ? "native" : "canonical"})`, () => {
+    const fields = previousReleaseFields.filter((field: string) =>
+      !native || !historicalFields.projection_metadata_fields.includes(field));
+    assert.equal(fields.includes("completion_validation_revision"), true);
+    assert.equal(fields.includes("completion_result"), false,
+      "the previous release did not declare the later additive field");
+    const todo: JsonObject = {
+      schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id: "todo_previous_release", role: "agent", status: "open", done: false,
+      text: "Read work accepted before the next additive field", archive_state: "active",
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    };
+    const schema = native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA;
+    const head = {
+      goal_id: "goal-previous-release", todos: [todo], leases: [],
+      todo_read_model: {schema_version: schema, contract_fields: fields,
+        todo_count: 1, records_sha256: canonicalAuthoritySha256([todo])},
+    };
+    assert.deepEqual(validateCoordinationTodoReadModel(head, head.goal_id), head.todo_read_model);
+    const withResult = {...todo, completion_result: {
+      schema_version: "loopx_completion_result_v0", sha256: "a".repeat(64),
+      producer_agent_id: "agent-a"}};
+    assert.throws(() => validateCoordinationTodoReadModel({...head, todos: [withResult],
+      todo_read_model: {...head.todo_read_model, records_sha256: canonicalAuthoritySha256([withResult])}},
+    head.goal_id), /exceeds its historical field contract/);
+  });
+}
+
+for (const native of [false, true]) {
+  test(`Todo carrying a completion result reads under the current contract (${native ? "native" : "canonical"})`, () => {
+    const contract = native ? TODO_DOMAIN_RECORD_CONTRACT.fields : TODO_CANONICAL_READ_RECORD_FIELDS;
+    assert.equal(contract.includes("completion_result"), true);
+    const todo: JsonObject = {
+      schema_version: native ? TODO_DOMAIN_ITEM_SCHEMA : "todo_item_v0",
+      todo_id: "todo_completion_result", role: "agent", status: "done", done: true,
+      text: "Accepted managed report", archive_state: "archive",
+      completion_result: {schema_version: "loopx_completion_result_v0", sha256: "b".repeat(64),
+        producer_agent_id: "agent-a", source_name: "report.md"},
+      ...(native ? {} : {source_section: "Agent Todo"}),
+    };
+    const schema = native ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA;
+    const model = coordinationTodoReadModel([todo], schema);
+    assert.equal((model.contract_fields as string[]).includes("completion_result"), true);
+    const head = {goal_id: "goal-completion-result", todos: [todo], leases: [],
+      todo_read_model: model};
+    assert.deepEqual(validateCoordinationTodoReadModel(head, head.goal_id), model);
+  });
+}

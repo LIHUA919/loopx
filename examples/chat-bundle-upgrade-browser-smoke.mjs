@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { launchBrowser, loadPlaywright } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const python = String.raw`
 import importlib.util, json, sys, tempfile, threading
@@ -42,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="loopx-tab-upgrade-") as temporary:
         server.server_close()
         thread.join()
 `;
-const child = spawn(process.env.LOOPX_PYTHON_BIN || "python3", ["-u", "-c", python], {
+const child = spawn(resolveTestPython(), ["-u", "-c", python], {
   cwd: resolve(import.meta.dirname, ".."), stdio: ["pipe", "pipe", "inherit"],
 });
 const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();

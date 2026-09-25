@@ -940,7 +940,8 @@ def test_skill_slash_fallback_contract() -> None:
     assert "`review_groups`" in pr_review_skill_text
     assert "ranked actionable `review_sequence`" in pr_review_skill_text
     assert "must not appear in `review_sequence`" in pr_review_skill_text
-    assert "The five sections are output structure, while the execution contract is the evidence authority" in pr_review_normalized
+    assert "complete Chinese five-block review" in pr_review_normalized
+    assert "capability owns review depth, evidence requirements" in pr_review_normalized
 
 
 def test_start_goal_guided_derives_display_name_from_goal_text() -> None:

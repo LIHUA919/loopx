@@ -7,35 +7,6 @@ from ..history import load_registry
 from ..paths import resolve_runtime_root
 from ..control_plane.effect_runtime import effect_runtime_result
 
-# Context-only keys: the --from-context JSON payload may ONLY contain
-# these fields. Any operational key (action, agent_id, goal_id, etc.) is
-# rejected before the payload reaches the TypeScript layer. This prevents
-# a context file from overriding CLI-derived command/identity/authority
-# metadata.
-_CONTEXT_KEYS = {
-    "work_summary", "rationale", "source_refs",
-    "approaches_tried", "next_steps", "files_touched",
-    "key_decisions", "open_questions",
-}
-
-
-def _validate_context_payload(context: object) -> dict:
-    """Validate that a --from-context JSON value is an object with only
-    context-only keys. Returns the validated dict. Raises ValueError with
-    an actionable message on any violation."""
-    if not isinstance(context, dict):
-        raise ValueError(
-            "--from-context must be a JSON object (work_summary, rationale, etc.); "
-            f"got {type(context).__name__}"
-        )
-    unknown = sorted(set(context.keys()) - _CONTEXT_KEYS)
-    if unknown:
-        raise ValueError(
-            f"unknown context field: {', '.join(unknown)}. "
-            f"Allowed: {', '.join(sorted(_CONTEXT_KEYS))}"
-        )
-    return context
-
 
 def _render_digest(payload: dict) -> str:
     """Render an inspect payload as a readable handoff digest for the target agent."""
@@ -46,6 +17,10 @@ def _render_digest(payload: dict) -> str:
     source = payload.get("claimed_by", "unknown")
     note_state = payload.get("note_state", "missing")
     lines.append(f"Source: {source} | Status: {note_state}")
+    lines.append(f"Can adopt: {'yes' if payload.get('can_adopt') else 'no'}")
+    execution = payload.get("execution_authority")
+    if isinstance(execution, dict) and execution.get("allowed") is False:
+        lines.append(f"Execution authority: {execution.get('reason_code', 'unavailable')}")
     lines.append("")
     digest = payload.get("digest")
     if digest:
@@ -113,7 +88,7 @@ def _render_digest(payload: dict) -> str:
 
 def register_todo_continuation(subparsers, add_format):
     parser = subparsers.add_parser(
-        "handoff", help="Explicit cross-agent Todo handoff: prepare, inspect, adopt (local lease-free authority)."
+        "handoff", help="Explicit cross-agent Todo handoff: prepare, inspect, adopt (selected canonical authority)."
     )
     # Note: we don't use add_format here because we need a custom --format
     # with a 'digest' choice. We add it manually below.
@@ -129,6 +104,8 @@ def register_todo_continuation(subparsers, add_format):
     parser.add_argument("--workspace", default=".", help="Target workspace to check locally; not persisted.")
     parser.add_argument("--artifact", action="append", default=[], help="Required workspace-relative artifact to check locally.")
     parser.add_argument("--target-agent-id", help="For adopt: the registered agent to hand off to (default: current agent).")
+    parser.add_argument("--task-lease-idempotency-key", help="Current execution key; never a transfer grant.")
+    parser.add_argument("--task-lease-expected-version", type=int, help="Current lease version paired with the execution key.")
     parser.add_argument("--from-context", help="Path to a JSON file containing rich handoff context (work_summary, approaches_tried, next_steps, files_touched, key_decisions, open_questions).")
     parser.add_argument("--format", dest="handoff_format", choices=["markdown", "json", "digest"],
         help="Output format. 'digest' renders inspect as a readable handoff summary (inspect only).")
@@ -148,8 +125,7 @@ def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_fo
             raise ValueError("--format digest is only valid for inspect action")
         registry = load_registry(registry_path)
         root = resolve_runtime_root(registry, runtime_root_arg)
-        # Build the payload. If --from-context is provided, read the JSON file
-        # and merge its fields into the request.
+        # Nest context separately; TypeScript owns its closed semantic schema.
         request = {
             "runtime_root": str(root),
             "goal_id": args.goal_id,
@@ -169,21 +145,27 @@ def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_fo
                 context_path = Path(args.from_context).expanduser().resolve()
                 with open(context_path, "r", encoding="utf-8") as f:
                     context = json.load(f)
-                # Validate context is an object with only context-only keys
-                # BEFORE placing it in the request. This prevents a context
-                # file from overriding CLI-derived command/identity/authority
-                # metadata (action, agent_id, goal_id, etc.).
-                request["context"] = _validate_context_payload(context)
+                request["context"] = context
             else:
                 # Legacy: pass through rationale and source_refs.
                 if args.rationale:
                     request["rationale"] = args.rationale
                 if args.source_ref:
                     request["source_refs"] = args.source_ref
+        key = args.task_lease_idempotency_key
+        version = args.task_lease_expected_version
+        if key is not None or version is not None:
+            request["lease_proof"] = {"idempotency_key": key, "expected_version": version}
         payload = effect_runtime_result("coordination.local_authority.todo_continuation", request)
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
         payload = {"ok": False, "status": "failed",
             "reason_code": "invalid_continuation_request", "reason": str(exc)}
+    # Delivery retries project the current provider head without replaying a write.
+    committed = payload.get("result") or payload.get("claim") or payload.get("adoption") or {}
+    if args.action != "inspect" and committed.get("status") in {"applied", "replayed", "recovered", "no_change"}:
+        from ..control_plane.todos.provider_projection import settle_canonical_todo_projection
+        payload = settle_canonical_todo_projection(payload, registry_path=registry_path,
+            runtime_root=root, goal_id=args.goal_id)
     # Determine output format.
     handoff_format = getattr(args, "handoff_format", None)
     if handoff_format:

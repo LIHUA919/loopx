@@ -1284,6 +1284,7 @@ class ChatRequestHandler(
             )
         get_dispatch = {
             "/api/chat/completed-todos": self._completed_todos,
+            "/api/chat/goal-results": self._goal_results,
             CHAT_SESSIONS_PATH: self._list_sessions,
             CHAT_ACTIONS_PATH: self._action_list,
             CHAT_GOAL_CONTEXTS_PATH: self._goal_contexts,
@@ -1298,6 +1299,9 @@ class ChatRequestHandler(
         }
         if path in get_dispatch:
             return get_dispatch[path]()
+        result_parts = path.strip("/").split("/")
+        if len(result_parts) == 4 and result_parts[:3] == ["api", "chat", "goal-results"]:
+            return self._goal_result(result_parts[3])
         setup_parts = path.strip("/").split("/")
         if len(setup_parts) == 5 and setup_parts[:4] == ["api", "chat", "lark", "app-setups"]:
             return self._lark_setup_snapshot(setup_parts[4])

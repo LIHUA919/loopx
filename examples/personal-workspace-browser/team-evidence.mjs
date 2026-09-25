@@ -17,13 +17,68 @@ export const teamEvidenceScenario = {
       await page.getByRole("button", {name: "保存设置", exact: true}).click();
       const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
       const mode = page.__loopxRuntime.loopxModes.get(configured.sessionId);
+      let inspectedRequests = 0;
+      const laterAcceptedPage = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "operations") return route.fallback();
+        inspectedRequests++;
+        return route.fulfill({json: body.cursor
+          ? {items: [{record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst",
+            status: "accepted", recovery_required: false, artifacts: [{ref: "report.md", sha256: "9".repeat(64)}]}],
+            has_more: false, next_cursor: null, page_readback_complete: true}
+          : {items: [{record_id: "0".repeat(64), operation_id: null, status: "unavailable", recovery_required: null}],
+            has_more: true, next_cursor: "0".repeat(64), page_readback_complete: false}});
+      };
+      await page.route("**/api/chat/sessions/*/loopx", laterAcceptedPage);
       Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn", native: {status: "active", tokenBudget: 100000}});
       await page.getByText("LoopX · 正在推进", {exact: true}).waitFor();
       const results = page.getByRole("region", {name: "团队成果", exact: true});
-      // Accepted report opens in the original conversation without an extra click.
+      // Accepted report on the second page opens without another click.
       await results.getByRole("table").waitFor();
       await results.getByText("尚无采用记录 · 查看验收与版本依据", {exact: true}).waitFor();
       assert.equal(await results.getByLabel("当前报告").evaluate(el => el === document.activeElement), false, "Automatic readback must not steal focus");
+      assert.equal(inspectedRequests, 2,
+        "Accepted work after an unreadable first page should still be discovered without another click");
+      const goalNav = page.getByRole("navigation", {name: "Goal 视图"});
+      await goalNav.getByRole("button", {name: "成果", exact: true}).click();
+      const fileResults = page.getByRole("region", {name: "团队成果", exact: true});
+      await fileResults.getByRole("table").waitFor();
+      assert.match(await fileResults.getByRole("table").textContent(), /Free cash75/, "Files reads the accepted artifact from the original Goal session");
+      assert(!(await page.locator(".personal-files-list > button").allTextContents()).some(text => /最近运行|Latest run/.test(text)),
+        "Run observations remain absent from delivered Files");
+      await page.screenshot({path: resolve(outputDir, "team-files-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await fileResults.evaluate(el => el.scrollWidth <= el.clientWidth), "Files report remains readable on mobile");
+      await page.screenshot({path: resolve(outputDir, "team-files-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      await goalNav.getByRole("button", {name: "对话", exact: true}).click();
+      const failedTeamMode = async route => route.request().method() === "GET"
+        ? route.fulfill({status: 503, json: {error: "team readback unavailable"}}) : route.fallback();
+      await page.route("**/api/chat/sessions/*/loopx", failedTeamMode);
+      await goalNav.getByRole("button", {name: "成果", exact: true}).click();
+      await page.getByRole("alert").filter({hasText: "无法核验当前 Goal 会话的团队成果"}).waitFor();
+      assert.equal(await page.getByRole("region", {name: "团队成果", exact: true}).count(), 0,
+        "A failed team read must not retain the previously accepted report");
+      await page.unroute("**/api/chat/sessions/*/loopx", failedTeamMode);
+      await page.getByRole("button", {name: "重试", exact: true}).click();
+      await page.getByRole("region", {name: "团队成果", exact: true}).getByRole("table").waitFor();
+      await goalNav.getByRole("button", {name: "对话", exact: true}).click();
+      await results.getByRole("table").waitFor();
+      await results.getByText(/已检查的工作中有无法核验的记录/).waitFor();
+      assert.match(await results.getByLabel("证据内容: report.md").textContent(), /Free cash/);
+      await page.unroute("**/api/chat/sessions/*/loopx", laterAcceptedPage);
+      const repeatedCursor = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "operations") return route.fallback();
+        return route.fulfill({json: {items: [], has_more: true, next_cursor: "0".repeat(64), page_readback_complete: true}});
+      };
+      await page.route("**/api/chat/sessions/*/loopx", repeatedCursor);
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByRole("alert").filter({hasText: "执行分页无法继续核验"}).waitFor();
+      assert.equal(await results.getByRole("table").count(), 0, "A broken live cursor must clear the previous report");
+      await page.unroute("**/api/chat/sessions/*/loopx", repeatedCursor);
+      await results.getByRole("button", {name: "刷新成果", exact: true}).click();
+      await results.getByRole("table").waitFor();
       const reads = api.loopxModeRequests.filter(row => row.operation === "read").length;
       await results.getByRole("button", {name: "刷新成果", exact: true}).click();
       await results.getByRole("table").waitFor();
@@ -144,9 +199,57 @@ export const teamEvidenceScenario = {
       await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
       await evidence.getByText("采用证据已失效或无法核验", {exact: true}).waitFor();
       assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0);
+      mode.fixtureCorrectionEpisode = true;
+      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      const episode = evidence.getByRole("region", {name: "纠偏证据路径"});
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByText(/采用证据无法核验/).waitFor();
+      delete mode.fixtureAdoptionState;
+      await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByText(/尚无请求方采用/).waitFor();
       mode.fixtureAdoptionState = "current";
       await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
-      await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).waitFor();
+      assert.equal(await episode.getByText("independent-reviewer").count(), 0, "The path is not inferred before a deliberate read");
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByText("independent-reviewer", {exact: true}).waitFor();
+      await episode.getByText("local-analyst", {exact: true}).first().waitFor();
+      await page.screenshot({path: resolve(outputDir, "team-correction-path.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), "Correction path fits the mobile dialog");
+      await page.screenshot({path: resolve(outputDir, "team-correction-path-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      const rejectedSource = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation === "read" && body.operation_id === "review-objection") {
+          return route.fulfill({json: {operation_id: body.operation_id, agent_id: "independent-reviewer",
+            status: "rejected", recovery_required: false}});
+        }
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions/*/loopx", rejectedSource);
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
+      assert.equal(await episode.getByText("independent-reviewer", {exact: true}).count(), 0,
+        "A rejected review clears the previously verified path");
+      await page.unroute("**/api/chat/sessions/*/loopx", rejectedSource);
+      let revisionRechecks = 0;
+      const changedRevision = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation === "read" && body.operation_id === "accepted-analysis") {
+          revisionRechecks++;
+          return route.fulfill({json: {operation_id: body.operation_id, agent_id: "local-analyst",
+            status: "accepted", recovery_required: false,
+            artifacts: [{ref: "report.json", sha256: "f".repeat(64), text: "newer revision"}]}});
+        }
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions/*/loopx", changedRevision);
+      await episode.getByRole("button", {name: "核验关联执行", exact: true}).click();
+      await episode.getByRole("alert").filter({hasText: "关联执行或版本已变化"}).waitFor();
+      assert.equal(revisionRechecks, 1, "The selected revision is revalidated instead of trusting its earlier display");
+      assert.equal(await episode.getByText("newer revision").count(), 0);
+      await page.unroute("**/api/chat/sessions/*/loopx", changedRevision);
       assert.equal(api.turnRequests.length, 0, "Evidence reading must not start a model");
       await page.screenshot({path: resolve(outputDir, "team-evidence-desktop.png"), animations: "disabled"});
       // Lose the first acknowledgement; retry must preserve identity and content.
@@ -191,6 +294,7 @@ export const teamEvidenceScenario = {
       await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
       await evidence.getByRole("alert").filter({hasText: "已清除上次证据"}).waitFor();
       assert.equal(await content.count(), 0);
+      assert.equal(await episode.count(), 0, "Lost observation removes the correction path");
       await page.screenshot({path: resolve(outputDir, "team-evidence-stale.png"), animations: "disabled"});
       await dialog.getByRole("button", {name: "暂停协调员", exact: true}).click();
       await dialog.getByText(/协调员已暂停。/).waitFor();

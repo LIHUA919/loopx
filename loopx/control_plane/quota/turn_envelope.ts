@@ -602,11 +602,14 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   const recommendedAction = replanPacket
     ? "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
+  // The signed host action is executable authority, not a display summary.
+  // Budget diagnostics may warn on long commands but must not cut them.
+  const primaryAction = scalarString(agentChannel.primary_action, "agent_channel.primary_action").trim();
   const action: JsonObject = {
     recommended_action: recommendedAction,
     primary_action: replanPacket
       ? "produce one required semantic outcome"
-      : text(agentChannel.primary_action, 480),
+      : primaryAction || null,
     must_attempt: Boolean(agentChannel.must_attempt),
     delivery_allowed: Boolean(agentChannel.delivery_allowed),
     quiet_noop_allowed: Boolean(agentChannel.quiet_noop_allowed),

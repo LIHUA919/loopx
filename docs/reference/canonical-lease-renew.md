@@ -115,8 +115,10 @@ writers reject it instead of attempting two separate writes.
 
 One provider CAS commits `claimed_by`, source actor attribution, lease owner/key,
 version +1, epoch +1, events and the original receipt. Todo ID, dependencies,
-requirements, evidence and lease scopes remain intact. Existing continuation
-notes retain their bytes but become stale when their bound Todo facts change.
+requirements, evidence and lease scopes remain intact. A currently valid explicit continuation note is rebound to the new claim in
+that same CAS; previously stale notes and ordinary notes remain untouched.
+Other work-fact changes still invalidate context. See the
+[leased continuation workflow](../architecture/rfcs/cross-session-memory-substrate-v0.md#leased-execution-continuation).
 A same-agent new execution advances the lease generation without fabricating a
 claim edit. The old execution cannot update/complete the handed-over Todo; the
 recipient still uses the ordinary proof-bearing update and completion commands.

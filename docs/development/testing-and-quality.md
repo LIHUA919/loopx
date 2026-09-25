@@ -371,6 +371,23 @@ Confirm the interpreter and imported checkout when diagnosing a mismatch:
 uv run python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
 ```
 
+Node-based TypeScript tests and browser smokes that launch Python use
+`scripts/test-python.mjs`. It honors an explicit `LOOPX_TEST_PYTHON` (then the
+existing `LOOPX_PYTHON_BIN`/`LOOPX_PYTHON` overrides), otherwise reuses the
+source launcher's selection on POSIX or discovers a compatible interpreter on
+Windows. It prefers the worktree environment, checks Python `>=3.11`, and
+fails with a setup hint instead of falling back to an incompatible system
+`python3`. A source-level regression test rejects new bare-`python3`
+subprocess/fallback patterns in test and browser-smoke entry points. After
+`uv sync --extra test`, `npm run test:control-plane` needs no manual Python
+environment variable; `LOOPX_TEST_PYTHON=/path/to/python` is an explicit
+override when a separate compatible environment is intentional.
+
+会启动 Python 的 Node/TypeScript 测试和浏览器 smoke 统一使用
+`scripts/test-python.mjs`：显式覆盖优先，否则优先当前 worktree 环境，校验
+Python `>=3.11`；不会静默退回不兼容的系统 `python3`。回归测试会拦截测试入口
+重新引入裸 `python3` 子进程或默认值。
+
 Canary executes Python checks with the interpreter that launched LoopX
 (`sys.executable`). Its displayed `python3` command is not a second interpreter
 selection. Keep subprocesses on `sys.executable`; use `uv run` at the developer
@@ -992,10 +1009,13 @@ For focused thin/brief prompt-decision regression, use
 explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait and required-vision-replan cases in each mode. Expected decisions
-remain outside model input. All attempts must pass; no answer correction or
-retry-until-pass is used. Ordinary pytest only checks the probe and negative
-oracles with scripted responses, without provider calls.
+quiet-wait, required-vision-replan and typed external-wait fallback cases in
+each mode. The fallback case uses the real compact quota projection: its wait
+transition already exists, so the host must advance the selected independent
+successor and notify rather than authoring another transition. Expected
+decisions remain outside model input. All attempts must pass; no answer
+correction or retry-until-pass is used. Ordinary pytest only checks the probe
+and negative oracles with scripted responses, without provider calls.
 
 This is a synthetic decision-level probe using current generated prompts,
 not proof of tool execution, host scheduling, upgrade delivery or full-Goal

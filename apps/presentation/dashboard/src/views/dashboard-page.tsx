@@ -88,7 +88,6 @@ import { useWorkspaceI18n, type WorkspaceTranslate } from "../features/personal-
 import {
   agentStatusSentence,
   projectionSentence,
-  runEvidenceCopy,
 } from "../features/personal-workspace/projection-localization";
 import {
   goalHasExecutionSummary,
@@ -152,6 +151,7 @@ import {
   addSshTunnelStatusSource,
   bindConfiguredSshHostAliases,
   defaultLocalStatusSourceUrl,
+  emptyStatusSourceCatalog,
   loadStatusSourceCatalog,
   localStatusSource,
   activeStatusSourceForUrl,
@@ -440,16 +440,6 @@ function buildAgentManagementRows(
 
 type PersonalGoalState = "需修复" | "等你" | "等待条件" | "推进中" | "已完成" | "安静运行" | "已停止";
 
-type PersonalRunEvidence = {
-  generatedAt: string;
-  label: string;
-  metadata: string;
-  runId: string | null;
-  safePreview: string;
-  summary: string;
-  todoId: string | null;
-};
-
 type PersonalGoalItem = {
   acceptanceObservation?: GoalAcceptanceObservation | null;
   loadState?: "loading" | "error";
@@ -467,7 +457,7 @@ type PersonalGoalItem = {
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
   nextSentence: string;
-  runEvidence?: PersonalRunEvidence | null;
+  hasRunObservation: boolean;
   state: PersonalGoalState;
   subagentExecution?: {
     allowedDomains: string[];
@@ -855,17 +845,6 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
   return { doneTodoCount, nextTodoText, recentCompleted };
 }
 
-function personalValidationSentence(value: string | null | undefined, t: WorkspaceTranslate) {
-  const cleaned = cleanShareText(value);
-  if (!cleaned) {
-    return "";
-  }
-  if (/\b(state_file|registry_goal|authority_sources|source_registry)\b|\b[a-z_]+\s+\d+\/\d+/i.test(cleaned)) {
-    return t("projection.goalVerified");
-  }
-  return projectionSentence(cleaned, t, "projection.validationRecorded");
-}
-
 function personalVisiblePlanTodos(todos: PersonalAgentTodoItem[], limit = 4) {
   if (todos.length <= limit) {
     return todos;
@@ -876,37 +855,6 @@ function personalVisiblePlanTodos(todos: PersonalAgentTodoItem[], limit = 4) {
   }
   const start = Math.max(0, Math.min(firstOpenIndex - 2, todos.length - limit));
   return todos.slice(start, start + limit);
-}
-
-function personalRunEvidence(payload: StatusPayload, row: GoalDirectoryRow, t: WorkspaceTranslate): PersonalRunEvidence | null {
-  const latestValidation = row.queueItem?.project_asset?.latest_validation;
-  const latestRun = row.latestRun;
-  const eventSummary = payload.event_ledger_summary?.goals.find((goal) => goal.goal_id === row.goal.id);
-  if (!latestValidation && !latestRun && !eventSummary) {
-    return null;
-  }
-  const summary = [
-    personalValidationSentence(latestValidation?.summary, t),
-    projectionSentence(latestRun?.health_check, t),
-    projectionSentence(latestRun?.recommended_action, t),
-  ]
-    .find((value) => value !== "" && value !== "暂无")
-    ?? t("projection.runRecorded");
-  const eventCount = eventSummary?.events_24h ?? 0;
-  const copy = runEvidenceCopy({
-    eventCount,
-    hasArtifact: Boolean(latestRun?.json_exists || latestRun?.markdown_exists),
-    hasLatestValidation: Boolean(latestValidation),
-  }, t);
-  return {
-    generatedAt: latestValidation?.generated_at ?? latestRun?.generated_at ?? eventSummary?.latest_event_at ?? "",
-    label: copy.label,
-    metadata: copy.metadata,
-    runId: latestRun ? `${row.goal.id}:${latestRun.generated_at}` : null,
-    safePreview: [summary, copy.metadata].filter(Boolean).join("\n"),
-    summary,
-    todoId: row.queueItem?.project_asset?.agent_todos?.items.find((todo) => !todo.done)?.todo_id ?? null,
-  };
 }
 
 function personalDecisionPrimaryLabel(goal: PersonalGoalItem) {
@@ -1270,7 +1218,9 @@ function buildPersonalHomeModel(
       needsYouTaskClass: needsYouTodo?.taskClass ?? null,
       needsYouTodoId: needsYouTodo?.todoId ?? null,
       nextSentence,
-      runEvidence: personalRunEvidence(payload, row, t),
+      hasRunObservation: Boolean(row.queueItem?.project_asset?.latest_validation
+        || row.latestRun
+        || payload.event_ledger_summary?.goals.some((item) => item.goal_id === goal.id)),
       state,
       ...(goalSubagentConfigurationEnabled ? {
         subagentExecution: {
@@ -2626,9 +2576,10 @@ function PersonalGoalHome({
       };
     }) : []),
     // A persistent chat session is not itself waiting work. Only surface a
-    // Goal-level execution row when there is execution, evidence, or a wait/fault.
+    // Goal-level execution row when there is execution, a status observation,
+    // or a wait/fault. Observations are not deliverable Files.
     ...(selectedGoal && (runtimeBindings[selectedGoal.goalId]?.turnId
-      || selectedGoal.runEvidence || goalHasExecutionSummary(selectedGoal)) ? [{
+      || selectedGoal.hasRunObservation || goalHasExecutionSummary(selectedGoal)) ? [{
       id: `run:${selectedGoal.goalId}`,
       kind: "run" as const,
       run: {
@@ -2651,12 +2602,6 @@ function PersonalGoalHome({
         title: selectedGoal.nextSentence,
         totalSteps: selectedGoal.agentTodos.length || 1,
         turnId: runtimeBindings[selectedGoal.goalId]?.turnId,
-        outputs: selectedGoal.runEvidence ? [{
-          createdAt: selectedGoal.runEvidence.generatedAt,
-          kind: "evidence" as const,
-          outputId: `${selectedGoal.goalId}:latest-evidence`,
-          title: selectedGoal.runEvidence.label,
-        }] : [],
       },
     }] : []),
     ...contextMessages.map((message): WorkspaceTimelineItem => ({
@@ -2673,23 +2618,6 @@ function PersonalGoalHome({
         text: message.text || (message.pending ? "Agent 正在处理…" : message.lines.join("\n")),
       },
     })),
-    ...(selectedGoal ? [selectedGoal] : model.goals).flatMap((goal) => goal.runEvidence ? [{
-      id: `output:${goal.goalId}:${goal.runEvidence.generatedAt || "latest"}`,
-      kind: "output" as const,
-      output: {
-        agentLabel: personalAgentLabel(goal.agentId),
-        createdAt: goal.runEvidence.generatedAt,
-        goalId: goal.goalId,
-        goalTitle: goal.title,
-        kind: "evidence" as const,
-        outputId: `${goal.goalId}:latest-evidence`,
-        runId: goal.runEvidence.runId ?? undefined,
-        safePreview: goal.runEvidence.safePreview,
-        summary: goal.runEvidence.summary,
-        title: goal.runEvidence.label,
-        todoId: goal.runEvidence.todoId ?? undefined,
-      },
-    }] : []),
     ...(selectedGoal && periodicReport ? [{
       id: `output:${selectedGoal.goalId}:report:${periodicReport.publication.publication_id}`,
       kind: "output" as const,
@@ -3056,9 +2984,14 @@ export function DashboardPage() {
   preferredGoalRef.current = search.goalId;
   const [payload, setPayload] = useState<StatusPayload>(exampleStatusPayload);
   const [source, setSource] = useState<DataSource>({ kind: "example", label: "bundled example" });
-  const [statusSourceCatalog, setStatusSourceCatalog] = useState(() =>
-    loadStatusSourceCatalog(window.localStorage, window.location.href)
-  );
+  const [statusSourceCatalog, setStatusSourceCatalog] = useState(() => {
+    try {
+      return loadStatusSourceCatalog(window.localStorage, window.location.href);
+    } catch {
+      // Browsers may reject access to the storage object itself.
+      return emptyStatusSourceCatalog();
+    }
+  });
   const statusSourceCatalogRef = useRef(statusSourceCatalog);
   statusSourceCatalogRef.current = statusSourceCatalog;
   const [statusUrl, setStatusUrl] = useState(search.statusUrl);

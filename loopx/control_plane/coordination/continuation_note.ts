@@ -58,17 +58,9 @@ export interface ContinuationNoteValidation {
   readonly noteFacts: string;
 }
 
-// Exact closed bounded schema for continuation notes. This is the single
-// source of truth shared by both the producer (buildContextFromInput) and the
-// final claim authority (validateContinuationNote). Every constraint here
-// MUST match what the producer can generate — otherwise the final authority
-// accepts notes that no producer can create.
-//
-// Root-level allowed keys:
-const NOTE_ROOT_KEYS = new Set([
-  "kind",
-  "source_session",
-  "todo_facts",
+// Allowed keys for the raw --from-context input (before producer adds
+// kind/source_session/todo_facts). This is the public input contract.
+export const CONTEXT_ROOT_KEYS: ReadonlySet<string> = new Set([
   "work_summary",
   "rationale",
   "source_refs",
@@ -77,6 +69,17 @@ const NOTE_ROOT_KEYS = new Set([
   "files_touched",
   "key_decisions",
   "open_questions",
+]);
+
+// Exact closed bounded schema for continuation notes. This is the single
+// source of truth shared by both the producer (buildContextFromInput) and the
+// final claim authority (validateContinuationNote). Every constraint here
+// MUST match what the producer can generate — otherwise the final authority
+// accepts notes that no producer can create.
+//
+// Root-level allowed keys:
+const NOTE_ROOT_KEYS = new Set([
+  "kind", "source_session", "todo_facts", ...CONTEXT_ROOT_KEYS,
 ]);
 
 // Per-field max lengths. Must match buildContextFromInput bounds exactly.
@@ -104,7 +107,7 @@ function boundedString(value: unknown, name: string, max: number): value is stri
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 
-function hasOnlyKeys(obj: Record<string, unknown>, allowed: Set<string>): boolean {
+function hasOnlyKeys(obj: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(obj).every(k => allowed.has(k));
 }
 
@@ -134,25 +137,12 @@ function isDecision(value: unknown): value is ContinuationNoteDecision {
     boundedString(v.rationale, "decision_rationale", FIELD_MAX.decision_rationale);
 }
 
-// Allowed keys for the raw --from-context input (before producer adds
-// kind/source_session/todo_facts). This is the public input contract.
-const CONTEXT_ROOT_KEYS = new Set([
-  "work_summary",
-  "rationale",
-  "source_refs",
-  "approaches_tried",
-  "next_steps",
-  "files_touched",
-  "key_decisions",
-  "open_questions",
-]);
-
 // Validate the raw --from-context input against the closed bounded schema.
 // Throws on the first violation: unknown root key, wrong type, or bounds
 // overflow. This runs at the earliest boundary — before any field reaches
 // the persisted note — so the producer can never silently sanitize bad
 // input into a smaller but legal note.
-export function validateRawContext(input: JsonObject): void {
+export function validateRawContext(input: JsonObject): asserts input is JsonObject & ContinuationNoteContext {
   if (!hasOnlyKeys(input, CONTEXT_ROOT_KEYS)) {
     const extra = Object.keys(input).filter(k => !CONTEXT_ROOT_KEYS.has(k));
     throw new Error(`unknown context field: ${extra.join(", ")}`);
@@ -305,4 +295,16 @@ export function buildContinuationNote(
   if (context.key_decisions) note.key_decisions = context.key_decisions;
   if (context.open_questions) note.open_questions = context.open_questions;
   return note;
+}
+
+/** Only an authorized claim-transfer planner may carry a current note forward.
+ * Keep owner binding in the fingerprint: arbitrary claim edits still stale it.
+ * Never refresh a note whose work facts had already changed before transfer. */
+export function carryContinuationAcrossClaimTransfer(before: JsonObject, after: JsonObject): JsonObject {
+  const validation = validateContinuationNote(before.note, computeContinuationTodoFacts(before));
+  if (!validation.valid) return after;
+  const expected = {...before, claimed_by: after.claimed_by};
+  if (computeContinuationTodoFacts(expected) !== computeContinuationTodoFacts(after)) return after;
+  return {...after, note: JSON.stringify({...validation.note,
+    todo_facts: computeContinuationTodoFacts(after)})};
 }

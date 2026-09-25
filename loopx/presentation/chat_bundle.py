@@ -30,7 +30,7 @@ def digest(path: Path) -> str:
 def source_digest(path: Path, content: bytes | None = None) -> str:
     # Git may check text out with CRLF on Windows; binary assets remain exact.
     data = path.read_bytes() if content is None else content
-    if path.suffix in {
+    if path.name == ".gitkeep" or path.suffix in {
         ".ts",
         ".tsx",
         ".js",
@@ -52,7 +52,8 @@ def source_inputs(root: Path) -> dict[str, str]:
         paths.extend(
             path
             for path in (root / name).rglob("*")
-            if path.is_file() and not path.name.endswith(".local.json")
+            if path.is_file() and path.name != ".gitkeep"
+            and not path.name.endswith(".local.json")
         )
     # Shared typed contracts imported by the frontend are build inputs too.
     paths.extend((root / "loopx/control_plane").rglob("*.ts"))

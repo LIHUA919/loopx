@@ -218,7 +218,7 @@ export function registerClaimAcquisitionProofConformance(provider: string, facto
       const first = await claim(store, request);
       assert.equal(first.status, "applied");
       const before = await head(store);
-      const document = {objective: "Validate the accepted task", non_goals: [],
+      const document = {scope: {kind: "all_advancement"}, objective: "Validate the accepted task", non_goals: [],
         criteria: [{id: "outcome", description: "Focused check passes", validation_argv: [process.execPath, "-e", "process.exit(0)"]}],
         bindings: [{todo_id: request.todo_id, criterion_ids: ["outcome"]}]};
       assert.equal((await configureGoalAcceptance(store, {goal_id: request.goal_id, actor_agent_id: null,

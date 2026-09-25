@@ -5,10 +5,13 @@ from typing import Any
 
 from .review_contract import (
     COMPATIBILITY_ASSESSMENT,
+    OUTCOME_IMPACT_ASSESSMENT,
+    SCOPE_COVERAGE_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
     build_review_execution_contract,
     build_review_plan,
 )
+from .review_body import check_review_body
 
 
 def _missing(value: object) -> bool:
@@ -116,6 +119,70 @@ def _check_compatibility_assessment(blockers: list[str], value: object) -> None:
         blockers.append(f"{key}:unknown_boundary_cannot_justify_decision")
 
 
+def _check_outcome_impact(blockers: list[str], value: object) -> None:
+    key = "problem_context:outcome_impact"
+    contract = OUTCOME_IMPACT_ASSESSMENT
+    if not isinstance(value, Mapping):
+        blockers.append(f"{key}:missing_assessment")
+        return
+    for dimension in contract["dimensions"]:
+        row = value.get(dimension)
+        row_key = f"{key}:{dimension}"
+        _require_fields(blockers, evidence_id=row_key, value=row, fields=contract["fields"])
+        if not isinstance(row, Mapping):
+            continue
+        decision = row.get("decision")
+        if decision not in contract["decision_values"]:
+            blockers.append(f"{row_key}:invalid_decision")
+        if decision == "not_applicable":
+            continue
+        _require_fields(blockers, evidence_id=row_key, value=row, fields=contract["applicable_fields"])
+        refs = row.get("evidence_refs")
+        if not isinstance(refs, list) or not refs or any(
+            not isinstance(ref, str) or not ref.strip() for ref in refs
+        ):
+            blockers.append(f"{row_key}:missing_evidence_refs")
+        if decision in contract["blocking_decisions"]:
+            blockers.append(f"{row_key}:blocking_decision")
+            _require_fields(blockers, evidence_id=row_key, value=row, fields=["minimum_repair"])
+        if decision == "accepted_tradeoff":
+            _require_fields(blockers, evidence_id=row_key, value=row,
+                            fields=["acceptance_basis", "bounded_cost_and_recovery"])
+
+
+def _check_scope_coverage(blockers: list[str], value: object) -> None:
+    key = "observable_semantics:scope_coverage"
+    contract = SCOPE_COVERAGE_ASSESSMENT
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["fields"])
+    if not isinstance(value, Mapping):
+        return
+    decision = value.get("decision")
+    if decision not in contract["decision_values"]:
+        blockers.append(f"{key}:invalid_decision")
+    if decision in {"overbroad", "not_yet_proven"}:
+        blockers.append(f"{key}:blocking_decision")
+    if decision == "not_applicable":
+        return
+    _require_fields(blockers, evidence_id=key, value=value, fields=contract["applicable_fields"])
+    cases = _require_items(blockers, evidence_id=key, row=value,
+                           requirement={"items_field": "cases", "item_fields": contract["case_fields"]})
+    ids = [case.get("case_id") for case in cases]
+    for case_id in contract["case_ids"]:
+        if ids.count(case_id) != 1:
+            blockers.append(f"{key}:missing_or_duplicate_case:{case_id}")
+    for case in cases:
+        case_id = case.get("case_id")
+        status = case.get("status")
+        if case_id not in contract["case_ids"] or status not in contract["case_statuses"]:
+            blockers.append(f"{key}:invalid_case")
+        elif status in {"failed", "unverified"}:
+            blockers.append(f"{key}:case_not_proven:{case_id}")
+        elif status == "not_applicable" and _missing(case.get("reason")):
+            blockers.append(f"{key}:missing_case_reason:{case_id}")
+        if case_id == "covered_subject" and status != "passed":
+            blockers.append(f"{key}:covered_subject_not_proven")
+
+
 def check_review_result(
     packet: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -177,8 +244,12 @@ def check_review_result(
             blockers.append(f"{key}:missing_evidence_detail")
         if status == "verified":
             requirement = requirements[key]
+            if key == "problem_context":
+                _check_outcome_impact(blockers, row.get("outcome_impact"))
             if key == "code_volume":
                 _check_compatibility_assessment(blockers, row.get("compatibility_assessment"))
+            if key == "observable_semantics":
+                _check_scope_coverage(blockers, row.get("scope_coverage"))
             if key == "semantic_alignment":
                 decision = row.get("candidate_decision")
                 verdict = row.get("verdict")
@@ -269,6 +340,12 @@ def check_review_result(
             if finding.get("blocking") is True or severity in {"P0", "P1"}:
                 blockers.append("unresolved_blocking_finding")
     verdict = result.get("verdict")
+    body = check_review_body(str(result.get("review_body") or ""),
+                             head_oid=str(matches[0].get("head_oid") or ""),
+                             behavior_bearing=applicability.get("behavior_bearing_change") is True)
+    errors.extend(f"review_body:{reason}" for reason in body["invalid_reasons"])
+    if body["verdict"] is not None and body["verdict"] != verdict:
+        errors.append("review_body:verdict_mismatch")
     if verdict not in {"APPROVE", "REQUEST_CHANGES"}:
         errors.append("unsupported_verdict")
     if verdict == "APPROVE" and blockers:
@@ -281,6 +358,7 @@ def check_review_result(
         "approval_consistent": not errors and not blockers,
         "errors": sorted(set(errors)),
         "approval_blockers": sorted(set(blockers)),
+        "review_body_check": body,
         "evidence_truth_verified": False,
         "remote_head_verified": False,
         "external_writes_performed": False,

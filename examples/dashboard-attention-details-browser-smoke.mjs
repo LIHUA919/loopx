@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchBrowser, loadPlaywright, startViteDashboardServer, waitForHttp } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const require = createRequire(import.meta.url);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,7 +15,7 @@ const port = Number(process.env.LOOPX_ATTENTION_DETAILS_PORT ?? 5293);
 const packaged = process.env.LOOPX_ATTENTION_DETAILS_PACKAGED === "1";
 const output = resolve(root, "output/playwright/attention-details");
 const server = packaged
-  ? spawn(process.env.LOOPX_PYTHON_BIN ?? "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
+  ? spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
   : startViteDashboardServer({ dashboardDir, port });
 const url = `http://127.0.0.1:${port}/${packaged ? "chat/" : ""}?statusUrl=/status.json`;
 let browser;

@@ -18,6 +18,8 @@ import type {AuthorityStore} from "./authority_store.ts";
 import {canonicalAuthorityObject, canonicalAuthoritySha256, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
+import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import {continuationExecutionAuthority, sealLeasedContinuationAdoption} from "./continuation_adoption.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {
   CONTINUATION_NOTE_MARKER,
@@ -27,9 +29,7 @@ import {
   validateRawContext,
   type ContinuationNoteContext,
   type ContinuationNoteValidation,
-  type ContinuationNoteApproachTried,
-  type ContinuationNoteFileTouched,
-  type ContinuationNoteDecision,
+  CONTEXT_ROOT_KEYS,
 } from "./continuation_note.ts";
 
 const accepted = new Set(["applied", "replayed", "recovered", "no_change"]);
@@ -80,25 +80,20 @@ function buildContextFromInput(input: JsonObject): ContinuationNoteContext {
   //   2. Direct TypeScript callers: context fields passed flat (backward
   //      compat with unit tests). Request keys are allowed but only
   //      context keys are extracted.
-  const contextKeys = new Set(["work_summary", "rationale", "source_refs", "approaches_tried",
-    "next_steps", "files_touched", "key_decisions", "open_questions"]);
+  const contextKeys = CONTEXT_ROOT_KEYS;
   const requestKeys = new Set(["goal_id", "todo_id", "agent_id", "registered_agents", "action",
     "session_id", "operation_id", "expected_provider_revision", "workspace", "artifacts",
-    "target_agent_id", "handoff_format", "runtime_root"]);
+    "target_agent_id", "handoff_format", "runtime_root", "lease_proof"]);
   // Resolve the raw context source.
   let rawContext: JsonObject;
   if (input.context !== undefined) {
     // CLI path: context is in the dedicated field. Validate it is an object.
     if (typeof input.context !== "object" || input.context === null || Array.isArray(input.context)) {
-      throw new Error("context must be an object with context-only fields (work_summary, rationale, etc.)");
+      throw new Error("context must be a JSON object with context-only fields (work_summary, rationale, etc.)");
     }
     rawContext = input.context as JsonObject;
-    // Only context keys are allowed. Reject ALL operational keys.
-    for (const key of Object.keys(rawContext)) {
-      if (!contextKeys.has(key)) {
-        throw new Error(`unknown context field: ${key}. Context may only contain: ${[...contextKeys].join(", ")}`);
-      }
-    }
+    validateRawContext(rawContext);
+    return rawContext;
   } else {
     // Backward compat: flat fields. Allow both context and request keys.
     rawContext = input;
@@ -121,16 +116,7 @@ function buildContextFromInput(input: JsonObject): ContinuationNoteContext {
   // All fields are already validated — pass them through directly without
   // any second sanitization. The producer's output shape is guaranteed to
   // match what validateContinuationNote() will see later.
-  return {
-    work_summary: context.work_summary as string | undefined,
-    rationale: context.rationale as string | undefined,
-    source_refs: context.source_refs as readonly string[] | undefined,
-    approaches_tried: context.approaches_tried as readonly ContinuationNoteApproachTried[] | undefined,
-    next_steps: context.next_steps as readonly string[] | undefined,
-    files_touched: context.files_touched as readonly ContinuationNoteFileTouched[] | undefined,
-    key_decisions: context.key_decisions as readonly ContinuationNoteDecision[] | undefined,
-    open_questions: context.open_questions as readonly string[] | undefined,
-  };
+  return context;
 }
 
 export async function executeTodoContinuation(store: AuthorityStore, value: unknown): Promise<JsonObject> {
@@ -149,6 +135,7 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
   if (targetAgentId != null && !registered.includes(targetAgentId)) {
     return reject("target_agent_not_registered", "Target agent must be registered for this goal");
   }
+  const proof = decodeTaskLeaseProof(input.lease_proof);
   const head = await store.loadAuthority();
   if (head.status !== "loaded") return {ok: false, ...head};
   validateCoordinationTodoReadModel(head.head, goalId);
@@ -156,11 +143,12 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
   const todo = projection.todos.get(todoId);
   if (!todo) return reject("todo_not_found", "The stable Todo ID no longer exists; do not recreate it from text");
   if (todo.status !== "open" || todo.archive_state !== "active") return reject("todo_not_open", "Todo is no longer open and active");
-  // The existing metadata writer cannot yet prove a lease-bearing note update.
-  // Preserve its boundary instead of inventing a second lease/transfer protocol.
-  if (![undefined, "legacy", "soft_claim"].includes(head.head.handoff_mode as string | undefined) || projection.leases.has(todoId)) {
-    return reject("continuation_lease_unsupported", "Stage A supports lease-free local Todos only; use existing lease/handoff commands for leased work");
-  }
+  const leased = ![undefined, "legacy", "soft_claim"].includes(head.head.handoff_mode as string | undefined)
+    || projection.leases.has(todoId);
+  const authorityInput = {goal_id: goalId, todo_id: todoId, agent_id: agentId,
+    registered_agents: registered, proof};
+  const execution = leased ? continuationExecutionAuthority(head.head, authorityInput)
+    : {allowed: true, reason_code: "lease_not_required"};
   const common = {goal_id: goalId, todo_id: todoId, expected_role: "agent",
     actor_agent_id: agentId, registered_agents: registered, dry_run: false, now: new Date()};
   if (input.action === "prepare") {
@@ -172,7 +160,8 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
     const result = await executeCoordinationTodoUpdate(store, {...common,
       operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
       expected_provider_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected revision"),
-      patch: {note}, clear_fields: []});
+      patch: {note}, clear_fields: [],
+      lease_idempotency_key: proof?.idempotency_key, lease_expected_version: proof?.expected_version});
     const current = await store.loadAuthority();
     const verified = current.status === "loaded" &&
       indexCoordinationProjection(current.head, goalId).todos.get(todoId)?.note === note;
@@ -201,10 +190,20 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
     note_state: validNote ? "current" : note?.kind === CONTINUATION_NOTE_MARKER ? "stale" : "missing",
     availability: environment, decision_rationale: validNote ? note!.rationale : null,
     evidence_refs: [`todo:${todoId}`, `revision:${head.provider_revision}`, ...(validNote && Array.isArray(note!.source_refs) ? note!.source_refs as string[] : [])],
-    next_step: validNote && environment.ready === true ? todo.text : "Restore workspace/artifacts and ask the source session to prepare a current decision note",
-    can_adopt: validNote && environment.ready === true && note!.source_session !== sessionId,
+    next_step: leased && !execution.allowed
+      ? "Resolve the execution_authority gap; use task-lease transfer --transfer-claim when changing owner"
+      : validNote && environment.ready === true ? todo.text : "Restore workspace/artifacts and ask the source session to prepare a current decision note",
+    ...(leased ? {execution_authority: execution} : {}),
+    can_adopt: validNote && environment.ready === true && note!.source_session !== sessionId &&
+      (!leased || (execution.allowed && (targetAgentId === null || targetAgentId === agentId))),
     digest};
   if (input.action === "inspect") return packet;
+  if (leased && (todo.claimed_by !== agentId || (targetAgentId !== null && targetAgentId !== agentId))) {
+    return {...packet, ...reject("continuation_transfer_required",
+      "The source must use task-lease transfer --transfer-claim; the receiver then adopts with its own current lease proof")};
+  }
+  if (leased && !execution.allowed) return {...packet, ...reject(execution.reason_code,
+    "Adoption requires the current execution lease and admission; inspect the reported authority gap")};
   if (!packet.can_adopt) return {...packet, ...reject("continuation_not_ready", "Inspect and repair the reported note/session/availability gap before adopting")};
   const adoptOwnerId = targetAgentId ?? agentId;
   const preClaimFacts = stableFacts(todo);
@@ -221,7 +220,12 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
     expected_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected revision"),
     continuation_note_facts: noteValidation.noteFacts,
   } : undefined;
-  const result = await executeCoordinationTodoClaim(store, {...common, claimed_by: adoptOwnerId,
+  const result = leased
+    ? await sealLeasedContinuationAdoption(store, {...authorityInput, session_id: sessionId,
+        operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        expected_provider_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected revision"),
+        note_facts: noteValidation.noteFacts})
+    : await executeCoordinationTodoClaim(store, {...common, claimed_by: adoptOwnerId,
     operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
     expected_provider_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected revision"),
     transfer_grant: transferGrant});
@@ -230,8 +234,9 @@ export async function executeTodoContinuation(store: AuthorityStore, value: unkn
   const currentTodo = current.status === "loaded" ? indexCoordinationProjection(current.head, goalId).todos.get(todoId) : undefined;
   const verified = currentTodo?.status === "open" && currentTodo.archive_state === "active" &&
     currentTodo.claimed_by === adoptOwnerId && currentTodo.note === todo.note && stableFacts(currentTodo) === preClaimFacts &&
-    current.status === "loaded" && current.provider_revision === result.provider_revision;
+    current.status === "loaded" && current.provider_revision === result.provider_revision &&
+    (!leased || continuationExecutionAuthority(current.head, authorityInput).allowed);
   return {...packet, action: "adopt", ok: accepted.has(String(result.status)) && verified,
-    claim: result, current_authority_verified: verified, target_agent_id: adoptOwnerId,
+    ...(leased ? {adoption: result} : {claim: result}), current_authority_verified: verified, target_agent_id: adoptOwnerId,
     provider_revision: current.status === "loaded" ? current.provider_revision : null};
 }

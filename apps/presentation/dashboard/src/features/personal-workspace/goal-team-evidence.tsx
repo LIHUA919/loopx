@@ -1,4 +1,5 @@
 import {GoalTeamLineage} from "./goal-team-lineage";
+import {GoalTeamEpisode} from "./goal-team-episode";
 import {GoalTeamComparison} from "./goal-team-comparison";
 import {TeamArtifactReport} from "./team-artifact-content";
 import {useEffect, useRef, useState} from "react";
@@ -55,6 +56,8 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
   const receiptLabel = status === "pending" ? (zh ? "已进入协调员收件箱，等待读取" : "In the coordinator inbox; awaiting read")
     : status === "delivered" ? (zh ? "已交给协调员；尚无应用回执" : "Delivered to coordinator; application not confirmed")
     : (zh ? "投递状态待核实" : "Delivery requires reconciliation");
+  const hasCorrectionPath = Boolean(result?.dependencies?.some(link => link.relation === "revises")
+    && result?.dependencies?.some(link => link.relation === "responds_to"));
   return <section className="goal-team-evidence" aria-label={zh ? "执行证据" : "Execution evidence"} aria-busy={busy}>
     <div className="goal-team-work-actions"><h3>{zh ? "执行证据" : "Execution evidence"}</h3>
       <button type="button" disabled={busy} onClick={() => void read()}>{zh ? "重新读取证据" : "Recheck evidence"}</button></div>
@@ -63,8 +66,11 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
     {result ? <>
       <p role="status"><strong>{result.agent_id} · {delegationStateLabel(result, zh)}</strong>{" · "}{observedAt}</p>
       <p>{zh ? "按需读取的当前观察，不是持续在线状态；验收不代表协调员已采用。" : "An on-demand observation, not continuous liveness; acceptance does not establish coordinator adoption."}</p>
+      <GoalTeamEpisode sessionId={sessionId} result={result} zh={zh} onInspect={onInspect}/>
       <GoalTeamComparison sessionId={sessionId} result={result} zh={zh}/>
-      <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>
+      {hasCorrectionPath ? <details className="goal-team-lineage-detail"><summary>{zh ? "版本与采用关系详情" : "Version and adoption details"}</summary>
+        <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/></details>
+        : <GoalTeamLineage result={result} zh={zh} onInspect={onInspect}/>}
       {result.error ? <p role="alert">{result.error}</p> : null}
       {result.status === "accepted" && !result.error && !result.recovery_required && result.artifacts?.length ? result.artifacts.map(artifact => <div key={`${artifact.ref}:${artifact.sha256}`}>
         <TeamArtifactReport artifact={artifact} zh={zh}/>

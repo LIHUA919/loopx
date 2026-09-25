@@ -45,7 +45,7 @@ export async function commandObservationScenario(kind: CommandObservationCase, s
   const common = {goal_id: goal, actor_agent_id: "agent-a", registered_agents: agents,
     operation_id: `observe-${kind}`, dry_run: false, now};
   const expected_provider_revision = initial.provider_revision;
-  const document = {objective: "Deliver an independently verifiable result", non_goals: [],
+  const document = {scope: {kind: "all_advancement"}, objective: "Deliver an independently verifiable result", non_goals: [],
     criteria: [{id: "outcome", description: "The bounded validation passes",
       validation_argv: [process.execPath, "-e", "process.exit(0)"]}],
     bindings: [{todo_id: target, criterion_ids: ["outcome"]}]};

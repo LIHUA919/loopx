@@ -4,8 +4,38 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
+
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 8
+REVIEW_POLICY_REVISION = 10
+
+OUTCOME_IMPACT_ASSESSMENT = {
+    "dimensions": ["long_horizon", "user_experience"],
+    "decision_values": ["preserved", "improved", "accepted_tradeoff", "regression", "not_yet_proven", "not_applicable"],
+    "fields": ["decision", "reason", "inspected_path"],
+    "applicable_fields": ["before_after", "evidence_refs"],
+    "blocking_decisions": ["regression", "not_yet_proven"],
+    "rule": (
+        "Judge whether the whole PR preserves sustained useful work and the user's ability to reach "
+        "the intended outcome, even when its local feature works. For long_horizon, follow the "
+        "affected entrypoint through action, durable result and later continuation: repeated turns, "
+        "retry/restart, accumulated state, scheduling fairness or dependency return as applicable. "
+        "Look for starvation, endless replan/retry, lost commitments, duplicated effects and growing "
+        "cost without progress. A successful single call or blocker receipt is insufficient. "
+        "For user_experience, compare the real affected CLI, UI or messaging journey: setup and "
+        "repeated intervention, truthful state/readback, actionable failure, correction/cancel and "
+        "recovery. Inspect existing companion surfaces; a backend success is not a usable journey. "
+        "Reuse concrete walkthrough and validation references; select bounded cases by changed "
+        "risk rather than requiring a long soak or every surface for every PR. Derive expected "
+        "outcomes from the accepted product contract, not from the patch. A deliberate safety, "
+        "budget or external-dependency wait is valid when its owner, release condition and resume "
+        "or terminal route are explicit; do not remove safeguards merely to keep running. "
+        "accepted_tradeoff requires an independent acceptance_basis and bounded_cost_and_recovery; "
+        "author intent alone cannot justify hidden friction or waive authority. For regression or "
+        "not_yet_proven name minimum_repair. For not_applicable identify the inspected path and "
+        "why it cannot materially affect this dimension. These declarations do not prove truth."
+    ),
+}
 
 # One bounded replacement for the former free-text compatibility justification.
 COMPATIBILITY_ASSESSMENT = {
@@ -38,13 +68,30 @@ COMPATIBILITY_ASSESSMENT = {
     ),
 }
 
-REQUIRED_FINAL_SECTIONS = [
-    "动机",
-    "改动思路",
-    "具体改动",
-    "对主干的风险",
-    "我的整体评价",
-]
+SCOPE_COVERAGE_ASSESSMENT = {
+    "decision_values": ["not_applicable", "verified", "overbroad", "not_yet_proven"],
+    "fields": ["decision", "reason"],
+    "applicable_fields": ["authorized_scope", "scope_source", "enforcement_selector", "recovery_owner", "cases"],
+    "case_ids": ["covered_subject", "uncovered_same_container", "new_subject_after_activation",
+                 "scope_escape_attempt", "recovery_to_progress"],
+    "case_fields": ["case_id", "status", "input_and_authority", "expected_outcome",
+                    "observed_outcome", "entrypoint_and_evidence"],
+    "case_statuses": ["passed", "failed", "unverified", "not_applicable"],
+    "rule": (
+        "For an added, widened or retained gate on the touched caller path, separate authorization "
+        "to enable it, the subjects it covers, and whether each covered subject is ready/bound. "
+        "Goal/project activation alone does not prove authority over every current or future item. "
+        "Establish scope from owner intent or the accepted contract, never from the selector being reviewed. "
+        "Run covered, uncovered-in-the-same-container and newly-created-subject counterfactuals through "
+        "the real entrypoint; also test that mutable fields cannot let covered work escape. "
+        "For explicitly authorized global scope, assert that future subjects are intentionally covered. "
+        "Trace refusal through its authorized recovery owner to renewed useful work; a blocker receipt, "
+        "replan ACK or retry recommendation alone is not recovery. Share existing walkthrough/validation "
+        "references. Each inapplicable case needs a scoped reason. If the boundary contains no gate or "
+        "coverage decision, use not_applicable plus the inspected path. Retest the opposite failure "
+        "direction after a bypass or overblocking fix; fixing the latest finding is not whole-PR proof."
+    ),
+}
 
 CODE_AREAS = {
     "product_runtime",
@@ -94,16 +141,19 @@ def _review_order(
     return [str(item.get("path") or "") for item in ranked[:limit] if item.get("path")]
 
 
-def _section(label: str, word_hint: str, instruction: str) -> dict[str, str]:
+def _section(label: str, minimum: int, instruction: str) -> dict[str, Any]:
     return {
         "label": label,
-        "word_hint": word_hint,
+        "word_hint": f"至少 {minimum} 个正文字符；不含标题、链接地址、代码和重复行",
+        "minimum_prose_characters": minimum,
         "content": "",
         "agent_instruction": instruction,
     }
 
 
 def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
+    floors = review_body_requirements(behavior_bearing=bool(
+        set(_as_mapping(item.get("areas"))) & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
     key_files = [
         candidate
         for candidate in _as_sequence(item.get("key_files"))
@@ -115,34 +165,34 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
         "sections": [
             _section(
                 "动机",
-                "按证据需要；无最低字数",
-                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
+                floors["动机"],
+                "Use `problem_context`: verified goal basis, old behavior, before/after outcome and delivery verdict. Explain outcome_impact on sustained progress and the user journey, including accepted tradeoffs or scoped inapplicability. Distinguish completing the scoped goal from a justified increment; explain why this is a complete useful slice, not just why the code works.",
             ),
             _section(
                 "改动思路",
-                "按证据需要；无最低字数",
+                floors["改动思路"],
                 "Use `architecture_flow`, `repository_reuse`, and `walkthroughs`: entry point, authoritative state, decision boundary, positive path, existing implementation comparison, and ownership trade-off. For introduced or newly enforced state, explain derivation versus irreducible intent and the real producer/trigger, not just its serializer.",
             ),
             _section(
                 "具体改动",
-                "按证据需要；无最低字数",
+                floors["具体改动"],
                 "Use `changed_line_classification` and `symbol_map`. Code changes require `### 关键代码讲解` for 2-5 behavior-bearing exact-head symbols; docs-only changes use `### 关键内容讲解`.",
             ),
             _section(
                 "对主干的风险",
-                "按证据需要；无最低字数",
+                floors["对主干的风险"],
                 "Use `failure_analysis`, `walkthroughs.negative`, and `validation_matrix`; trace each finding from triggering state to observed outcome and minimum repair. When `scope_fit` applies, name the active production caller or explicitly record a coverage-only boundary. When `change_proportionality` applies, compare verified problem impact with mechanism and maintenance cost; a resolved implementation blocker does not justify approval when the full exact-head scope remains disproportionate. For opt-in changes, prove disabled-path parity through `default_off_isolation`; do not infer isolation from an absent feature object. Use `authority_semantics` to verify that public protocol names do not claim a broader actor lifecycle or authority model than the implementation provides. For a `semantic_alignment` contract impact or finding, include a concise `### 语义与 CI 对齐` subsection; ordinary `not_applicable` triage needs no separate subsection. For a blocker, name the current obligation, triggering change, observed evidence, minimum repair and rerun command. Surface typed-state-rule, domain-neutrality, behavior-change-disclosure, and guidance-vs-obligation findings when their evidence applies.",
             ),
             _section(
                 "我的整体评价",
-                "按证据需要；无最低字数",
-                "Use `observable_semantics` to report baseline/head comparisons and remaining compatibility gaps; equal decision codes are insufficient. Use `code_volume` (including its compatibility assessment and bounded simplification decision), `change_proportionality`, `default_off_isolation`, `authority_semantics`, validation results, residual risk, and exact-head freshness to state the verdict and the evidence needed for re-review. For semantic or constraint-related changes, state whether the PR reuses an existing vocabulary, extends one, creates one, stays local, or remains unknown, and link any required registry/RFC/CI repair.",
+                floors["我的整体评价"],
+                "State the `problem_context.outcome_impact` decisions for long_horizon and user_experience, including material tradeoffs and unresolved evidence. Use `observable_semantics` to report baseline/head comparisons and remaining compatibility gaps; equal decision codes are insufficient. Use `code_volume` (including its compatibility assessment and bounded simplification decision), `change_proportionality`, `default_off_isolation`, `authority_semantics`, validation results, residual risk, and exact-head freshness to state the verdict and the evidence needed for re-review. For semantic or constraint-related changes, state whether the PR reuses an existing vocabulary, extends one, creates one, stays local, or remains unknown, and link any required registry/RFC/CI repair.",
             ),
         ],
         "review_order": _review_order(key_files),
         "output_hint": (
             "Render the verified structured result using the five sections. "
-            "The capability-owned review_execution_contract is the evidence and completeness authority. Scale prose to evidence and complexity; simple changes can use one or two sentences per section. Do not repeat evidence or pad to a word count."
+            "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
         ),
     }
 
@@ -176,7 +226,10 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "challenge_design": (
                 "Before explaining how the patch works, make the strongest evidence-backed "
                 "case for not shipping it. Compare doing nothing, a smaller fix in the existing "
-                "owner, and the proposed design. Read the target repository's architecture "
+                "owner, and the proposed design against sustained useful work and the user journey. "
+                "A locally correct feature can still strand later work or impose unjustified user "
+                "intervention; assess both dimensions in problem_context.outcome_impact against the "
+                "accepted product contract. Read the target repository's architecture "
                 "and contribution rules: identify canonical state, decision/effect owner, "
                 "and capability/provider placement. A new CLI calling a new helper proves "
                 "reachability, not demand or correct ownership. Prefer derived state over "
@@ -191,7 +244,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "Ask what could still be false when the author's tests pass, then probe "
                 "that counterexample through the owning real boundary. Parent exit does "
                 "not prove descendants drained; receipt/hash existence does not prove "
-                "authentic execution; feature-on success does not prove baseline parity. "
+                "authentic execution; feature-on success does not prove baseline parity. A gate may prevent bypass and still wrongly capture independent work: prove its enabled-but-out-of-scope and future-subject behavior as well. A recorded blocker is not restored progress. "
                 "If a mock supplies the very postcondition under review, it is not proof. "
                 "Inspect related open/merged changes sharing the contract, not only files "
                 "that conflict textually. Bound the search to shared callers/owners; do "
@@ -206,7 +259,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             ),
             "reconcile_verdict": (
                 "Approve only when positive value, architecture fit, and applicable "
-                "evidence are established. No reproduced bug is not proof of a good design. "
+                "evidence are established. A long_horizon or user_experience regression blocks approval "
+                "even when the requested local feature is delivered and CI passes. No reproduced bug is not proof of a good design. "
                 "Unresolved material evidence means hold/request changes with the exact "
                 "missing observation, not an invented defect. Reject a mechanism when a "
                 "smaller boundary solves the demonstrated problem; do not keep adding "
@@ -218,6 +272,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
         "evidence_requirements": [
             {
                 "evidence_id": "problem_context",
+                "outcome_impact": OUTCOME_IMPACT_ASSESSMENT,
                 "required_when": "always",
                 "verdict_values": [
                     "goal_achieved",
@@ -235,6 +290,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "before_after_scenario",
                     "smaller_fix_analysis",
                     "observable_outcome",
+                    "outcome_impact",
                     "non_goals",
                 ],
                 "fields_by_verdict": {
@@ -458,6 +514,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             },
             {
                 "evidence_id": "observable_semantics",
+                "scope_coverage": SCOPE_COVERAGE_ASSESSMENT,
                 "required_when": "behavior_bearing_change",
                 "verdict_values": [
                     "equivalent",
@@ -475,6 +532,7 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "intentional_deltas",
                     "regression_sensitivity",
                     "state_projection_counterfactuals",
+                    "scope_coverage",
                     "unverified_dimensions",
                     "verdict",
                 ],
@@ -1163,6 +1221,7 @@ def build_review_plan(item: Mapping[str, Any]) -> dict[str, Any]:
             },
             "findings": [],
             "residual_risk": "",
+            "review_body": "",
             "verdict": "unverified",
         },
     }

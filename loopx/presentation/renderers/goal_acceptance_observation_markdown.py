@@ -56,6 +56,7 @@ def append_goal_acceptance_observation_markdown(
         lines.extend([
             "  - Goal acceptance contract (read-only; does not automatically approve or complete the Goal):",
             f"    - Goal source: {_contract_text(observation.get('goal_id'))}",
+            f"    - contract coverage: {_contract_text(as_dict(contract.get('scope')).get('kind', 'all_advancement'))}",
             f"    - contract revision: {_contract_text(contract.get('revision'))}",
             f"    - contract digest: {_contract_text(contract.get('digest'))}",
             f"    - objective: {_contract_text(contract.get('objective') or 'unknown')}",
@@ -76,7 +77,7 @@ def append_goal_acceptance_observation_markdown(
                 criteria = ", ".join(str(value) for value in as_list(task.get("criterion_ids")))
                 lines.append(
                     f"    - {_contract_text(task.get('todo_id'))}: "
-                    f"{task_states.get(task.get('state'), 'unknown')}; "
+                    f"{task_states.get(str(task.get('state')), 'unknown')}; "
                     f"criteria={_contract_text(criteria or 'unknown')}"
                 )
                 if task.get("reason"):
@@ -85,7 +86,7 @@ def append_goal_acceptance_observation_markdown(
                     lines.append("      outside the current task gate")
         verification = as_dict(contract.get("verification"))
         lines.append(
-            f"    - artifact verification: {verification_states.get(contract.get('status'), 'unknown')}"
+            f"    - artifact verification: {verification_states.get(str(contract.get('status')), 'unknown')}"
         )
         held = as_list(contract.get("held_todo_ids"))
         if held:

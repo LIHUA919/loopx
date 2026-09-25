@@ -219,6 +219,76 @@ export const typedActionsScenario = {
       await operationUi.close();
     }
 
+    const storedWorkspaceGate = {
+      schema_version: "loopx_chat_action_proposal_v1",
+      proposal_id: "stored-goal-create-workspace-gate",
+      action_kind: "goal.create",
+      summary: "Create stored workspace Goal",
+      normalized_parameters: { goal_id: "product-release", title: "Stored workspace Goal", workspace_ref: "current" },
+      context: { kind: "goal_directory", goal_id: "product-release" },
+      expected_state_fingerprint: "fixture-workspace-gate-r1",
+      permission_classification: "durable_write",
+      validation_evidence: ["workspace selection required"],
+      available_transitions: ["regenerate", "reject", "defer"],
+      status: "gated",
+      receipt: null,
+      stale: null,
+      gate: {
+        kind: "workspace_selection_required",
+        summary: "Select one server-configured workspace before creating this Goal.",
+        next_action: "Select a workspace to regenerate the confirmation preview.",
+        candidates: [{ workspace_ref: "workspace-fixture", label: "Workspace 1" }],
+      },
+      created_at: "2026-09-14T01:00:00Z",
+      updated_at: "2026-09-14T01:00:01Z",
+    };
+    const workspaceGateUi = await openWorkspacePage(browser, url, {
+      apiOptions: { initialActionProposals: [storedWorkspaceGate] },
+    });
+    try {
+      const { api, page } = workspaceGateUi;
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.locator(".personal-gated-summary summary").click();
+      const proposalRow = page.locator(".personal-proposal-row", { hasText: "Stored workspace Goal" });
+      try {
+        await proposalRow.waitFor({ state: "visible", timeout: 10_000 });
+      } catch (error) {
+        throw new Error(`${error.message}; proposals=${await page.locator(".personal-proposal-row").allInnerTexts()}; errors=${workspaceGateUi.errors.join(" | ")}; body=${(await page.locator("body").innerText()).slice(0, 2000)}`);
+      }
+      await proposalRow.click();
+      const drawer = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
+      if ((await drawer.innerText()).includes("需要宿主确认")) {
+        throw new Error("Workspace selection gate was mislabeled as host-only confirmation");
+      }
+      const writesBeforeSelection = api.durableWriteCount;
+      await drawer.getByRole("button", { name: /Workspace 1/ }).click();
+      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).waitFor({ state: "visible" });
+      const regenerated = api.actionPreviews.at(-1);
+      if (regenerated?.normalized_parameters.workspace_ref !== "workspace-fixture") {
+        throw new Error(`Stored workspace selection did not regenerate the Goal preview: ${JSON.stringify(regenerated)}`);
+      }
+      if (api.durableWriteCount !== writesBeforeSelection) throw new Error("Selecting a workspace applied without confirmation");
+      await page.getByRole("button", { name: "创建 Goal 并开始首轮", exact: true }).click();
+      await page.getByText("已应用，LoopX 状态将刷新。", { exact: true }).waitFor({ state: "visible" });
+      if (!api.actionApplies.includes(regenerated.proposalId)) throw new Error("Confirmation did not apply the regenerated preview");
+      if (api.durableWriteCount !== writesBeforeSelection + 1) throw new Error("Confirmation did not write exactly one Goal");
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
+      const stored = await page.evaluate(async (proposalId) => {
+        const response = await fetch("/api/actions?goal_id=product-release");
+        const payload = await response.json();
+        return payload.proposals?.find((proposal) => proposal.proposal_id === proposalId);
+      }, regenerated.proposalId);
+      if (stored?.status !== "applied" || stored.receipt?.projection_verified !== true) {
+        throw new Error(`Confirmed workspace Goal did not survive readback: ${JSON.stringify(stored)}`);
+      }
+    } finally {
+      await workspaceGateUi.close();
+    }
+
     // Real Goal button -> typed preview -> compiler -> drawer/apply, with only
     // the service boundary controlled. No test computes the plan under review.
     for (const width of [1512, 390]) {
@@ -583,8 +653,8 @@ export const typedActionsScenario = {
       await englishGoalNavigation.getByRole("button", { name: /^(Chat|对话)$/, exact: true }).click();
       await page.locator('[data-goal-panel="chat"]').getByText("Agent is waiting for your decision", { exact: true }).first().waitFor({ state: "visible" });
       await englishGoalNavigation.getByRole("button", { name: /^(Files|成果)$/, exact: true }).click();
-      const latestRunOutput = page.locator('[data-output-kind="evidence"]', { hasText: "Latest run" }).first();
-      await latestRunOutput.waitFor({ state: "visible" });
+      if (await page.locator('[data-output-kind="evidence"]').count() !== 0) throw new Error("Run status appeared as a delivered file");
+      await page.getByRole("region", { name: "Accepted team reports" }).getByText("No verifiable team reports yet.", { exact: true }).waitFor({ state: "visible" });
       const englishProjectionText = await page.locator(".personal-workspace-main").innerText();
       for (const forbidden of ["最近运行", "最近验证", "Agent 正在整理下一步", "Agent 正在推进当前 Goal", "Agent 等待你的决定"]) {
         if (englishProjectionText.includes(forbidden)) throw new Error(`English projection exposed Chinese UI copy ${forbidden}: ${englishProjectionText}`);
@@ -755,7 +825,8 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-tasks-loopx-theme.png"), fullPage: false, animations: "disabled" });
       await goalNavigation.getByRole("button", { name: /^(Files|成果)$/ }).click();
       const publicFiles = page.locator(".personal-files-list > button");
-      await publicFiles.first().waitFor({ state: "visible" });
+      if (await publicFiles.count() !== 0) throw new Error("A status or run observation appeared as a delivered file");
+      await page.getByRole("region", { name: "已验收的团队报告" }).getByText("暂无可核验的团队报告。", { exact: true }).waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "goal-files-loopx-theme.png"), fullPage: false, animations: "disabled" });
       await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.locator(".personal-channel-timeline").waitFor({ state: "visible" });
@@ -1127,8 +1198,15 @@ export const typedActionsScenario = {
       if (providerOverlap) throw new Error(`Model provider category ${providerOverlap}`);
       await page.screenshot({ path: resolve(outputDir, "model-provider-settings-zh-cn.png"), fullPage: false, animations: "disabled" });
 
-      await page.getByRole("button", { name: /全局能力配置/ }).click();
-      await page.getByRole("heading", { level: 1, name: "全局能力配置", exact: true }).waitFor({ state: "visible" });
+      api.failNextMachineInspection = true;
+      await page.getByRole("button", { name: "能力中心", exact: true }).click();
+      await page.getByRole("heading", { level: 1, name: "能力中心", exact: true }).waitFor({ state: "visible" });
+      const loadError = page.getByRole("alert").filter({ hasText: "无法读取机器配置" });
+      await loadError.waitFor({ state: "visible" });
+      if (await page.getByText("当前没有注册可在机器作用域配置的能力。", { exact: true }).count()) {
+        throw new Error("A failed machine catalog request was presented as an empty registry");
+      }
+      await loadError.getByRole("button", { name: "重试" }).click();
       // The catalog workbench mounts after its inspection resolves, so the
       // category's contents are asserted only once the workbench itself exists.
       await page.locator(".personal-capability-layout").waitFor({ state: "visible" });
@@ -1146,24 +1224,17 @@ export const typedActionsScenario = {
         throw new Error("Initial machine selection must follow the visible catalog order, not the API source order");
       }
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable machine settings must not show internal editor-contract notices");
-      // Two capabilities are machine-only: the manager runtime profile and the
-      // steward channel's executor. Every other catalog entry is Goal-scoped.
-      if (await machineCatalog.getByRole("button").count() !== goalCapabilityCatalog().length + 2) {
-        throw new Error("Machine settings did not combine machine-only and Goal capabilities in the shared catalog");
+      // This catalog contains only machine-scoped capabilities outside the
+      // steward section. Goal-only entries belong in Goal settings.
+      if (await machineCatalog.getByRole("button").count() !== 3) {
+        throw new Error("Other machine settings must exclude steward and Goal-only capabilities");
       }
-      await machineCatalog.getByRole("button", { name: /^管家 Runtime/ }).click();
-      await page.getByLabel(/^运行模式/u).waitFor({ state: "visible" });
-      await page.locator(".personal-capability-help > summary").click();
-      await page.getByText(/受保护操作仍单独校验/u).waitFor({ state: "visible" });
-      await page.screenshot({ path: resolve(outputDir, "manager-runtime-machine-profile.png"), fullPage: false, animations: "disabled" });
       const requestsBeforeReadOnly = api.machineConfigurationRequests.length;
-      await machineCatalog.getByRole("button", { name: /^自适应子 Agent 容量/ }).click();
-      await page.getByText(/此能力目前仅支持 Goal 级配置/u).waitFor({ state: "visible" });
-      if (await page.getByRole("button", { name: "预览变更", exact: true }).count()
-          || await page.locator("#machine-configuration-json").count()
-          || await page.getByLabel(/^启用$/u).count()
+      if (await machineCatalog.getByRole("button", { name: /^自适应子 Agent 容量/ }).count()
+          || await machineCatalog.getByRole("button", { name: /^运行环境/ }).count()
+          || await machineCatalog.getByRole("button", { name: /^模型与执行器/ }).count()
           || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
-        throw new Error("Goal-only capability exposed a machine mutation path");
+        throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
       await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
       await page.getByLabel(/^两次 Goal 复核间的已完成 Todo 数/u).waitFor({ state: "visible" });
@@ -1215,7 +1286,7 @@ export const typedActionsScenario = {
 
       await page.getByRole("button", { name: /语言/ }).click();
       await page.getByRole("radio", { name: /English/ }).click();
-      await page.getByRole("button", { name: /Global capabilities/ }).click();
+      await page.getByRole("button", { name: /Capability Center/ }).click();
       await page.getByRole("heading", { level: 2, name: "Periodic reports", exact: true }).waitFor({ state: "visible" });
       const rawValues = page.locator(".personal-capability-raw-values");
       if (await rawValues.getAttribute("open") !== null) throw new Error("Raw JSON must be collapsed by default");
@@ -1241,14 +1312,13 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-subagent-capability-en.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("button", { name: /Language/ }).click();
       await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
-      await page.getByRole("button", { name: /全局能力配置/ }).click();
+      await page.getByRole("button", { name: "能力中心", exact: true }).click();
       await page.locator(".personal-settings-body").evaluate((element) => element.scrollTo({ top: 0 }));
       await page.screenshot({ path: resolve(outputDir, "machine-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
-      // The steward's own executor is a machine setting like any other: the
-      // operator picks it in the form, and the exact reviewed revision carries
-      // the choice into the same namespaced store.
-      await page.getByRole("button", { name: /管家执行器/ }).click();
-      await page.getByRole("heading", { level: 2, name: "管家执行器", exact: true }).waitFor({ state: "visible" });
+      // Steward owns a first-level destination with just model/executor and
+      // runtime. The exact reviewed revision still uses the machine store.
+      await page.locator(".personal-settings-tabs").getByRole("button", { name: "管家", exact: true }).click();
+      await page.getByRole("heading", { level: 2, name: "模型与执行器", exact: true }).waitFor({ state: "visible" });
       const stewardFields = page.locator(".personal-capability-fields");
       // The selects carry their option text inside the same label, so they are
       // matched by prefix rather than by an exact label string.
@@ -1256,7 +1326,9 @@ export const typedActionsScenario = {
       await stewardFields.getByLabel(/^模型/u).waitFor({ state: "visible" });
       await stewardFields.getByLabel(/^推理档位/u).waitFor({ state: "visible" });
       await stewardFields.getByLabel(/^首选管家执行器/u).selectOption("dsh");
-      await stewardFields.getByLabel(/^灵活池可用执行器/u).waitFor({ state: "visible" });
+      if (await stewardFields.getByLabel(/^灵活池可用执行器/u).count()) {
+        throw new Error("Preferred steward routing must not show the flexible fallback pool");
+      }
       await stewardFields.getByLabel(/^模型/u).fill("deepseek-v4-flash");
       await stewardFields.getByLabel(/^推理档位/u).selectOption("high");
       await page.screenshot({ path: resolve(outputDir, "machine-steward-executor-zh-cn.png"), fullPage: false, animations: "disabled" });
@@ -1279,6 +1351,11 @@ export const typedActionsScenario = {
       if (stewardApply?.expected_plan_revision !== "sha256:machine-plan") {
         throw new Error("The steward executor apply lost its reviewed plan revision");
       }
+      await page.locator(".personal-capability-list").getByRole("button", { name: "运行环境", exact: true }).click();
+      await page.getByLabel(/^运行模式/u).waitFor({ state: "visible" });
+      await page.locator(".personal-capability-help > summary").click();
+      await page.getByText(/受保护操作仍单独校验/u).waitFor({ state: "visible" });
+      await page.screenshot({ path: resolve(outputDir, "manager-runtime-machine-profile.png"), fullPage: false, animations: "disabled" });
       const settingsViewport = page.viewportSize();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForTimeout(200);
@@ -1291,10 +1368,10 @@ export const typedActionsScenario = {
 
       api.machineInspectionStatus = "invalid";
       api.invalidMachineNamespaces = ["manager_runtime"];
-      await page.getByRole("button", { name: /全局能力配置/ }).click();
+      await page.locator(".personal-settings-tabs").getByRole("button", { name: "管家", exact: true }).click();
       const invalidRepair = page.getByTestId("machine-invalid-repair");
       await invalidRepair.waitFor({ state: "visible" });
-      await page.getByRole("heading", { level: 2, name: "管家 Runtime", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("heading", { level: 2, name: "运行环境", exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       const managerRepairPreview = api.machineConfigurationRequests.findLast(
         (item) => item.phase === "preview" && item.namespace === "manager_runtime",
@@ -1314,7 +1391,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: /Lark/ }).click();
       api.machineInspectionStatus = "invalid";
       api.invalidMachineNamespaces = ["periodic_report"];
-      await page.getByRole("button", { name: /全局能力配置/ }).click();
+      await page.getByRole("button", { name: "能力中心", exact: true }).click();
       await invalidRepair.waitFor({ state: "visible" });
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "预览变更", exact: true }).click();

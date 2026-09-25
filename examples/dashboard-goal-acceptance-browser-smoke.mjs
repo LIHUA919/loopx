@@ -6,11 +6,12 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupBrowserSmoke, launchBrowser, loadPlaywright, startViteDashboardServer, waitForHttp } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.LOOPX_GOAL_ACCEPTANCE_PORT ?? 5291);
 const packaged = process.env.LOOPX_GOAL_ACCEPTANCE_PACKAGED === "1";
-const python = process.env.LOOPX_PYTHON ?? "python3";
+const python = resolveTestPython();
 const payload = JSON.parse(execFileSync(python, ["-c", "import runpy,tempfile,json; from pathlib import Path; m=runpy.run_path('tests/control_plane/test_goal_acceptance_observation.py'); t=tempfile.TemporaryDirectory(); print(json.dumps(m['collect_fixture'](Path(t.name), missing_claim=True)))"], { cwd: root, encoding: "utf8" }));
 const dashboardDir = resolve(root, "apps/presentation/dashboard");
 const server = packaged

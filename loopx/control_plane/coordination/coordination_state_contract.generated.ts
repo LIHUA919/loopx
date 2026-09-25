@@ -8,6 +8,9 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+export const COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA = "loopx_coordination_source_transfer_v0";
+export const COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA = "loopx_coordination_source_transfer_result_v0";
+
 export const LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA = "loopx_local_coordination_todo_read_request_v0";
 export const LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA = "loopx_local_coordination_todo_read_result_v0";
 export const LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA = "loopx_local_coordination_todo_list_request_v0";
@@ -179,6 +182,7 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
       "reason",
       "completed_at",
       "completion_turn_key",
+      "completion_result",
       "updated_at",
       "superseded_by",
       "completion_validation_required",
@@ -355,5 +359,12 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
     "unknown_field_policy": "reject",
     "field_removal_policy": "maintainer_approval_required",
     "markdown_role": "human_workbench_and_compatibility_projection"
+  },
+  "source_transfer_protocol": {
+    "request_schema": COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA,
+    "result_schema": COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA
+  },
+  "source_transfer_limits": {
+    "max_bytes": 16777216
   }
 } as const);

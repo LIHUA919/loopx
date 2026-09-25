@@ -1077,6 +1077,7 @@ def record_quota_monitor_poll(
     next_claimed_by: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    use_current_task_lease: bool = False,
     turn_instance_id: str | None = None,
     receipt_bound_todo_id: str | None = None,
     scheduler_execution_context: Mapping[str, Any]
@@ -1246,6 +1247,7 @@ def record_quota_monitor_poll(
         next_claimed_by=next_claimed_by,
         task_lease_idempotency_key=task_lease_idempotency_key,
         task_lease_expected_version=task_lease_expected_version,
+        use_current_task_lease=use_current_task_lease,
         turn_instance_id=turn_instance_id,
         status_reloader=status_reloader,
     )

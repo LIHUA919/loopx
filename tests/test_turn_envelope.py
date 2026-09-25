@@ -909,6 +909,28 @@ def test_protocol_packet_derivation_retains_unverified_summary() -> None:
     assert packet["summary"] == "legacy opaque packet"
 
 
+@pytest.mark.parametrize("path_segments", [170, 1_500])
+def test_signed_host_action_preserves_a_long_complete_command(
+    path_segments: int,
+) -> None:
+    source = _compat_decision("absent")
+    command = (
+        "loopx quota should-run --registry /"
+        + "project/" * path_segments
+        + " --codex-app"
+    )
+    assert len(command) > 1_200
+    source["interaction_contract"]["agent_channel"]["primary_action"] = command
+
+    envelope = build_turn_envelope(source)
+
+    assert envelope["action_signature"]["matches"] is True
+    assert envelope["action"]["primary_action"] == command
+    assert extract_turn_authority({"turn_envelope": envelope})["primary_action"] == command
+    if path_segments == 1_500:
+        assert envelope["compaction"]["within_budget"] is False
+
+
 @pytest.mark.parametrize("packet_format", ["absent", "historical_v0", "opaque", "residue"])
 def test_protocol_packet_compatibility_through_real_readers(packet_format: str) -> None:
     """The summary is an observation; the typed decision owns execution."""

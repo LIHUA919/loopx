@@ -85,6 +85,7 @@ check and task ID with the actual artifact checks and existing advancement task:
 
 ```json
 {
+  "scope": {"kind": "selected_work", "todo_ids": ["todo_deliver"]},
   "objective": "Deliver a checked artifact",
   "non_goals": ["Publish the artifact"],
   "criteria": [{
@@ -96,6 +97,42 @@ check and task ID with the actual artifact checks and existing advancement task:
   "bindings": [{"todo_id": "todo_deliver", "criterion_ids": ["artifact-present"]}]
 }
 ```
+
+Every new configuration or reconfiguration must explicitly declare coverage:
+`selected_work` requires a nonempty list of existing Agent advancement Todo IDs;
+`all_advancement` explicitly covers all current and future advancement work.
+Prefer selected work for a bounded experiment or delegated artifact. Selection
+and binding are separate: selected work with no confirmed binding remains held.
+Bindings outside the selected set are rejected. Agents cannot change coverage;
+owner configuration still uses preview, provider CAS and exact operation replay.
+
+Legacy persisted documents without `scope` retain their Goal-wide behavior and
+original digest. Reading or upgrading does not narrow them. A fresh configuration
+without scope is rejected with an actionable error; original committed retries
+still recover their receipts. An older runtime that does not understand selected
+coverage rejects it rather than silently ignoring it; update readers before an
+owner-approved scope change.
+
+Unselected work retains its ordinary validation, claims, leases, permissions and
+continuation checks. Selected work cannot edit role/class/status to escape its
+contract. Changes to unrelated work do not stale a selected-work verification;
+changes to selected work do. The dashboard's existing read-only acceptance detail,
+Markdown export and CLI expose coverage without granting new configuration power.
+No Lark configuration operation is introduced.
+
+**恢复与范围 / Recovery and coverage.** Missing/stale associations trigger scoped
+replanning, but a concrete blocker receipt is a wait checkpoint, not a repair or
+handoff. Inspect contract coverage before requesting per-task rebinding. If a
+bounded experiment accidentally gates independent work, prepare a correction for
+the authorized owner, retain all task-level validation and read back runnable work
+after applying it. Do not rebind every new task, disable checks, or create another
+unbound repair Todo. Contract revision changes invalidate old hold checkpoints.
+
+所有新配置与重新配置都必须明确选择覆盖范围：`selected_work` 只管明确列出的既有推进任务，
+`all_advancement` 明确覆盖当前和未来全部推进任务。局部实验应选择前者；选中但未绑定的任务
+仍然受阻。旧合同省略范围时保持原来的全局语义和摘要，升级不会偷偷放松。
+范围仅由原 owner 配置路径修改；范围外任务继续接受自身的校验、租约和权限检查。
+记录阻塞只能暂停重复重规划，不能冒充修复已完成或已交接；应诊断范围、提交具体修正并验证恢复。
 
 Keep executable declarations in the owner's local file; public readback omits
 command arguments and output. The configured checks run as bounded argv commands

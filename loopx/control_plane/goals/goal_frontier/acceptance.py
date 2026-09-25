@@ -67,7 +67,9 @@ def acceptance_gaps_from_held_goal_binding(
             "replan_trigger_summary": f"The acceptance association for {todo_id} is {state}.",
             "acceptance_summary": "Preserve the owner-confirmed criteria and the original Turn identity.",
             "resolution_hint": (
-                f"Inspect {todo_id} and its acceptance binding; "
+                f"Inspect {todo_id}, its acceptance binding and the owner's contract scope; "
+                "a local validation contract must not unintentionally hold independent work. "
+                "Prepare a scope/binding correction for the authorized owner when needed; "
                 + ("restore an unintended edit, " if state == "stale" else
                    "prepare the missing association for owner review, ") +
                 "or record an evidence-linked path delta and continue via an eligible "

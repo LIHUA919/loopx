@@ -422,7 +422,9 @@
 .personal-settings-goal-target { display: inline-flex; align-items: center; gap: 7px; max-width: min(100%, 360px); min-width: 0; padding: 6px 10px; border: 1px solid var(--pw-line-strong); border-radius: 7px; background: var(--pw-card); font-size: 12px; line-height: 1.35; }
 .personal-settings-goal-target > span { flex: none; color: var(--pw-muted); }
 .personal-settings-goal-target > strong { overflow: hidden; min-width: 0; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.personal-settings-tabs { display: grid; gap: 3px; }
+.personal-settings-tabs { display: grid; align-content: start; gap: 18px; }
+.personal-settings-tab-group { display: grid; gap: 3px; min-width: 0; }
+.personal-settings-tab-group-label { padding: 0 10px 7px; color: var(--pw-faint); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .personal-settings-tabs button { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 9px; width: 100%; min-height: 54px; padding: 8px 10px; border: 0; border-radius: 11px; background: transparent; color: var(--pw-muted); cursor: pointer; text-align: left; }
 .personal-settings-tabs button:hover { background: rgb(255 255 255 / 65%); color: var(--pw-text); }
 .personal-settings-tabs button[aria-current="page"] { background: #fff; color: var(--pw-text); box-shadow: 0 1px 4px rgb(30 28 20 / 10%); }
@@ -681,6 +683,10 @@
 .personal-manager-team-result-actions button { padding: 4px 0; border: 0; background: none; color: var(--pw-link, #0070f3); cursor: pointer; font-size: 12px; }
 .personal-manager-team-result .goal-team-report { max-height: 280px; overflow: auto; }
 .personal-manager-team-result .goal-team-artifact { min-width: 0; }
+.personal-manager-managed-report { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--pw-line); }
+.personal-manager-managed-report > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.personal-manager-managed-report > header strong { font-size: 13px; font-weight: 600; }
+.personal-manager-managed-report > header small { color: var(--pw-muted); font-size: 11px; }
 .personal-gated-summary { border: 1px solid #ead39c; border-radius: 14px; background: #fffaf0; }
 .personal-gated-summary > summary { display: flex; align-items: center; gap: 9px; padding: 12px 14px; color: #6d5620; cursor: pointer; list-style: none; }
 .personal-gated-summary > summary::-webkit-details-marker { display: none; }
@@ -1316,7 +1322,10 @@
   .personal-settings-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .personal-settings-sidebar { position: static; gap: 10px; height: auto; max-height: 30dvh; overflow: auto; padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--pw-line); }
   .personal-settings-title { display: none; }
-  .personal-settings-tabs { display: flex; overflow-x: auto; }
+  .personal-settings-tabs { display: flex; gap: 14px; overflow-x: auto; }
+  .personal-settings-tab-group { display: flex; flex: 0 0 auto; gap: 3px; }
+  .personal-settings-tab-group + .personal-settings-tab-group { padding-left: 14px; border-left: 1px solid var(--pw-line); }
+  .personal-settings-tab-group-label { display: none; }
   .personal-settings-tabs button { flex: 0 0 180px; }
   .personal-settings-body { padding: 20px 14px; }
   .personal-settings-header { align-items: center; gap: 14px; }
@@ -1674,6 +1683,10 @@
 .personal-digest-stats { display: flex; gap: 8px; }
 .personal-digest-stats span { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 13px; border: 1px solid var(--pw-line-strong); border-radius: 99px; background: #fff; color: var(--pw-muted); font-size: 12px; }
 .personal-digest-stats b { color: var(--pw-text); font-size: 14px; }
+@media (max-width: 720px) {
+  .personal-digest-card { flex-direction: column; align-items: flex-start; }
+  .personal-digest-stats { flex-wrap: wrap; }
+}
 
 
 

@@ -324,7 +324,7 @@ def capability_configuration_editor(
                 _field(
                     "drift_threshold",
                     "Consecutive drift receipts before an obligation",
-                    "integer",
+                    "number",
                     minimum=PROGRESS_REVIEW_MIN_DRIFT_THRESHOLD,
                     maximum=PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
                 ),

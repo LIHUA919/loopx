@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
+from .local_authority_shadow_projection import source_effect_runtime_result as effect_runtime_result
 from . import local_authority_shadow_observation
 from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA as RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
@@ -30,7 +30,6 @@ from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
     LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
     LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA,
-    LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA,
 )
 
 
@@ -205,46 +204,13 @@ def build_todo_runtime_shadow_projection(
 ) -> dict[str, object]:
     """Build the complete source projection using the capture partition rules."""
 
-    from .local_authority_shadow_projection import canonical_bytes, canonical_value, todo_partition_projection
-    from .coordination_state_contract import (
-        TODO_CANONICAL_READ_RECORD_FIELDS,
-        TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
-    )
+    from .local_authority_shadow_projection import project_coordination_source
 
-    compact = todo_partition_projection(handoff_mode=handoff_mode, todos=todos if isinstance(todos, list) else [])["todos"]
-    current_todo_ids = {str(item["todo_id"]) for item in compact if item.get("archive_state") == "active"}
-    compact_leases: list[dict[str, object]] = []
-    if isinstance(leases, list):
-        for item in leases:
-            if not isinstance(item, Mapping):
-                continue
-            todo_id = item.get("todo_id")
-            if not isinstance(todo_id, str) or not todo_id:
-                continue
-            # The legacy lease directory is an append-retained history while a
-            # canonical coordination head models only the current Todo graph.
-            # Retired lease files stay on disk for audit, but projecting them
-            # without their retired Todo would create an invalid orphan edge.
-            if todo_id not in current_todo_ids:
-                continue
-            compact_leases.append(canonical_value(dict(item)))
-    compact_leases.sort(key=lambda item: str(item["todo_id"]))
-    todo_records_sha256 = hashlib.sha256(canonical_bytes(compact)).hexdigest()
-    return {
-        "schema_version": LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA,
-        "goal_id": goal_id,
-        "source_authority": "legacy_markdown_and_task_lease",
-        "handoff_mode": handoff_mode,
-        "todos": compact,
-        "leases": compact_leases,
-        "todo_read_model": {
-            "schema_version": TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
-            "todo_count": len(compact),
-            "records_sha256": todo_records_sha256,
-            "contract_fields": list(TODO_CANONICAL_READ_RECORD_FIELDS),
-        },
-        "partitions": {"todos": None, "leases": None},
-    }
+    return project_coordination_source({
+        "kind": "snapshot", "goal_id": goal_id, "handoff_mode": handoff_mode,
+        "read_model_schema": "loopx_todo_canonical_read_record_v0",
+        "todos": todos, "leases": [] if leases is None else leases,
+    })
 
 
 def capture_todo_archive_dependencies(todos: list[dict[str, Any]], state_text: str) -> list[dict[str, Any]]:

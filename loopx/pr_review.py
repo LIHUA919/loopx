@@ -31,6 +31,11 @@ from .capabilities.pr_review_queue.github_source import (
     attach_pr_review_details_concurrently as _attach_pr_review_details_concurrently,
 )
 from .capabilities.pr_review_queue.check_attempts import latest_check_attempts
+from .capabilities.pr_review_queue.review_body import (
+    check_review_body,
+    english_review_verdict as _english_review_verdict,
+)
+from .capabilities.pr_review_queue.review_contract import CODE_AREAS, BEHAVIORAL_POLICY_AREAS
 from .control_plane.runtime.time import now_utc_iso
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
@@ -48,13 +53,6 @@ SOURCE_SURFACES = [
     "GitHub pull request status check rollup",
 ]
 
-REQUIRED_REVIEW_SECTION_HEADINGS = (
-    "动机",
-    "改动思路",
-    "具体改动",
-    "对主干的风险",
-    "我的整体评价",
-)
 AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
     "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
 )
@@ -782,34 +780,11 @@ def _review_ready_timestamp(pr: Mapping[str, Any]) -> datetime | None:
     )
 
 
-def _english_review_verdict(body: str) -> str | None:
-    for line in body.splitlines():
-        normalized = line.strip().replace("**", "")
-        match = re.match(
-            r"(?i)^english verdict\s*:\s*(APPROVE|REQUEST_CHANGES)\b",
-            normalized,
-        )
-        if match:
-            return match.group(1).upper()
-    return None
-
-
-def _review_body_has_required_format(body: str, *, head_oid: str) -> bool:
-    return (
-        bool(head_oid)
-        and head_oid.lower() in body.lower()
-        and all(
-            re.search(rf"(?m)^#+\s*{re.escape(heading)}\s*$", body)
-            for heading in REQUIRED_REVIEW_SECTION_HEADINGS
-        )
-        and _english_review_verdict(body) is not None
-    )
-
-
 def _review_conclusion(
     pr: Mapping[str, Any],
     *,
     reviewer_login: str | None,
+    behavior_bearing: bool = True,
 ) -> dict[str, Any]:
     head_oid = str(pr.get("headRefOid") or pr.get("head_oid") or "").strip()
     pr_author = str(
@@ -852,8 +827,10 @@ def _review_conclusion(
         reasons: list[str] = []
         if not head_oid or commit_oid.casefold() != head_oid.casefold():
             reasons.append("review_not_bound_to_current_head")
-        if not _review_body_has_required_format(body, head_oid=head_oid):
+        body_check = check_review_body(body, head_oid=head_oid, behavior_bearing=behavior_bearing)
+        if not body_check["valid"]:
             reasons.append("review_body_missing_standalone_bilingual_format")
+            reasons.extend(f"review_body:{reason}" for reason in body_check["invalid_reasons"])
         if author_owned_fallback:
             expected_title = {
                 "APPROVE": AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
@@ -952,7 +929,8 @@ def _normalize_pr(
         if ready_at is not None
         else 0.0
     )
-    conclusion = _review_conclusion(pr, reviewer_login=reviewer_login)
+    conclusion = _review_conclusion(pr, reviewer_login=reviewer_login,
+        behavior_bearing=bool({item["area"] for item in files} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS)))
     item: dict[str, Any] = {
         "number": number,
         "title": _redact_text(pr.get("title"), limit=180),

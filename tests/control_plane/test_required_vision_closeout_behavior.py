@@ -14,6 +14,7 @@ from loopx.control_plane.testing.model_tool_behavior import (
 from loopx.control_plane.testing.replan_semantic_action_behavior import (
     DoubaoReplanSemanticActionBehaviorActor, _build_fixture,
 )
+from loopx.control_plane.testing import replan_semantic_action_behavior, vision_shell_host
 from loopx.control_plane.testing.vision_shell_host import VisionShellHost, shell_isolation_available
 
 pytestmark = pytest.mark.skipif(not shell_isolation_available(), reason="Native shell needs sandbox-exec or bubblewrap")
@@ -122,6 +123,40 @@ def test_cli_validation_errors_are_correctable_in_the_same_draft(tmp_path: Path,
     assert result["vision_closeout"]["spend_count"] == 1
 
 
+def test_missing_durable_receipt_reaches_shell_and_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+    execute = replan_semantic_action_behavior._execute_loopx
+    intercepted = False
+
+    def first_refresh_without_receipt(command: str, **kwargs: Any) -> str:
+        nonlocal intercepted
+        if "refresh-state" in command and not intercepted:
+            intercepted = True
+            return '{"ok": true}'
+        return execute(command, **kwargs)
+
+    def retry_after_error(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        feedback = json.loads(request["messages"][-1]["content"])
+        assert feedback["exit_code"] != 0
+        assert "vision_closeout_durable_writeback_missing" in feedback["output"]
+        return projected_refresh(request)
+
+    monkeypatch.setattr(replan_semantic_action_behavior, "_execute_loopx", first_refresh_without_receipt)
+    result = _qualify(tmp_path, [
+        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction("cat fixture/permission-config.json"),
+        vision_patch_action,
+        projected_refresh,
+        retry_after_error,
+        projected_spend,
+    ])
+    assert intercepted is True
+    assert result["qualification_passed"] is True
+    assert result["vision_closeout"]["spend_count"] == 1
+
+
 @pytest.mark.parametrize("invalid", ["no_source", "wrong_turn", "unread_reference", "no_spend"])
 def test_native_host_does_not_qualify_unproven_closeout(tmp_path: Path, invalid: str) -> None:
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
@@ -194,6 +229,28 @@ def test_os_boundary_protects_inputs_authority_private_data_and_network(tmp_path
         assert fixture.work_source_target.read_bytes() == original
         assert (fixture.project_root / "draft.txt").read_text().strip() == "draft"
         assert not (fixture.runtime_root / "forged.json").exists()
+    finally:
+        host.close()
+
+
+def test_timed_out_shell_kills_process_group_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = _build_fixture(tmp_path / "fixture", required_vision=True)
+    host = VisionShellHost(fixture.project_root, lambda *args: "ok", turn_instance_id="shell-timeout-test")
+    original_killpg = vision_shell_host.os.killpg
+    calls: list[int] = []
+
+    def kill_once(pid: int, sig: int) -> None:
+        calls.append(pid)
+        if len(calls) > 1:
+            raise AssertionError("A timed-out process group must not be killed twice")
+        original_killpg(pid, sig)
+
+    monkeypatch.setattr(vision_shell_host, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(vision_shell_host.os, "killpg", kill_once)
+    try:
+        _, code = host.execute("sleep 5")
+        assert code == 124
+        assert len(calls) == 1
     finally:
         host.close()
 

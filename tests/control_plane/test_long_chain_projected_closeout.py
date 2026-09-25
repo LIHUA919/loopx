@@ -4,11 +4,66 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TURN_ID,
     _configure_selected_todo_replan_fixture, _projected_cli_args,
     _run_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize("advancement,monitors,replan_required", [
+    (9, 19, False), (14, 6, False), (15, 19, True),
+])
+def test_managed_turn_counts_advancement_without_monitor_backlog(
+    tmp_path: Path, advancement: int, monitors: int, replan_required: bool,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    header = state.read_text(encoding="utf-8").split("## Agent Todo\n\n")[0]
+    rows = [
+        f"- [ ] [P1] Validate bounded slice {index}.\n"
+        f"  <!-- loopx:todo todo_id=todo_chain_{index:012d} status=open "
+        "task_class=advancement_task action_kind=validate "
+        f"claimed_by={AGENT_ID} updated_at=2026-08-01T00%3A00%3A00Z -->\n"
+        for index in range(advancement)
+    ]
+    rows.extend(
+        f"- [ ] [P2-monitor] Watch independent target {index}.\n"
+        f"  <!-- loopx:todo todo_id=todo_monitor_{index:012d} status=open "
+        "task_class=continuous_monitor action_kind=observe "
+        f"claimed_by={AGENT_ID} target_key=synthetic-target-{index} "
+        "cadence=1h next_due_at=2099-01-01T00%3A00%3A00Z "
+        "updated_at=2026-08-01T00%3A00%3A00Z -->\n"
+        for index in range(monitors)
+    )
+    state.write_text(header + "## Agent Todo\n\n" + "".join(rows), encoding="utf-8")
+
+    # The public managed-Turn entrypoint must keep both the first read and replay
+    # free of a long-chain duty introduced solely by independent monitors.
+    for _ in range(2):
+        rc, result = _run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", TURN_ID, "--scan-path", str(project), cwd=project,
+        )
+        assert rc == 0, result
+        frontier = result["goal_frontier_projection"]
+        assert frontier["remaining_advancement_frontier"][
+            "current_agent_claimed_advancement_count"
+        ] == advancement
+        assert frontier["replan_required"] is replan_required
+        assert result["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
+        obligation = result["heartbeat_recommendation"].get("replan_obligation")
+        if replan_required:
+            assert [trigger["kind"] for trigger in obligation["triggers"]] == ["long_todo_chain"]
+            assert obligation["triggers"][0]["count_kind"] == "claimed_advancement_todos"
+            assert obligation["triggers"][0]["trigger_count"] == advancement
+        else:
+            assert obligation is None
+        assert _spend_run_count(runtime) == 0
 
 
 def test_projected_vision_replan_settles_without_a_meta_successor(tmp_path: Path) -> None:

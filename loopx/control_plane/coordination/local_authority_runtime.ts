@@ -1351,6 +1351,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
         goal_acceptance_source_binding: input.goal_acceptance_source_binding == null
           ? null : requireJsonObject(input.goal_acceptance_source_binding, "goal_acceptance_source_binding"),
         goal_acceptance_validation_receipts: input.goal_acceptance_validation_receipts,
+        completion_result: input.completion_result == null
+          ? null : requireJsonObject(input.completion_result, "completion_result"),
         completion_policy_request:
           input.completion_policy_request === null || input.completion_policy_request === undefined
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
@@ -1467,7 +1469,7 @@ export async function continueLocalTodo(
       const fence = await loadLegacyCoordinationWriterFence(root, goalId);
       if (fence.status !== "loaded") return {ok: false, status: "rejected",
         reason_code: "continuation_requires_canonical_authority",
-        reason: "Use an explicitly promoted local file authority; this command never promotes or falls back to Markdown"};
+        reason: "Use an explicitly promoted canonical authority; this command never promotes or falls back to Markdown"};
       return {...await executeTodoContinuation(store, input), ...evidence};
     });
   } catch (error) {

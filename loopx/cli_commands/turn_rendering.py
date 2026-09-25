@@ -1,11 +1,51 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+from ..control_plane.turn_driver import (
+    LOOPX_TURN_EXECUTION_SCHEMA_VERSION,
+    TurnRecoveryBlockedError,
+)
 from ..presentation.renderers.turn_envelope_markdown import (
     turn_envelope_budget_warning_lines,
 )
+
+
+def build_turn_error_payload(
+    planned: dict[str, Any], exc: Exception, *, turn_command: str,
+) -> dict[str, Any]:
+    """Preserve the failed Turn's identity and effect readback at the CLI edge."""
+
+    transaction = planned.get("transaction")
+    transaction = transaction if isinstance(transaction, Mapping) else {}
+    turn_key = str(transaction.get("turn_key") or "")
+    run_once = turn_command == "run-once"
+    error_code = getattr(exc, "code", None)
+    error_payload = getattr(exc, "payload", None)
+    return {
+        **({"error_code": error_code, **(error_payload if isinstance(error_payload, Mapping) else {})}
+           if isinstance(error_code, str) else {}),
+        "ok": False,
+        "schema_version": (
+            LOOPX_TURN_EXECUTION_SCHEMA_VERSION if run_once else "loopx_turn_plan_v0"
+        ),
+        "mode": "run_once" if run_once else "plan",
+        "error": str(exc),
+        "effects": {
+            "host_invoked": False,
+            "state_written": False,
+            "scheduler_acknowledged": False,
+            "quota_spent": False,
+        },
+        **({
+            "resume_turn_key": turn_key,
+            "journal_ref": f"turn:{turn_key.removeprefix('sha256:')[:16]}",
+        } if run_once and turn_key else {}),
+        **({"recovery_decision": exc.decision}
+           if isinstance(exc, TurnRecoveryBlockedError) else {}),
+    }
 
 
 def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:

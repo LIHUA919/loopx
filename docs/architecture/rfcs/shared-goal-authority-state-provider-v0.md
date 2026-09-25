@@ -23,6 +23,13 @@
   [Chinese version](./shared-goal-authority-state-provider-v0.zh-CN.md) and this
   English version are semantic mirrors. A difference between them is a defect.
 
+## Current delivery frontier (2026-09-24)
+
+The `d64c4d377`/open-PR audit withdraws earlier “5–8 / 6–8 / 7–9” estimates.
+Implemented code, six relevant open PRs, four proposed new batches (including
+complete-source transport) and D1–D3 evidence are separate units; four batches
+are not a guaranteed total PR count. Use the [reconciled inventory and exits](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md) as the current plan.
+
 ## Persistence route for steward scale (2026-09-16)
 
 [Roadmap](loopx-overall-roadmap-v0.md) R5 reuses D1 projection, D2 real-backend/capacity/applicable ten-day soak and D3 fenced cutover. R6 connects the selected shared profile to authenticated local/cloud execution. R1–R3 can advance on supported profiles without waiting for PostgreSQL or whole-Goal default promotion.
@@ -36,8 +43,8 @@ after promotion. Legacy event-only claims reject rather than disappear at a
 Markdown boundary; event append locks protect the observation through writeback.
 Canonical changes reuse durable command receipt recovery. This is an L2/L3
 compatibility correction with Python decision deletion, not cohort migration,
-SQLite D2 completion or a default flip. The remaining 7–9 packages still depend
-on executor/consumer closure, qualification, integrated migration and onboarding.
+SQLite D2 completion or a default flip. Remaining work is classified in the current delivery frontier rather than
+counted as unchanged packages.
 [Operation, repair and recovery](../../reference/handoff-mode.md).
 
 The terminal caller family now binds review and validation to the canonical
@@ -45,7 +52,7 @@ source and recovers historical receipts independently of private argv. Agent
 completion and Monitor stop share current-head display acknowledgement with
 ordinary edits. [Caller and recovery contract](../../reference/canonical-terminal-review.md).
 This advances L2/L5 without closing executor-held fences, D1–D3 or default
-onboarding; the conditional 7–9-package estimate below remains unchanged.
+onboarding; use the current reconciled inventory for remaining work.
 
 The local registry witness now spans canonical create/claim/update/Monitor poll
 and terminal mutations through one TS owner. File, SQLite and service-injected
@@ -3109,7 +3116,7 @@ explicit runtime-root applies to both intent and Todo IO. Frozen editorial
 requests retain their original basis. See [operation and boundaries](../../../loopx/capabilities/periodic_report/README.md#todo-authority-and-report-retries).
 This closes that T3/L5 consumer family, not D1 permanent display freshness,
 D2 durability, D3 whole-Goal qualification or default-provider selection. The
-conditional 7–9 remaining delivery-package estimate is unchanged.
+current reconciled inventory distinguishes code gaps from qualification work.
 
 The Todo summary consumer now uses one TS batch for scope, lanes, counts,
 claimant-balanced display and closure. It retires Python count/cap/allocation
@@ -3213,8 +3220,8 @@ provenance across File/SQLite and service-owned PostgreSQL. Verified recovery
 copies do not select an authority, revive executors or roll back writer fences.
 This closes the portable recovery-artifact gap only; final source draining,
 fenced target adoption, later-write accounting and cohort cutover remain L8.
-The conditional **7–9 package** estimate below is unchanged until the remaining
-caller, projection, D2, migration and default exits are qualified. Pending
+The current inventory separates caller/projection code from D2, migration and
+default acceptance. Pending
 reviewed-promotion and command-recovery PRs must be integrated at their accepted
 heads rather than counted as merged prerequisites.
 
@@ -3262,9 +3269,9 @@ cards. Monitor observation/reactivation #4732 and linked User completion #4754
 are also merged. #4224 retains contributor ownership of SQLite D2. Re-read
 actual heads before work.
 
-The identifiers below are **planned PR packages**, not reserved GitHub numbers.
-A package may split at a real effect/compatibility boundary; changing languages
-or moving a helper is not by itself a package exit.
+The identifiers below preserve **domain ownership and acceptance boundaries**,
+not remaining PRs or reserved GitHub numbers. Use the current frontier for
+new implementation work; changing languages or moving a helper is not an exit.
 
 | Wave / package | Reviewable delivery and TS ownership payoff | Dependencies and exit evidence |
 | --- | --- | --- |
@@ -3278,58 +3285,25 @@ or moving a helper is not by itself a package exit.
 | C / L8: Whole-Goal rehearsal and cohort migration | Integrate one exact revision/profile after L2–L7; drain capture, fence old writers, verify canonical readback and projection, then rehearse fenced export/rollback. | D3 evidence packet binds lineage, cursor, source digest, command coverage and profile. Existing Goal migration requires explicit cohort approval; no per-command split authority or stale Markdown revival. |
 | D / L9: New-Goal default and bounded retirement | A dedicated default-change PR makes new-Goal creation/onboarding choose the qualified local profile, including settings/readback, installer and packaged clients. Retire old business writers only as their final callers and migration window close. | L8's integrated product/rollback qualification; distinguish new Goal default from existing Goal migration. Publish compatibility/disable guidance, keep explicit provider choice, permanent rendering and validated import/export. T4 can continue after the default ships. |
 
-**2026-09-24 reconciliation.** The count remains an estimate of complete
-packages, not a count of small fixes, and this refresh slice advances boundary 4
-(projection recovery and client closure) without claiming its other consumers
-are qualified. SQLite #4910 added the larger measurement axes; #4224 records
+**Earlier 2026-09-24 implementation context.** Display refresh advances
+projection recovery/client closure without claiming every consumer qualified. SQLite #4910 added the larger measurement axes; #4224 records
 failed 1 MiB receipt/scan budgets and still-missing recovery/soak evidence.
 #4931 is the in-review read-proof optimization, not proof that D2 passed.
 Snapshot pagination #4922 has merged and still must be qualified at its accepted
 head. None of these PR statuses grants cutover or changes the selected profile.
 
-**Cadence is evidence-based.** The 2026-09-23 decomposition separates bounded
-canonical reads from projection/client closure and separates caller admission
-from executor-held effects. This refines the older five broad packages into
-**seven concrete PR boundaries (up to nine if D2 and migration each split)**,
-including the snapshot-pagination PR. It is not a promise that a count of
-merges qualifies default-on; unresolved acceptance evidence keeps its hold.
-
-| Ordered PR boundary | Owner / content | Decisive exit |
-| --- | --- | --- |
-| 1. Remaining canonical callers | L2/L4: inventory actual CLI/Turn/Chat callers, close retained leased metadata and delegated/effect-owned actions through existing typed transactions; remove replaced Python admission. | Each listed command succeeds or rejects coherently on legacy/File/SQLite, including authority and recovery negatives. |
-| 2. External-effect execution fence | L3: hold and revalidate current execution proof over the real external effect, including takeover, timeout, process death and uncertain completion. | A stale executor cannot perform/settle a fenced effect; active execution and business receipt recovery retain one owner. |
-| 3. Snapshot-bound canonical collection reads | T3/L5, this slice: paginate complete Todos, archives, leases and acceptance guards below the unchanged RPC limit; bind identity, revision, query and progress. | Real File/SQLite RPC/CLI and provider conformance preserve full populations; concurrent commits reject mixed reads. No active-Goal promotion is implied. |
-| 4. Projection recovery and client closure | L5/D1: audit Turn/quota/Dashboard/Chat/Lark reads and use the existing outbox for permanent display freshness and repair. | Missing/stale/empty/pending displays and packaged-client interactions are verified; final post-promotion fallback callers retire. |
-| 5. SQLite D2 qualification (1–2 PRs) | Contributor-owned #4224/#4328; reconcile the existing capacity PR before adding work. Complete crash/restore/upgrade/platform evidence on one exact profile. | Capacity ledger and separately authorized >=10-day elapsed synthetic soak pass; gaps remain holds. |
-| 6. Capture plus whole-Goal migration/rollback (1–2 PRs) | L7/L8: combine mixed-writer/event continuity, drain, old-writer fencing, canonical readback, fenced export/rollback and cohort migration. | One D3 packet binds exact profile, lineage, source digest and command inventory; existing-Goal cohort cutover remains explicit. |
-| 7. Default/onboarding and bounded Python retirement | L9/T4: make new-Goal creation, settings, installer and packaged clients choose the qualified local profile; publish migration/disable guidance and delete replaced final business writers. | Integrated L8 qualification, rollback and affected user-entrypoint readback. Preserve active rendering, host execution and import/export adapters. |
-
-At the 2026-09-24 reconciliation, #4870/#4888/#4920, #4922 (snapshot pagination),
-#4960 (qualified SQLite runtime admission) and #4961 (refresh display recovery)
-are merged, while #4931 (SQLite proof encoding) remains a separate in-review
-dependency and SQLite #4224 still retains failing/missing D2 evidence. This
-summary slice closes shared read-model decisions and advances boundary 4, not
-those delivery gates: requalify the combined accepted head before updating the
-estimate, and do not count each helper migration as one complete package.
-
-With boundary 3 landed, **six planned PRs remain, potentially eight** under those
-two named splits. Caller audit can expose additional missing effects, so this is
-an implementation estimate, not a guarantee. Small Python business-rule
-retirements accompany their TS owner; deleting all Python is neither the exit
-condition nor a prerequisite. PostgreSQL service, credential, tenant, restore
-and capacity qualification remains a separate medium-term lane; local default
-need not wait for it, and portable conformance does not declare it production-ready.
+**Current implementation sequence.** L1–L9 above are domain ownership, not
+a remaining PR count. The old seven-row plan is replaced by the
+[reconciled inventory](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md): integrate open caller work,
+reuse merged pagination/recovery, and track D2 elapsed-time evidence separately.
+New code is organized around complete source transport, executor fencing, event
+writer/whole-Goal migration, and default/onboarding with bounded Python retirement.
 
 The snapshot protocol is documented in [canonical snapshot pagination](../../reference/canonical-snapshot-pagination.md).
 It shares existing TS collection validation and acceptance ownership. Python
 only assembles/validates the transport and keeps the old public result shape.
 Per-page provider reads bound transmission, not database memory or total IO;
 concurrent writers may require an explicit full-read restart. D1–D3 holds remain.
-
-截至 2026-09-23，原五类粗粒度工作细化为七个具体 PR 边界：caller、executor fence、
-一致性分页、投影与客户端、D2、整 Goal 迁移回滚、默认与有界 Python 退役。
-D2 和迁移各可按独立验收拆成两批，因此含本批共 7–9 个，分页合入后计划 6–8 个。
-这不是按合并数量推进资格；未通过的证据仍是 hold。PostgreSQL 运维资格独立推进。
 
 Avoid concurrent edits to the same transaction owner; share
 fixture/contracts early and rebase after the owner lands.
@@ -3393,7 +3367,7 @@ source resume/succession and post-filter counts survive display limits. This is
 one L5 consumer closure, not D1 projection freshness or provider promotion. See
 [read semantics](../../reference/todo-work-counts.md). Remaining caller/executor,
 consumer recovery, contributor D2, capture/whole-Goal and default onboarding
-boundaries retain the conditional **7–9 cohesive PR** estimate.
+boundaries are classified separately in the current reconciled inventory.
 
 ## Appendix D: Execution ledger
 
@@ -3412,3 +3386,7 @@ not assumed — see
 
 `examples/docs-governance-smoke.py` checks the entry naming, the Chinese mirror
 beside each entry, and that this appendix exists for the directory it names.
+
+2026-09-24: [Typed complete-source assembly and remaining delivery packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-source-capture.md) unify source construction, identity rejection and current-graph membership; L7/D2/D3 and provider defaults remain open.
+
+2026-09-24: [Leased continuation and remaining local-default packages](ledger/shared-goal-authority-state-provider-v0/2026-09-24-leased-continuation.md).

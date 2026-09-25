@@ -33,6 +33,77 @@ def _run_loopx(
     )
 
 
+def _windows_user_path(pwsh: str) -> str:
+    result = subprocess.run(
+        [
+            pwsh,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            (
+                "$value = [Environment]::GetEnvironmentVariable('Path', 'User'); "
+                "if ($null -eq $value) { 'null' } else { "
+                "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) }"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    return result.stdout.strip()
+
+
+def _restore_windows_user_path(pwsh: str, encoded_path: str) -> None:
+    env = dict(os.environ)
+    env["LOOPX_TEST_USER_PATH"] = encoded_path
+    subprocess.run(
+        [
+            pwsh,
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            (
+                "$encoded = $env:LOOPX_TEST_USER_PATH; "
+                "$value = if ($encoded -eq 'null') { $null } else { "
+                "[Text.Encoding]::UTF8.GetString("
+                "[Convert]::FromBase64String($encoded)) }; "
+                "[Environment]::SetEnvironmentVariable('Path', $value, 'User')"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=30,
+    )
+
+
+def test_chat_bundle_preflight_preserves_stdout_with_legacy_pointer(
+    tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    bundle_builder = source_root / "bundle_builder.py"
+    bundle_builder.write_text("print('bundle progress')\n", encoding="utf-8")
+    pointer = tmp_path / "current-release.json"
+    pointer.write_text('{"release_id":"known-good"}\n', encoding="utf-8")
+
+    windows_install._ensure_chat_bundle(
+        bundle_builder=bundle_builder,
+        source_root=source_root,
+        python=Path(sys.executable),
+        pointer=pointer,
+    )
+
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == ["bundle progress"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native Windows installer regression")
 def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> None:
     pwsh = shutil.which("pwsh")
@@ -45,33 +116,39 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    install = subprocess.run(
-        [
-            pwsh,
-            "-NoLogo",
-            "-NoProfile",
-            "-File",
-            str(repo_root / "scripts" / "install-windows.ps1"),
-            "-Python",
-            sys.executable,
-            "-InstallRoot",
-            str(install_root),
-            "-BinDir",
-            str(bin_dir),
-            "-SkillsDir",
-            str(skills_dir),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        timeout=180,
-    )
+    original_user_path = _windows_user_path(pwsh)
+    try:
+        install = subprocess.run(
+            [
+                pwsh,
+                "-NoLogo",
+                "-NoProfile",
+                "-File",
+                str(repo_root / "scripts" / "install-windows.ps1"),
+                "-Python",
+                sys.executable,
+                "-InstallRoot",
+                str(install_root),
+                "-BinDir",
+                str(bin_dir),
+                "-SkillsDir",
+                str(skills_dir),
+                "-AddToUserPath",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=180,
+        )
+    finally:
+        _restore_windows_user_path(pwsh, original_user_path)
 
     assert install.returncode == 0, install.stderr
     installed = json.loads(install.stdout)
+    assert f"LoopX Windows user PATH includes: {bin_dir}" in install.stderr
     pointer_path = install_root / "current-release.json"
     assert installed["pointer"] == str(pointer_path)
     assert (bin_dir / "loopx.ps1").is_file()
