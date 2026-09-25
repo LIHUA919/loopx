@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -435,6 +436,94 @@ def test_symlinked_goal_destination_ancestor_never_writes_outside_project(
         )
     assert source.exists() and not target.exists()
     assert list(outside.iterdir()) == []
+
+
+def test_goal_destination_uses_shared_redirect_classifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_parent = projects[0] / ".loopx" / "goals"
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    original = migration._is_redirected_path
+    monkeypatch.setattr(
+        migration, "_is_redirected_path",
+        lambda path: path == goal_parent or original(path),
+    )
+
+    with pytest.raises(ValueError, match="symlink or junction"):
+        migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    with pytest.raises(ValueError, match="symlink or junction"):
+        migration.migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    assert source.exists() and not target.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows junction regression")
+def test_windows_junction_goal_destination_never_writes_outside_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path, projects=1)
+    goal_parent = projects[0] / ".loopx" / "goals"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    def make_junction() -> None:
+        subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(goal_parent), str(outside)],
+            check=True, capture_output=True, text=True,
+        )
+        assert goal_parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+    make_junction()
+    try:
+        with pytest.raises(ValueError, match="symlink or junction"):
+            migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+        assert source.exists() and not target.exists()
+        assert list(outside.iterdir()) == []
+    finally:
+        goal_parent.rmdir()
+
+    preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    make_junction()
+    try:
+        with pytest.raises(ValueError, match="symlink or junction"):
+            migration.migrate_local_state(
+                source_runtime_root=source, target_runtime_root=target,
+                expected_plan_id=preview["plan_id"], execute=True,
+            )
+        assert source.exists() and not target.exists()
+        assert list(outside.iterdir()) == []
+    finally:
+        goal_parent.rmdir()
+
+    original_copy = migration._copy
+    injected = False
+
+    def inject_after_backup(original: Path, copied: Path) -> None:
+        nonlocal injected
+        original_copy(original, copied)
+        if not injected:
+            make_junction()
+            injected = True
+
+    monkeypatch.setattr(migration, "_copy", inject_after_backup)
+    try:
+        with pytest.raises(RuntimeError, match="original routes were restored"):
+            migration.migrate_local_state(
+                source_runtime_root=source, target_runtime_root=target,
+                expected_plan_id=preview["plan_id"], execute=True,
+            )
+        assert source.exists() and not target.exists()
+        assert list(outside.iterdir()) == []
+    finally:
+        if goal_parent.exists():
+            goal_parent.rmdir()
 
 
 @pytest.mark.parametrize("explicit_backup", [False, True])

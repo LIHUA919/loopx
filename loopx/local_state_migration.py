@@ -162,15 +162,11 @@ def _require_goal_destination(project: Path, target_dir: Path) -> None:
 
     if project not in target_dir.parents:
         raise ValueError(f"Goal migration target escapes its project: {target_dir}")
-    if target_dir.exists() or target_dir.is_symlink():
-        raise ValueError(f"Goal migration target exists or is a symlink: {target_dir}")
-    ancestor = target_dir.parent
-    while ancestor != project:
-        if ancestor.is_symlink():
-            raise ValueError(f"Goal migration target ancestor is a symlink: {ancestor}")
-        if ancestor.exists() and not ancestor.is_dir():
-            raise ValueError(f"Goal migration target ancestor is not a directory: {ancestor}")
-        ancestor = ancestor.parent
+    if _is_redirected_path(target_dir):
+        raise ValueError(f"Goal migration target is a symlink or junction: {target_dir}")
+    if target_dir.exists():
+        raise ValueError(f"Goal migration target exists: {target_dir}")
+    _require_unlinked_directory_chain(target_dir.parent, label="Goal migration target")
 
 
 def _rewrite_registry(
