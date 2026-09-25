@@ -88,7 +88,7 @@ Map P0/P1 catalog rows to canary archetypes before picking commands:
 | --- | --- | --- | --- | --- | --- |
 | Work Routing | IP-001, IP-002, IP-003, IP-007, IP-008, IP-021, IP-029 | Hot-path route canary; Planning governance canary when cadence or repair is involved | `quota should-run`, `interaction_contract`, `work_lane_contract`, scheduler hint, handoff todo state | one eligible delivery fixture, one blocked/fallback fixture, one quiet or monitor fixture | agent turn routing is unsafe: it may spend, wait, notify, or choose fallback incorrectly |
 | Human Decision | IP-004, IP-014, IP-017, IP-027, IP-030, IP-033 | Scoped decision canary; Product/readiness canary when first-screen human copy changes | user todos, decision scope, operator-gate/reward preview, deferred resume candidates | one concrete user ask, one scoped non-blocking gate, one preview-or-append dry run | humans may be asked the wrong question, or an agent may continue without the needed decision |
-| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
+| State And Boundary | IP-005, IP-006, IP-011, IP-016, IP-019, IP-020, IP-022, IP-023, IP-025, IP-026, IP-028, IP-031, IP-032, IP-035, IP-036 | Projection and boundary canary; Hot-path route canary when the projection feeds quota/status | active state, todo metadata, task graph, authority source, claim lease, completed-work archive, install ownership, connector runtime policy, operation receipt, public/private scan | fixture state plus structured projection check; boundary scan for touched public files | compact state and executable truth diverge, so dashboards and agents may trust stale or unsafe authority |
 | Evidence Lifecycle | IP-012, IP-015 | Evidence lifecycle canary; Product/readiness canary when evidence is rendered | external handle observation, benchmark lifecycle reducer, compact result projection | compact public-safe evidence fixture with raw-material exclusion assertions | progress evidence may be missing, double-counted, or represented with unsafe raw material |
 | Planning Governance | IP-010, IP-013, IP-018, IP-024, IP-034 | Planning governance canary; Hot-path route canary when cadence changes affect execution | stalled run history, autonomous replan obligation, repair delta, cadence hint, plan-to-todo writeback | two-turn stalled fixture plus repair/writeback delta assertion | the agent may keep planning in prose while the machine-visible frontier stays unchanged |
 
@@ -344,6 +344,7 @@ Projection, authority, write scope, and lease integrity.
 | P1 | IP-031 | Manager Context Is Not Turn Authority | Manager connection owner | no interruption; retention is silent | retain group context only and act only on a provider-native mention, verified reply, or existing typed authority |
 | P1 | IP-032 | Completed Work Archive With Durable Decision Retention | Archive selector plus controller | no interruption; preview-then-execute readback | treat archived done work as history, keep durable decisions authoritative, and never move another role's lane |
 | P1 | IP-035 | Install Ownership Is Not An Update Permission | Install lifecycle owner plus user | no silent mutation; report the owning installer and its command | classify the install before mutating it; when LoopX does not own it, hand back the owner-owned command instead of switching install channels |
+| P1 | IP-036 | A Lost Response Is Not An Absent Commit | Effect dispatcher plus caller | no interruption unless recovery needs a user decision; report the receipt read back | name the write with a stable operation id, recover by readback instead of blind retry, and never leave a committed record pointing at material nobody published |
 
 ### Evidence Lifecycle
 
@@ -2512,6 +2513,111 @@ pip path, so no test can tell an owned install from an unowned one.
   snapshot it classifies.
 - `examples/loopx-update-smoke.py` and `docs/guides/installing-loopx.md` own the
   operator-facing update, activation, and recovery path.
+- `examples/interaction-pattern-catalog-smoke.py` protects this entry.
+
+#### IP-036 A Lost Response Is Not An Absent Commit
+
+**Trigger**
+
+- a command that commits durable state returns an error, exceeds its response
+  budget, or loses its reply on the wire, so the caller cannot tell from the
+  response alone whether the write landed;
+- the caller is about to retry, or a downstream projection now rejects a record
+  whose backing material never arrived;
+- the signals that say this already happened are typed, not inferred from prose:
+  an `already_applied` replay carrying its `original_receipt`, a
+  `receipt_index` entry per operation id, `outcome=ambiguous_reconciled` in a
+  settlement receipt, or an `operation_id was reused` rejection on the retry.
+
+**Expected behavior**
+
+A response is a notification about a commit, not the commit itself. Four rules
+keep "we never heard back" from becoming "nothing happened".
+
+1. **Name the write before dispatching it.** A command whose durable effect is
+   not derivable from context takes a stable identity and says so in its own
+   help: `loopx/cli_commands/delegation.py:25` registers `--operation-id` as
+   "Stable request identity; reuse after a lost response", and
+   `loopx/cli_commands/handoff_mode.py:99` the same shape for a canonical set
+   intent. Reusing an id means "that same request again", never "that intent a
+   second time".
+2. **Recover by readback, not by blind retry.** A re-sent operation returns the
+   original receipt rather than a second effect:
+   `tests/control_plane/test_coordination_recoverable_execution.py:693` asserts
+   `result == "already_applied"` with an identical `original_receipt`, and
+   `:694` that the head's `receipt_index` holds exactly one entry per operation
+   id. `tests/control_plane/test_coordination_provider_parity.py:222` makes
+   `operation_identity_reuse` a dimension every coordination provider must
+   answer the same way (expectation recorded at `:308`).
+3. **Publish the material an authoritative record points at before, or under the
+   same identity as, that record.** A committed pointer with no backing content
+   is worse than no commit, because every later reader must guess. `#5007` is
+   the public counterexample: canonical Todo creation dispatched first, the
+   TypeScript effect lost its response, and the private completion-validation
+   declaration was only persisted after `effect_runtime_result(...)` returned
+   successfully (`loopx/control_plane/todos/provider_create.py:86` dispatch,
+   `:136` persist). The authoritative Todo then carried
+   `completion_validation_sha256` with no declaration behind it, so
+   `todo project-markdown` rejected the Goal while a plain `todo add` retry risked
+   a second Todo. `#5012` proposes the ordering this pattern requires: prepare
+   the private content durably before dispatch, and recover the create through
+   `--operation-id`.
+4. **One identity, one intent.** The same id carrying a different request is a
+   rejection, not a retry to be forced through:
+   `tests/cli_commands/test_source_session_lifetime.py:1175` pins
+   `operation_id was reused` across a session bind and a lifetime receipt.
+   Ambiguity settles to a reconciled receipt — `_SETTLED_OUTCOMES` is
+   `{delivered, replayed, ambiguous_reconciled}`
+   (`loopx/control_plane/coordination/local_authority_shadow_adapter.py:92`) —
+   and never to two settlements.
+
+IP-016 owns the idempotency key carried by a task lease and IP-020 owns a Todo's
+claim / supersede / successor lifecycle; both assume the caller learned the
+outcome. This is the transport-level case those two do not cover: the commit
+landed and nobody was told. IP-033 is its mirror — a recorded rejection is a
+decision that is present, while a lost response is a signal that is absent and
+must not be read as an absent commit. IP-006 owns a projected write scope that
+disagrees with its checkpoint; here nothing disagrees yet, which is exactly the
+danger.
+
+**Visual Model**
+
+```mermaid
+flowchart TD
+  A["durable effect dispatched"] --> B{"response arrived?"}
+  B -->|"yes"| C["continue from the receipt"]
+  B -->|"error / budget exceeded / lost"| D{"same operation id available?"}
+  D -->|"yes"| E["re-send: read back committed state, reuse the original receipt"]
+  D -->|"no, only a fresh id"| F["retry as a new request: duplicate commit, or a typed reuse rejection"]
+  E --> G{"does the record name material that must exist?"}
+  G -->|"yes, present"| C
+  G -->|"yes, missing"| H["fail closed and name the unpublished material"]
+  G -->|"no"| C
+  F --> H2["duplicate work, duplicate spend, or a rolled-back settled effect"]
+```
+
+**Bad smell**
+
+- "the command errored, so nothing happened", followed by a retry that creates a
+  second authoritative record or spends quota twice;
+- a Goal rejected in projection because a digest points at a sidecar nobody
+  published, while the record naming that digest is already committed;
+- recovery that depends on an operator remembering "did that one already go
+  through?", with no receipt to read back;
+- treating an unanswerable ambiguity as a reason to roll a settled effect back.
+
+**Validation**
+
+- `tests/control_plane/test_coordination_provider_parity.py` keeps
+  `operation_identity_reuse` honest across every provider arm, and
+  `tests/control_plane/test_coordination_recoverable_execution.py` pins the
+  replay-and-receipt path for leases and renewals.
+- `tests/cli_commands/test_source_session_lifetime.py` pins the negative twin:
+  one identity may not carry two different intents.
+- `loopx/control_plane/coordination/local_authority_shadow_adapter.py` and
+  `shadow_entry_delivery.ts` keep the settled-vocabulary contract
+  (`delivered` / `replayed` / `ambiguous_reconciled`) single-owner, so a new
+  recovery path reuses it instead of inventing a fourth answer.
 - `examples/interaction-pattern-catalog-smoke.py` protects this entry.
 
 ### Evidence Lifecycle
