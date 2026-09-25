@@ -830,7 +830,7 @@ and qualification scope; a successful ordinary `typed_progress_repeat` refresh
 cannot qualify this journey. The narrow semantic-action gate remains useful
 but does not prove full closeout. Run this focused journey with
 `uv run --extra test python scripts/qualify-doubao-replan-semantic-action-live.py --required-vision --qualification-id <public-safe-run-id>`.
-The complete required-vision journey has a 32-call bound; the narrow
+The complete required-vision journey has a 40-call bound; the narrow
 single-semantic-action qualifier retains seven. The increased budget covers
 evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
 including multiple field-validation corrections before a final spend;
@@ -894,14 +894,14 @@ projection; every repeat must pass and hard actor errors are not retried. The
 remaining live turn actor cases consume the default CLI hot-path
 `quota should-run` projection used by Codex App automation and return
 runtime-facing decisions rather than echoing a global testing-only semantic
-contract. The suite has 38 bounded scenario attempts. Five scenarios
+contract. The suite has 42 bounded scenario attempts. Five scenarios
 exercise real tool loops; their per-scenario provider-call ceilings are owned by
 the corresponding typed behavior harnesses instead of being duplicated here.
 Exact scheduler, vision, writeback, and warning fields stay in deterministic
 action-signature coverage; pair mode keeps TurnEnvelope semantic extraction for
 explicit packet differentials or outcome claims.
 
-常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：19 个 one-arm
+常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：21 个 one-arm
 场景，每个重复 2 次。9 个 core-contract 场景覆盖正常接入、agent 身份与
 goal 选择、selected todo、peer 身份路由、same-agent 续接、最终 human gate、
 健康继续和 projection repair；1 个 effect-settlement 场景覆盖 terminal closeout；
@@ -924,6 +924,7 @@ actor 硬错误不自动重试。selected-Todo 场景从正式 thin heartbeat �
 缺失 vision 的 hermetic 状态，执行真实 quota，并要求模型读取 host 投影的 frontier 与
 工作源，再通过真实写路径提交 typed semantic action；其他 turn 场景仍直接读取 Codex App
 automation 使用的默认 CLI hot-path `quota should-run` projection 并返回运行时决策，
+完整 required-vision 闭环最多允许 40 次工具调用，窄范围单动作验收仍是 7 次；耗尽预算但未完成最终结算仍判失败。
 scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：真实 quota 必须
 同时投影非阻塞 user notice 和 ready deferred successor，模型随后既要呈现提醒，也要
 实际执行被选中的 successor；capability re-entry 场景则要求模型先执行原 blocked Todo
@@ -932,7 +933,7 @@ scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：�
 其他 turn 场景仍属于
 packet interpretation。scheduler、vision、writeback 与
 warning 的精确字段继续由 action-signature 确定性覆盖；pair 中的 TurnEnvelope 只用于
-明确的 packet 差分或结果提升声明。全套是 38 个有界 scenario attempt；5 个真实工具
+明确的 packet 差分或结果提升声明。全套是 42 个有界 scenario attempt；5 个真实工具
 场景的 provider 调用上限由各自 typed behavior harness 持有，本文不再复制易漂移的总数。
 
 For onboarding packets, the suite uses the shipped guided packet builder and

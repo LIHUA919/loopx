@@ -37,6 +37,7 @@ MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
@@ -802,7 +803,7 @@ def effect_runtime_request(
     method: str,
     params: Mapping[str, Any],
     *,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
 ) -> dict[str, Any]:
     """Call the managed TS runtime, retrying only idempotent typed effects."""
@@ -870,7 +871,7 @@ def effect_runtime_result(
     method: str,
     params: Mapping[str, Any],
     *,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
 ) -> Any:
     return effect_runtime_request(

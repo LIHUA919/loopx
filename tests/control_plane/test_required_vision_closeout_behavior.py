@@ -179,7 +179,7 @@ def test_native_host_does_not_qualify_unproven_closeout(tmp_path: Path, invalid:
     assert not (result.get("vision_closeout") or {}).get("settled")
 
 
-@pytest.mark.parametrize("extra_reads,passed", [(27, True), (28, False)])
+@pytest.mark.parametrize("extra_reads,passed", [(35, True), (36, False)])
 def test_budget_boundary_still_requires_the_final_spend(tmp_path: Path, extra_reads: int, passed: bool) -> None:
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
     result = _qualify(tmp_path, [
@@ -189,7 +189,7 @@ def test_budget_boundary_still_requires_the_final_spend(tmp_path: Path, extra_re
         vision_patch_action, projected_refresh, projected_spend,
     ])
     assert result["qualification_passed"] is passed
-    assert result["tool_call_count"] == result["tool_call_limit"] == 32
+    assert result["tool_call_count"] == result["tool_call_limit"] == 40
     assert result["vision_closeout"]["settled"] is passed
 
 

@@ -100,6 +100,32 @@ def test_runtime_pid_liveness_delegates_to_shared_non_signaling_probe(
     assert calls == [1234]
 
 
+def test_default_runtime_request_budget_covers_typed_projection_calls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    info = {"token": "fixture"}
+    observed: list[tuple[str, float]] = []
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint_for_request", lambda: "fixture")
+    monkeypatch.setattr(effect_runtime, "_runtime_info_path", lambda _: tmp_path / "runtime.json")
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_args, **_kwargs: info)
+
+    def respond(_info: object, **kwargs: object) -> dict[str, object]:
+        observed.append((str(kwargs["method"]), float(kwargs["timeout"])))
+        return {"result": {"ok": True}}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", respond)
+    assert effect_runtime.effect_runtime_result("todo.succession.project", {}) == {"ok": True}
+    assert effect_runtime.effect_runtime_request("scheduler.monitor_target.select", {}) == {
+        "result": {"ok": True}
+    }
+    assert observed == [
+        ("todo.succession.project", effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS),
+        ("scheduler.monitor_target.select", effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS),
+    ]
+    assert effect_runtime.DEFAULT_REQUEST_TIMEOUT_SECONDS == 10.0
+
+
 def test_managed_runtime_is_reused_and_restart_safe_for_typed_write(
     tmp_path: Path,
     monkeypatch,

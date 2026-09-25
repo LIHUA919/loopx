@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 # Full closeout includes evidence discovery, authoring, refresh and settlement;
 # its resource bound is independent of the narrower single-action qualifier.
-REQUIRED_VISION_CLOSEOUT_MAX_CALLS = 32
+REQUIRED_VISION_CLOSEOUT_MAX_CALLS = 40
 
 
 class VisionHostAdmissionRejected(ValueError):
