@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from ...event_sourced_state import (
     AppendOnlyStateEventStore,
     StateEventError,
+    StateEventSourceChangedError,
     TODO_ADDED,
     TODO_CLAIMED,
     TODO_COMPLETED,
@@ -27,19 +28,12 @@ from ..goals.path_resolution import resolve_goal_local_path
 from ..runtime.validation_command import CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION
 from .active_state_todo_parser import parse_active_state_todos
 from .contract import (
-    TODO_CONTINUATION_POLICY_VALUES,
     TODO_STATUS_DONE,
     build_todo_id,
     merge_todo_id_lists,
-    normalize_required_capabilities,
-    normalize_todo_capability_binding_ref,
     normalize_todo_claimed_by,
-    normalize_todo_bound_agent,
-    normalize_todo_continuation_policy,
-    normalize_todo_excluded_agents,
     normalize_todo_id,
     normalize_todo_id_list,
-    normalize_todo_task_repository,
 )
 from .completion_transaction import reduce_todo_completion_transaction
 from .successor_derivation import (
@@ -47,10 +41,6 @@ from .successor_derivation import (
     derive_successor_proposals,
 )
 from .todo_semantics import todo_priority_parts
-from .text import (
-    normalize_new_todo,
-    todo_priority_prefix,
-)
 
 
 TODO_SECTION_HEADINGS = {
@@ -277,165 +267,101 @@ def _todo_write_event_id(
     return f"todo-write-{action}-{digest}"
 
 
-def _append_event_projected_successor(
+def _encode_event_projected_successor(
     *,
-    store: AppendOnlyStateEventStore,
     goal_id: str,
-    role: str,
-    text: str,
+    proposal: Mapping[str, Any],
     updated_at: str,
     fields: dict[str, Any],
-    task_class: str | None,
-    action_kind: str | None,
-    capability_binding_ref: str | None,
-    task_repository: str | None,
-    required_capabilities: list[str] | None,
-    continuation_policy: str | None,
-    claimed_by: str | None,
-    dry_run: bool,
-    actor_agent_id: str | None = None,
-    bound_agent: str | None = None,
-    goal_bound: bool | None = None,
-    blocks_agent: str | None = None,
-    excluded_agents: list[str] | None = None,
-    unblocks_todo_id: str | None = None,
-) -> dict[str, Any]:
+    actor_agent_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Encode a TS-derived successor without deciding defaults or writing it."""
+    role = str(proposal["role"])
     section = TODO_SECTION_HEADINGS[role]
     summary = fields.get(f"{role}_todos")
     items = summary.get("items") if isinstance(summary, dict) else []
     index = len(items if isinstance(items, list) else []) + 1
-    todo_text = normalize_new_todo(text)
-    todo_id = build_todo_id(
-        role=role,
-        source_section=section,
-        index=index,
-        text=todo_text,
+    text = str(proposal["text"])
+    todo_id = build_todo_id(role=role, source_section=section, index=index, text=text)
+    priority, title = todo_priority_parts(text)
+    metadata_fields = (
+        "task_class",
+        "action_kind",
+        "capability_binding_ref",
+        "task_repository",
+        "required_capabilities",
+        "continuation_policy",
+        "bound_agent",
+        "goal_bound",
+        "blocks_agent",
+        "excluded_agents",
+        "unblocks_todo_id",
     )
-    _priority, title = todo_priority_parts(todo_text)
-    payload: dict[str, Any] = {
+    metadata = {
+        key: proposal[key] for key in metadata_fields
+        if key in proposal and proposal[key] not in (None, "", [])
+    }
+    payload = {
         "role": role,
-        "priority": todo_priority_prefix(todo_text) or "P2",
+        "priority": priority or "P2",
         "title": title,
         "planner_order": index,
         "updated_at": updated_at,
+        **metadata,
     }
-    if task_class:
-        payload["task_class"] = task_class
-    if action_kind:
-        payload["action_kind"] = action_kind
-    normalized_capability_binding_ref = normalize_todo_capability_binding_ref(
-        capability_binding_ref
-    )
-    if capability_binding_ref and not normalized_capability_binding_ref:
-        raise ValueError(
-            "capability_binding_ref must be a public-safe namespaced token"
-        )
-    if normalized_capability_binding_ref:
-        payload["capability_binding_ref"] = normalized_capability_binding_ref
-    normalized_task_repository = normalize_todo_task_repository(task_repository)
-    if task_repository and not normalized_task_repository:
-        raise ValueError(
-            "todo task_repository must be a credential-free Git remote or canonical "
-            "git:<host>/<path> identity"
-        )
-    if normalized_task_repository:
-        payload["task_repository"] = normalized_task_repository
-    normalized_required_capabilities = normalize_required_capabilities(
-        required_capabilities
-    )
-    if required_capabilities and not normalized_required_capabilities:
-        raise ValueError(
-            "required_capabilities must contain public-safe capability tokens"
-        )
-    if normalized_required_capabilities:
-        payload["required_capabilities"] = normalized_required_capabilities
-    normalized_continuation_policy = normalize_todo_continuation_policy(
-        continuation_policy
-    )
-    if continuation_policy and not normalized_continuation_policy:
-        raise ValueError(
-            "todo continuation_policy must be one of: "
-            + ", ".join(sorted(TODO_CONTINUATION_POLICY_VALUES))
-        )
-    effective_continuation_policy = normalized_continuation_policy
-    if effective_continuation_policy:
-        payload["continuation_policy"] = effective_continuation_policy
-    if blocks_agent:
-        payload["blocks_agent"] = blocks_agent
-    if bound_agent:
-        payload["bound_agent"] = normalize_todo_bound_agent(bound_agent)
-    if goal_bound is not None:
-        payload["goal_bound"] = goal_bound
-    normalized_excluded_agents = normalize_todo_excluded_agents(excluded_agents)
-    if claimed_by in normalized_excluded_agents:
-        raise ValueError(
-            f"claimed_by={claimed_by!r} cannot also appear in excluded_agents"
-        )
-    if normalized_excluded_agents:
-        payload["excluded_agents"] = normalized_excluded_agents
-    if unblocks_todo_id:
-        payload["unblocks_todo_id"] = unblocks_todo_id
-    added_event = make_state_event(
-        event_id=_todo_write_event_id(
-            goal_id=goal_id,
-            todo_id=todo_id,
-            action="add",
-            updated_at=updated_at,
-            text=todo_text,
-        ),
-        goal_id=goal_id,
-        event_type=TODO_ADDED,
-        refs={"todo_id": todo_id},
-        payload=payload,
-        recorded_at=updated_at,
-        producer="loopx.todo.complete",
-        actor_agent_id=actor_agent_id,
-    )
-    claimed_event: dict[str, Any] | None = None
-    if claimed_by:
-        claimed_event = make_state_event(
+    events = [
+        make_state_event(
             event_id=_todo_write_event_id(
                 goal_id=goal_id,
                 todo_id=todo_id,
-                action="claim",
+                action="add",
                 updated_at=updated_at,
-                text=claimed_by,
+                text=text,
             ),
             goal_id=goal_id,
-            event_type=TODO_CLAIMED,
+            event_type=TODO_ADDED,
             refs={"todo_id": todo_id},
-            payload={"claimed_by": claimed_by},
+            payload=payload,
             recorded_at=updated_at,
             producer="loopx.todo.complete",
             actor_agent_id=actor_agent_id,
         )
-    if not dry_run:
-        store.append(added_event)
-        if claimed_event:
-            store.append(claimed_event)
+    ]
+    claimed_by = proposal.get("claimed_by")
+    if claimed_by:
+        events.append(
+            make_state_event(
+                event_id=_todo_write_event_id(
+                    goal_id=goal_id,
+                    todo_id=todo_id,
+                    action="claim",
+                    updated_at=updated_at,
+                    text=claimed_by,
+                ),
+                goal_id=goal_id,
+                event_type=TODO_CLAIMED,
+                refs={"todo_id": todo_id},
+                payload={"claimed_by": claimed_by},
+                recorded_at=updated_at,
+                producer="loopx.todo.complete",
+                actor_agent_id=actor_agent_id,
+            )
+        )
     return {
         "added": True,
         "already_exists": False,
         "metadata_updated": False,
         "role": role,
         "section": section,
-        "todo": todo_text,
+        "todo": text,
         "todo_id": todo_id,
-        "task_class": task_class,
-        "action_kind": action_kind,
-        "capability_binding_ref": normalized_capability_binding_ref,
-        "task_repository": normalized_task_repository,
-        "required_capabilities": normalized_required_capabilities,
-        "continuation_policy": effective_continuation_policy,
+        **{key: proposal.get(key) for key in metadata_fields},
+        "required_capabilities": proposal.get("required_capabilities", []),
+        "excluded_agents": proposal.get("excluded_agents", []),
         "claimed_by": claimed_by,
-        "bound_agent": bound_agent,
-        "goal_bound": goal_bound,
-        "blocks_agent": blocks_agent,
-        "excluded_agents": normalized_excluded_agents,
-        "unblocks_todo_id": unblocks_todo_id,
         "updated_at": updated_at,
         "source": "event_log",
-    }
+    }, events
 
 
 def complete_event_projected_goal_todo(
@@ -474,14 +400,25 @@ def complete_event_projected_goal_todo(
     registry_path = Path(context["registry_path"])
     state_path = Path(context["state_path"])
     root = runtime_root or effective_runtime_root(registry_path, None)
-    transaction = nullcontext() if primary_lock_held else legacy_todo_write_transaction(
-        registry_path, goal_id, state_path, actor_agent_id, "todo_event_complete",
-        dry_run, runtime_root=root,
+    transaction = (
+        nullcontext()
+        if primary_lock_held
+        else legacy_todo_write_transaction(
+            registry_path,
+            goal_id,
+            state_path,
+            actor_agent_id,
+            "todo_event_complete",
+            dry_run,
+            runtime_root=root,
+        )
     )
     with transaction:
         if not dry_run:
             require_shadow_primary_write_allowed(root, goal_id)
-            require_legacy_coordination_write_allowed(runtime_root=root, goal_id=goal_id)
+            require_legacy_coordination_write_allowed(
+                runtime_root=root, goal_id=goal_id
+            )
         item = dict(context["item"])
         role = str(context["role"])
         todo_id = normalize_todo_id(item.get("todo_id"))
@@ -498,8 +435,11 @@ def complete_event_projected_goal_todo(
             )
         if clear_claim and item.get("claimed_by"):
             item.pop("claimed_by", None)
-        effective_claimed_by = claimed_by or normalize_todo_claimed_by(item.get("claimed_by"))
+        effective_claimed_by = claimed_by or normalize_todo_claimed_by(
+            item.get("claimed_by")
+        )
         store = AppendOnlyStateEventStore(Path(context["event_log_path"]))
+        source_checksum = context["fields"]["state_event_projection"]["source_checksum"]
         if completion_fence is None or completion_state is None:
             transaction = reduce_todo_completion_transaction(
                 todo=item,
@@ -525,9 +465,7 @@ def complete_event_projected_goal_todo(
             completion_fence = dict(transaction["fence"])
             candidate_state = transaction.get("completion_state")
             completion_state = (
-                dict(candidate_state)
-                if isinstance(candidate_state, Mapping)
-                else None
+                dict(candidate_state) if isinstance(candidate_state, Mapping) else None
             )
         already_done = bool(completion_fence["terminal_before_request"])
         terminal_upgrade = completion_fence["reason"] in {
@@ -541,6 +479,13 @@ def complete_event_projected_goal_todo(
             completion_fence["reason"] == "unscoped_completion_identity_repair"
         )
         if completion_fence["outcome"] == "replay":
+            if not dry_run:
+                try:
+                    store.append_many([], expected_checksum=source_checksum)
+                except StateEventSourceChangedError:
+                    return _completion_validation_source_drift_failure(
+                        goal_id=goal_id, todo_id=todo_id, dry_run=dry_run
+                    )
             return {
                 "ok": True,
                 "dry_run": dry_run,
@@ -588,30 +533,18 @@ def complete_event_projected_goal_todo(
             },
             successor_intents=successor_intents,
         )
-        next_results = [
-            _append_event_projected_successor(
-                store=store,
+        encoded_successors = [
+            _encode_event_projected_successor(
                 goal_id=goal_id,
-                role=str(proposal["role"]),
-                text=str(proposal["text"]),
+                proposal=proposal,
                 updated_at=updated_at,
                 fields=context["fields"],
-                task_class=proposal.get("task_class"),
-                action_kind=proposal.get("action_kind"),
-                capability_binding_ref=proposal.get("capability_binding_ref"),
-                task_repository=proposal.get("task_repository"),
-                required_capabilities=proposal.get("required_capabilities"),
-                continuation_policy=proposal.get("continuation_policy"),
-                claimed_by=proposal.get("claimed_by"),
-                bound_agent=proposal.get("bound_agent"),
-                blocks_agent=proposal.get("blocks_agent"),
-                excluded_agents=proposal.get("excluded_agents"),
-                unblocks_todo_id=proposal.get("unblocks_todo_id"),
-                dry_run=dry_run,
                 actor_agent_id=actor_agent_id,
             )
             for proposal in successor_proposals
         ]
+        next_results = [result for result, _ in encoded_successors]
+        pending_events = [event for _, events in encoded_successors for event in events]
 
         normalized_successor_todo_ids = merge_todo_id_lists(
             successor_todo_ids,
@@ -674,8 +607,15 @@ def complete_event_projected_goal_todo(
             or terminal_upgrade
             or untyped_completion_repair
             or unscoped_identity_repair
-        ) and not dry_run:
-            store.append(completion_event)
+        ):
+            pending_events.append(completion_event)
+        if not dry_run:
+            try:
+                store.append_many(pending_events, expected_checksum=source_checksum)
+            except StateEventSourceChangedError:
+                return _completion_validation_source_drift_failure(
+                    goal_id=goal_id, todo_id=todo_id, dry_run=dry_run
+                )
 
         result = {
             "ok": True,

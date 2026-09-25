@@ -1762,7 +1762,10 @@ def test_capability_binding_follows_event_projected_successor(tmp_path: Path) ->
             "item": parent,
             "role": "agent",
             "event_log_path": event_log,
-            "fields": {"agent_todos": projection["agent_todos"]},
+            "fields": {
+                "agent_todos": projection["agent_todos"],
+                "state_event_projection": {"source_checksum": projection["source_checksum"]},
+            },
         },
         evidence="bounded validation passed",
         note=None,
@@ -1813,7 +1816,10 @@ def test_capability_binding_follows_event_projected_successor(tmp_path: Path) ->
             "item": completed_parent,
             "role": "agent",
             "event_log_path": event_log,
-            "fields": {"agent_todos": replayed["agent_todos"]},
+            "fields": {
+                "agent_todos": replayed["agent_todos"],
+                "state_event_projection": {"source_checksum": replayed["source_checksum"]},
+            },
         },
         evidence="late stale completion",
         note=None,

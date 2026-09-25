@@ -34,6 +34,8 @@
 
 ## 当前实现检查点
 
+当前剩余交付以[事件事务与默认切换计划](ledger/shared-goal-authority-state-provider-v0/2026-09-24-event-completion-transaction.zh-CN.md)为准：条件估算 5–8 个完整包。#4967 来源组装、#4968 捕获交付已经完成；事件写入者绑定仍未完成，本批先修复完整完成事务。下文更早的包数属于历史检查点，不能作为当前待办重复计算。
+
 终结 caller 现将审核与验证绑定 canonical 来源，历史回执恢复不再依赖私有 argv。
 Agent 完成和 Monitor 停止复用普通编辑的当前 head 显示确认。
 [调用与恢复合同](../../reference/canonical-terminal-review.zh-CN.md)。此批推进 L2/L5，

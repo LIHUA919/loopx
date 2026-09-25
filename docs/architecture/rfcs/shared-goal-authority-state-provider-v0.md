@@ -38,6 +38,8 @@ are not a guaranteed total PR count. Use the [reconciled inventory and exits](le
 
 ## Current implementation checkpoint
 
+The current [event transaction and default-cutover plan](ledger/shared-goal-authority-state-provider-v0/2026-09-24-event-completion-transaction.md) estimates 5–8 complete packages conditionally. #4967 source assembly and #4968 capture delivery are already delivered; event-writer binding remains open, with atomic completion repaired here as a prerequisite. Earlier counts below describe historical checkpoints, not additional current work.
+
 Handoff-mode changes now share one TS ownership-fact classifier before and
 after promotion. Legacy event-only claims reject rather than disappear at a
 Markdown boundary; event append locks protect the observation through writeback.

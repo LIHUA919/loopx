@@ -196,6 +196,7 @@ import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
 import {projectCoordinationSource} from "./coordination/source_projection.ts";
 import {withCoordinationSourceTransfer} from "./coordination/source_transfer.ts";
 import {captureArchivedTodoDependencies} from "./todos/archive_capture.ts";
+import {planStateEventAppend} from "./goals/state_event_append.ts";
 import {projectAdvancementFrontier, evaluateLongTodoChain} from "./todos/frontier_revision.ts";
 import { evaluateCoordinationTodoSuccessorDerivation } from "./coordination/todo_successor_derivation.ts";
 import {
@@ -455,6 +456,7 @@ export function createEffectRuntimeHandlers(
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
     ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
+    ["goal.state_event.plan_append", planStateEventAppend],
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
     ["todo.monitor_metadata.plan", planMonitorMetadata],
     ["todo.authoring_scope.plan", planTodoAuthoringScope],

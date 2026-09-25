@@ -108,6 +108,14 @@ class StateEventConflictError(StateEventError):
     """Raised when a duplicate event id carries different event content."""
 
 
+class StateEventSourceChangedError(StateEventError):
+    """The locked event stream differs from the basis used to plan the write."""
+
+
+class StateEventCommitUnknownError(StateEventError):
+    """Publication may have landed; read back before repeating business work."""
+
+
 def now_utc_iso() -> str:
     return runtime_now_utc_iso()
 
@@ -583,48 +591,127 @@ class AppendOnlyStateEventStore:
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         return self.append_many((event,))[0]
 
-    def append_many(self, events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    def append_many(
+        self,
+        events: Iterable[dict[str, Any]],
+        *,
+        expected_checksum: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Publish an eager batch atomically; lazy iterables retain per-item visibility.
+
+        A compare-and-append requires an eager batch. Materialize caller-owned
+        iterators outside this method when one atomic publication is intended.
+        """
         if type(events) not in (list, tuple):
+            if expected_checksum is not None:
+                raise StateEventError("a source-bound append requires a list or tuple")
             return [self.append(event) for event in events]
-        if not events:
+        if not events and expected_checksum is None:
             return []
+
+        from .control_plane.effect_runtime import effect_runtime_result
+        from .control_plane.todos.active_state_editing import (
+            atomic_write_state_text,
+            verify_state_text_durable,
+        )
+
+        # Validate all caller data before entering the lock or publishing any
+        # bytes. Sequence allocation is deliberately deferred to the TS owner.
+        normalized = [
+            normalize_state_event(event, append_sequence=1) for event in events
+        ]
+        requested_ids = {item["event_id"] for item in normalized}
+
+        def identity(item: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "event_id": item["event_id"],
+                "fingerprint": hashlib.sha256(
+                    event_fingerprint(item).encode("utf-8")
+                ).hexdigest(),
+            }
 
         with exclusive_file_lock(self.path):
             stored = self.load()
             existing = {item["event_id"]: item for item in stored}
-            next_sequence = max(
-                (int(item["append_sequence"]) for item in stored), default=0
-            ) + 1
+            plan = effect_runtime_result(
+                "goal.state_event.plan_append",
+                {
+                    "schema_version": "loopx_state_event_append_plan_v0",
+                    "source_checksum": event_stream_checksum(
+                        sorted(stored, key=event_sort_key)
+                    ),
+                    "expected_checksum": expected_checksum,
+                    "last_sequence": max(
+                        (int(item["append_sequence"]) for item in stored), default=0
+                    ),
+                    "existing": [
+                        {**identity(item), "append_sequence": item["append_sequence"]}
+                        for item in stored
+                        if item["event_id"] in requested_ids
+                    ],
+                    "events": [identity(item) for item in normalized],
+                },
+            )
+            if plan.get("schema_version") != "loopx_state_event_append_result_v0":
+                raise StateEventError("invalid event append plan result schema")
+            if plan.get("status") != "planned":
+                reason = plan.get("reason_code")
+                if reason == "event_source_changed":
+                    raise StateEventSourceChangedError(
+                        "event source changed before append"
+                    )
+                if reason == "event_id_conflict":
+                    raise StateEventConflictError(
+                        f"conflicting event_id: {plan['event_id']}"
+                    )
+                raise StateEventError(str(reason or "invalid event append plan"))
+            choices = plan.get("choices")
+            if not isinstance(choices, list) or len(choices) != len(normalized):
+                raise StateEventError("invalid event append plan choices")
             appended: list[dict[str, Any]] = []
-            stream = None
-            try:
-                for event in events:
-                    normalized = normalize_state_event(
-                        event,
-                        append_sequence=next_sequence,
-                    )
-                    prior = existing.get(normalized["event_id"])
-                    if prior is not None:
-                        if event_fingerprint(prior) != event_fingerprint(normalized):
-                            raise StateEventConflictError(
-                                f"conflicting event_id: {normalized['event_id']}"
-                            )
-                        appended.append(prior)
-                        continue
-
-                    if stream is None:
-                        self.path.parent.mkdir(parents=True, exist_ok=True)
-                        stream = self.path.open("a", encoding="utf-8")
-                    stream.write(
-                        json.dumps(normalized, sort_keys=True, ensure_ascii=False) + "\n"
-                    )
-                    stream.flush()
-                    existing[normalized["event_id"]] = normalized
-                    appended.append(normalized)
-                    next_sequence += 1
-            finally:
-                if stream is not None:
-                    stream.close()
+            additions: list[dict[str, Any]] = []
+            for event, choice in zip(normalized, choices, strict=True):
+                if (
+                    not isinstance(choice, dict)
+                    or choice.get("event_id") != event["event_id"]
+                    or choice.get("kind") not in {"append", "replay"}
+                    or isinstance(choice.get("append_sequence"), bool)
+                    or not isinstance(choice.get("append_sequence"), int)
+                    or not 1 <= choice["append_sequence"] <= 2**53 - 1
+                ):
+                    raise StateEventError("invalid event append plan choice")
+                if choice["kind"] == "append":
+                    event["append_sequence"] = choice["append_sequence"]
+                    existing[event["event_id"]] = event
+                    additions.append(event)
+                appended.append(existing[event["event_id"]])
+            # Preserve all historical bytes, including harmless blank lines.
+            # Replacing the whole file changes no prior event or sequence.
+            prior_text = (
+                self.path.read_bytes().decode("utf-8") if self.path.exists() else ""
+            )
+            if additions:
+                separator = "\n" if prior_text and not prior_text.endswith("\n") else ""
+                suffix = "".join(
+                    json.dumps(item, sort_keys=True, ensure_ascii=False) + "\n"
+                    for item in additions
+                )
+                try:
+                    atomic_write_state_text(self.path, prior_text + separator + suffix)
+                except OSError as error:
+                    raise StateEventCommitUnknownError(
+                        "event append outcome uncertain; read back the event stream before retrying the original operation"
+                    ) from error
+            else:
+                # A prior replace may have succeeded before directory fsync
+                # failed. Exact replay must establish durability, not just see it.
+                if self.path.exists():
+                    try:
+                        verify_state_text_durable(self.path, prior_text)
+                    except OSError as error:
+                        raise StateEventCommitUnknownError(
+                            "event replay durability uncertain; read back the event stream before retrying"
+                        ) from error
             return appended
 
 
@@ -635,7 +722,9 @@ def _dedupe_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         prior = by_id.get(event["event_id"])
         if prior is not None:
             if event_fingerprint(prior) != event_fingerprint(event):
-                raise StateEventConflictError(f"conflicting event_id: {event['event_id']}")
+                raise StateEventConflictError(
+                    f"conflicting event_id: {event['event_id']}"
+                )
             continue
         by_id[event["event_id"]] = event
         ordered.append(event)

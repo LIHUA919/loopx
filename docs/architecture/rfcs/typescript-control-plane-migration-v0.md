@@ -29,6 +29,8 @@ Retain T0 caller/parity inventory, T1/T2 transaction/effect convergence, T3 comp
 
 ## Current implementation checkpoint
 
+The current [event transaction and default-cutover plan](ledger/shared-goal-authority-state-provider-v0/2026-09-24-event-completion-transaction.md) estimates 5–8 complete packages conditionally. #4967 source assembly and #4968 capture delivery are already delivered; event-writer binding remains open, with atomic completion repaired here as a prerequisite. Earlier counts below describe historical checkpoints, not additional current work.
+
 Canonical collection transport now uses snapshot-bound, byte-bounded TS pages.
 The same `canonicalTodoCollection` owner validates both the retained direct list
 and paged reads; Python assembles complete pages and preserves the caller shape.

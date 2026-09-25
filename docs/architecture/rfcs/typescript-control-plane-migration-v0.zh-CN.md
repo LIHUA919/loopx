@@ -36,6 +36,8 @@ shared-authority 的当前核对表区分已合入实现、在途 PR、新代码
 
 ## 当前实现检查点
 
+当前剩余交付以[事件事务与默认切换计划](ledger/shared-goal-authority-state-provider-v0/2026-09-24-event-completion-transaction.zh-CN.md)为准：条件估算 5–8 个完整包。#4967 来源组装、#4968 捕获交付已经完成；事件写入者绑定仍未完成，本批先修复完整完成事务。下文更早的包数属于历史检查点，不能作为当前待办重复计算。
+
 Canonical command 的 receipt/head 观察顺序统一归属 TS：团队规划、Todo 创建/
 修改/领取/终态/归档、Monitor、lease 维护和 Goal acceptance 在读 head 后复查原
 receipt，再执行新准入。这修复同 operation 并发竞争，不扩展 provider API、不
