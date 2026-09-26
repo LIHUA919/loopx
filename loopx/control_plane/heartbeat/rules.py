@@ -3,29 +3,37 @@
 
 DEFAULT_MATERIAL_QUEUE_RULE = "Do not consume the learning material queue unless the user explicitly asks."
 DEFAULT_PERMISSION_RULE = "Do not ask for permissions when the current host session is already trusted."
+OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
+OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
-    "授权/预算内推进可验证结果；按任务/证据/风险定规模，不按操作/文件数/心跳间隔。"
-    "操作/写回不自动结束；遵守停止/重规划。"
+    "Within authority/budget, deliver verifiable results sized by "
+    "task/evidence/risk, not ops/files/wakes. Calls/writeback aren't "
+    "completion; obey stop/replan."
 )
 USER_TODO_FINAL_MESSAGE_RULE = (
-    "`interaction_contract.user_channel.notify` controls output: `NOTIFY` -> concrete "
-    "action; otherwise quiet. `should_run`/due monitor and other-agent scoped todos "
-    "are not user prompts. Only inside `NOTIFY`, `action_required` without an action -> "
-    '"具体 user todo 未投影，需修复 LoopX 状态投影"; with `DONT_NOTIFY`, repair '
-    "the projection internally and stay quiet."
+    f"{OPERATOR_LANGUAGE_RULE} "
+    "`interaction_contract.user_channel.notify` controls output: "
+    "NOTIFY=concrete action; DONT_NOTIFY=quiet. "
+    "`should_run`/due monitor/other-agent todos are not user prompts. "
+    "Only under NOTIFY, `action_required` without an action: say the specific "
+    "user Todo is not projected and repair LoopX state projection. Under "
+    "DONT_NOTIFY, repair the projection internally and stay quiet."
 )
 HEARTBEAT_NOTIFICATION_RULE_SHORT = (
-    "`user_channel.notify` controls OUTPUT only: NOTIFY=向用户输出动作; "
-    "DONT_NOTIFY=安静输出。见 `heartbeat_recommendation.agent_must_attempt`/"
-    "`execution_obligation.must_attempt_work`：true须推进并写回，false才可no-op。"
-    "Due/peer非用户动作；NOTIFY缺动作→"
-    "具体user todo未投影，需修复LoopX状态投影；静默时内部修复。"
+    f"{OPERATOR_LANGUAGE_RULE_THIN} "
+    "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
+    "DONT_NOTIFY=no output. "
+    "`heartbeat_recommendation.agent_must_attempt`/"
+    "`execution_obligation.must_attempt_work`: true=work+writeback; only "
+    "false permits no-op. Due/peer work is not a user prompt. Missing NOTIFY "
+    "action: user Todo unprojected; repair LoopX state projection; under "
+    "DONT_NOTIFY repair internally."
 )
 HEARTBEAT_VISION_WRITEBACK_RULE_SHORT = (
-    "本轮精确monitor-poll提交→不refresh/spend；"
-    "其余no-change=surface_only/no spend；writeback material=outcome+vision；"
-    "缺则同轮checkpoint-context重判，按凭据仅补vision；"
-    "过期重读；unchanged→真实--vision-unchanged-reason。"
+    "Exact monitor-poll settlement->no refresh/spend; else "
+    "no-change=surface_only/no spend; writeback material=outcome+vision. "
+    "Missing vision: same-turn checkpoint-context recheck, add only evidenced "
+    "vision; stale->reread; unchanged->truthful --vision-unchanged-reason."
 )
 REWARD_MEMORY_OUTCOME_RULE = (
     "`reward_memory_recall.experiment.automatic_ingest=true`: reusable Todo outcomes "
@@ -79,7 +87,8 @@ HEARTBEAT_TURN_BOOTSTRAP_RULE = (
 )
 HOST_LOOP_QUOTA_DISPATCH_RULE = (
     "Quota: use selection_command when required; "
-    "先按指令重新进入，完成获准工作并验证后，再按 next_cli_actions 写回和记账。"
+    "re-enter as instructed, do/verify authorized work, then follow "
+    "next_cli_actions for writeback/spend."
 )
 HOST_LOOP_TODO_CLOSEOUT_RULE = (
     "Done -> successor first; final -> accountable refresh, spend, then "

@@ -5,7 +5,11 @@ import json
 from ..agent_registry import registered_agent_ids_from_registry
 from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.effect_runtime import (
+    CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
+    CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    effect_runtime_result,
+)
 
 
 def _render_digest(payload: dict) -> str:
@@ -88,15 +92,18 @@ def _render_digest(payload: dict) -> str:
 
 def register_todo_continuation(subparsers, add_format):
     parser = subparsers.add_parser(
-        "handoff", help="Explicit cross-agent Todo handoff: prepare, inspect, adopt (selected canonical authority)."
+        "handoff", help="Explicit cross-agent Todo handoff: prepare/inspect/adopt ownership, or restore content without authority changes."
     )
     # Note: we don't use add_format here because we need a custom --format
     # with a 'digest' choice. We add it manually below.
-    parser.add_argument("action", choices=["prepare", "inspect", "adopt"])
-    parser.add_argument("--goal-id", required=True)
-    parser.add_argument("--todo-id", required=True)
-    parser.add_argument("--agent-id", required=True)
-    parser.add_argument("--session-id", required=True, help="Current host session identifier; provenance, not authorization.")
+    parser.add_argument("action", choices=["prepare", "inspect", "adopt", "restore"])
+    parser.add_argument("--goal-id")
+    parser.add_argument("--todo-id")
+    parser.add_argument("--agent-id")
+    parser.add_argument("--session-id", help="Current host session identifier; provenance, not authorization.")
+    parser.add_argument("--input", help="restore only: producer output file, or - for stdin.")
+    parser.add_argument("--input-format", choices=["json", "markdown"], default="json",
+                        help="restore input representation; JSON is recommended for transport fidelity.")
     parser.add_argument("--operation-id", help="Stable retry identity, required for prepare/adopt.")
     parser.add_argument("--expected-revision", help="Exact revision from inspect, required for prepare/adopt.")
     parser.add_argument("--rationale", help="Decision rationale (legacy, prepare only). Prefer --from-context for rich handoff.")
@@ -114,7 +121,14 @@ def register_todo_continuation(subparsers, add_format):
 def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_format, print_payload):
     if args.command != "handoff":
         return None
+    if args.action == "restore":
+        from .handoff_restore import handle_handoff_restore
+        return handle_handoff_restore(args, output_format=output_format, print_payload=print_payload)
     try:
+        if args.input or args.input_format != "json":
+            raise ValueError("--input/--input-format are only valid for restore")
+        if not all((args.goal_id, args.todo_id, args.agent_id, args.session_id)):
+            raise ValueError("prepare/inspect/adopt require --goal-id, --todo-id, --agent-id and --session-id")
         if args.action != "inspect" and (not args.operation_id or not args.expected_revision):
             raise ValueError("prepare/adopt require --operation-id and --expected-revision; reuse both on retry")
         if args.action != "prepare" and (args.rationale or args.source_ref):
@@ -156,7 +170,11 @@ def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_fo
         version = args.task_lease_expected_version
         if key is not None or version is not None:
             request["lease_proof"] = {"idempotency_key": key, "expected_version": version}
-        payload = effect_runtime_result("coordination.local_authority.todo_continuation", request)
+        payload = effect_runtime_result(
+            "coordination.local_authority.todo_continuation", request,
+            timeout=(CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS if args.action == "inspect"
+                     else CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS),
+        )
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
         payload = {"ok": False, "status": "failed",
             "reason_code": "invalid_continuation_request", "reason": str(exc)}

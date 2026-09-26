@@ -12,7 +12,7 @@ from .authority import compact_authority_registry
 from .control_plane.projects.contract import validate_project_record_bindings
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.runtime.time import now_local_iso
-from .file_lock import exclusive_file_lock
+from .file_lock import exclusive_cross_runtime_file_lock
 from .paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from .registry import read_json, registry_goals
 from .registry_writability import is_write_denied_error, probe_registry_write_path
@@ -99,7 +99,7 @@ def mutate_global_registry(
 ) -> dict[str, Any]:
     """Apply one authoritative global-registry read-modify-write transaction."""
 
-    with exclusive_file_lock(global_path, operation=operation):
+    with exclusive_cross_runtime_file_lock(global_path, operation=operation):
         return _mutate_global_registry_locked(global_path, reducer)
 
 
@@ -631,7 +631,7 @@ def render_global_goal_retirement_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def sync_project_registry_to_global(
+def _sync_project_registry_to_global_once(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
@@ -639,6 +639,7 @@ def sync_project_registry_to_global(
     dry_run: bool = False,
     allow_route_replacement: bool = False,
     _global_registry_lock_held: bool = False,
+    _expected_global_registry: Path | None = None,
 ) -> dict[str, Any]:
     registry_path = registry_path.expanduser()
     if not registry_path.exists():
@@ -646,6 +647,13 @@ def sync_project_registry_to_global(
     project_registry = load_registry(registry_path)
     runtime_root = resolve_runtime_root(project_registry, runtime_root_override)
     global_path = global_registry_path(runtime_root)
+    if (
+        _expected_global_registry is not None
+        and global_path.absolute() != _expected_global_registry.absolute()
+    ):
+        raise ValueError(
+            "global registry route changed while waiting for the write lock; retry"
+        )
     if registry_path.resolve() == global_path.resolve():
         return {
             "ok": True,
@@ -816,6 +824,65 @@ def sync_project_registry_to_global(
         "wrote": not dry_run,
         "global_registry_writability": writability or {},
     }
+
+
+def sync_project_registry_to_global(
+    *,
+    registry_path: Path,
+    runtime_root_override: str | None,
+    goal_id: str | None = None,
+    dry_run: bool = False,
+    allow_route_replacement: bool = False,
+    _global_registry_lock_held: bool = False,
+) -> dict[str, Any]:
+    """Sync a fresh source snapshot while holding the target registry lock."""
+
+    if dry_run or _global_registry_lock_held:
+        return _sync_project_registry_to_global_once(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_override,
+            goal_id=goal_id,
+            dry_run=dry_run,
+            allow_route_replacement=allow_route_replacement,
+            _global_registry_lock_held=_global_registry_lock_held,
+        )
+
+    source_registry = registry_path.expanduser()
+    if not source_registry.exists():
+        raise FileNotFoundError(
+            f"registry file does not exist: {source_registry}"
+        )
+    source_payload = load_registry(source_registry)
+    runtime_root = resolve_runtime_root(source_payload, runtime_root_override)
+    target_registry = global_registry_path(runtime_root)
+    if source_registry.resolve() == target_registry.resolve():
+        # This route's global registry is the source registry itself, which a
+        # caller such as configure-goal already owns through the source
+        # transaction lock. Acquiring the cross-runtime lock here would wait
+        # on this process while holding the source lock, so a single-runtime
+        # route would write the source and then fail to report it. The
+        # single-shot reducer already treats this route as an owned no-op.
+        return _sync_project_registry_to_global_once(
+            registry_path=source_registry,
+            runtime_root_override=runtime_root_override,
+            goal_id=goal_id,
+            dry_run=False,
+            allow_route_replacement=allow_route_replacement,
+            _global_registry_lock_held=_global_registry_lock_held,
+        )
+    with exclusive_cross_runtime_file_lock(
+        target_registry,
+        operation="sync_global_registry",
+    ):
+        return _sync_project_registry_to_global_once(
+            registry_path=source_registry,
+            runtime_root_override=runtime_root_override,
+            goal_id=goal_id,
+            dry_run=False,
+            allow_route_replacement=allow_route_replacement,
+            _global_registry_lock_held=True,
+            _expected_global_registry=target_registry,
+        )
 
 
 def render_global_sync_markdown(payload: dict[str, Any]) -> str:

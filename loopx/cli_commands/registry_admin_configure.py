@@ -349,8 +349,8 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--local-authority-shadow-file",
         action="store_true",
         help=(
-            "Enable default-off, one-way capture of post-commit local snapshots "
-            "in FileAuthorityStore. This does not compare source and candidate."
+            "Retired; rejected without writing. Use --coordination-runtime-shadow-file "
+            "and explicit coordination-shadow bootstrap for transaction-bound capture."
         ),
     )
     configure_goal_parser.add_argument(

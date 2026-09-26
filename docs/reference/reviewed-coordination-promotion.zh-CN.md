@@ -9,7 +9,9 @@ fence 与 receipt 证明由 TypeScript 协调边界负责；Python 只读文件�
 ## 操作
 
 先显式启用并 bootstrap runtime shadow，让它捕获真实变更并通过资格校验。
-现有 v0 晋升仍要求 Goal 已处于 `hard_lease`；保存 JSON 不会降低这个条件。
+不指定模式转换时，v0 晋升仍要求 `hard_lease`。显式传 `--handoff-mode-migration preserve`
+可保留当前模式；`hard_lease` 则审核转换及现有 claim/lease。保存的计划保留这个选择，
+执行时不能覆盖它；两者都不降低捕获、来源与事务资格条件。
 
 ```bash
 loopx --format json coordination-shadow promote \
@@ -35,6 +37,26 @@ loopx --format json coordination-shadow promote \
 `local_authority_reviewed_plan_changed`。此时重新预览并审核；不要修改旧 digest
 来强行通过。digest 说明“执行的是哪份意图”，持久 fence 和 provider 状态说明
 “这份意图现在能否执行”。
+
+## 注册变化与重试
+
+Python 来源适配器将当前 Goal、路径和已注册 Agent 事实绑定到一次 registry 字节摘要；
+TS 在现有跨 runtime 锁内再次核对，并持锁到准入/提交结束。来源已失效返回
+`source_registry_changed_retry`，保存计划的 Agent 事实改变返回
+`promotion_registration_changed_retry`。重新读取来源与审核预览，不要修改摘要。
+注册修改正在持锁时返回 `source_registry_busy_retry`；释放来源锁后可重试，避免与
+先锁 registry 再锁状态的配置命令互相等待。普通 Todo 写入不新增锁。
+项目和全局 registry 的修改共用既有 marker + kernel 组合锁，包括全局同步、
+Goal 启停及删除；这一 registry 互操作协议也适用于未启用 shadow 的场景，只读
+预览仍不取写锁。已进入受保护操作后发生的其他锁超时保留原始原因，不冒充 registry 竞争。
+
+这是本机来源一致性，不是授权授予，也不是跨主机数据库事务。完整 registry 的无关
+修改也可能要求重试，优先保证来源证据明确。旧持久回执和 fence 的恢复不要求新增
+registry witness；新的 bootstrap、inspect、qualify 和 promote 必须重新捕获它。
+pre-promotion rollback 仍可隔离损坏来源对应的 shadow，不要求当前注册恢复正常。
+
+晋升失败时 `legacy_writer_fenced=true` 表示实际存在持久 fence，不表示本次创建了它；
+无法确定时为 `null`，不能当成旧路径可写。使用原计划恢复，不能删除 fence 逃过拒绝。
 
 ## 断点恢复
 
@@ -86,10 +108,9 @@ projection digest 和 partition marker；分配序号不返回事务行，drain 
 capability grant。它们在获授权的切换后继续使用既有 canonical 路由和展示合同。
 PostgreSQL 仍需要服务持有的 factory 与租户权限，不能仅靠本地 selector 接通数据库。
 
-PR #4870 提供保留 claim 的 `preserve`／`hard_lease` 转换，属于互补前置工作；
-两者涉及同一个晋升编排，需要组合验证。本功能单独合入不会让 v0 checkout 自动获得
-这些模式转换。默认切换、SQLite 长时资格、晋升后导出／回退、剩余 Python 删除，仍
-遵守 RFC 的独立门槛。
+已合入的 claim-preserving 转换与保存计划现在组合验证：File/SQLite 的默认、
+`preserve`、`hard_lease` 三种路径均使用相同资格与恢复 owner。
+默认切换、SQLite 长时资格、晋升后导出／回退、剩余 Python 删除仍遵守 RFC 独立门槛。
 
 恢复用于向前补齐或确认原切换，不是 rollback。不要删除活跃 fence、重置 canonical
 存储或替换源文件来绕过拒绝。执行前放弃一份预览，只需停止使用该文件。

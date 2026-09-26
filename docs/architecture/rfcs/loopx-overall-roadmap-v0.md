@@ -44,7 +44,7 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | **S7 Budget, scheduling and fleet scale · P0 observation/P1–P2 expansion** | Quota/scheduler and partial usage aggregates exist; full provider cost, distributed reservations and hundred-Agent concurrency need evidence | Separate configured budget, admission, consumption and estimates; unknown is not zero and replay cannot double-charge. R7 pagination/bounded summaries and [complete-history transport](typescript-control-plane-migration-v0.md), including refresh/replay/single-debit evidence beyond the RPC limit; provider/host limits, fairness, backpressure, event wake and isolation; report registration/activity/throughput and cost per accepted outcome separately |
 | **S8 Capabilities, extensions and domain integration · P1/P2** | Capability catalog, extension lifecycle, hooks, engineering/research/content/office capabilities and computer-use contracts exist | First exercise the shared control plane with existing issue-fix/PR-review and material/research callers. Every provider has readiness/version/permissions/default-off/uninstall/rollback/isolation and real-entry evidence. New domain effects start with one simulated operation, not a marketplace or workflow DSL |
 | **S9 Identity, authority, privacy and trust · continuous P0/P1–P2 remote** | Public/private scope, capability gates, fencing and confirmation contracts belong to existing owners | R1/R3 cover sender/audience/artifact scope and stale authority; R6 authenticates tenant/Goal/actor/host, rotation/revocation and least privilege. Qualify credential custody, untrusted tool/document inputs, dependency supply chain, audit retention/deletion and vulnerability response through real paths; roles/messages/memory mint no write authority |
-| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
+| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Use [bounded repair lookup and targeted diagnostics](../../../skills/loopx-self-repair/references/targeted-diagnostics.md) to reduce redundant reads above the provider boundary; measure backend-specific cold/warm reads, writes and lock waits separately. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
 | **S11 Evaluation and scientific research · continuous P1/P2 research** | Benchmark toolkit, Explore, long-horizon portfolio and ten frontier-science tracks have designs/partial implementations | Pin native/passive/governed arms, model/harness/budget/task split and evaluator; report native scores, cost, failures, attention and uncertainty. Prioritize sequential evidence, continuation and stride; memory, formal kernel, curriculum/evolution, active experiments and multiscale state follow T01–T10 gates without automatic production treatment |
 | **S12 Release, developer experience and community governance · P0 hygiene/P1** | Install/source validation, registration, DCO/PR, test layers, contributor routes and bilingual docs exist | Qualify first work and upgrade/rollback from clean machines/release artifacts; host/OS support follows the release contract. Reduce localization/test/review effort for useful changes; preserve exact-head evidence, fixtures, compatibility, maintainer routing and contributor credit; retire duplicate protocols/stale evidence |
 | **S13 Adoption, ecosystem and sustainability · P1 discovery/P2 pilots** | Public adoption loop, showcases, licensing/governance and observer-first product contract exist; paid PMF is unproven | Gather independent first/repeat usage and exit reasons; reproducible cases and pilots with fixed budgets/acceptance/rollback. Retain reusable adapters/delivery guides. Account for model/compute/storage/support and maintenance costs; only repeated demand justifies commercial hosting/support/distribution decisions, with no invented SLA or open-source-term change |
@@ -237,6 +237,18 @@ expansion follows from this roadmap revision.
 
 Do not invent unmeasured performance targets. Before each experiment/pilot, its owner freezes thresholds, baseline, budget, stop conditions and evidence scope. A post-result threshold change belongs to a new experiment. G4 correctness requires no duplicate protected effects or stale/unauthorized commits; performance and cost thresholds require separate measured qualification.
 
+Operational status used by post-writeback sinks must stay distinct from repository
+publication audits. A Goal Channel gate decision still reads current Goal and
+quota state, but a repository-wide public-boundary scan belongs to explicit
+`loopx check`/premerge validation, not every `refresh-state` notification
+attempt. The local status APIs already use this separation. For the next
+long-history qualification, measure the full `refresh-state` and `quota
+spend-slot` paths separately: lock wait, history/receipt readback, state
+projection, optional sink work, and result delivery. Keep the required
+authority and privacy checks; optimize repeated reads only with equivalent
+positive, negative, retry, and stale-generation outcomes. A fast sink no-op
+is not evidence that long-history status and quota admission meet G4 SLOs.
+
 
 ## 4. Every RFC: Ownership and Next Step
 
@@ -270,6 +282,7 @@ This maps **all 30 primary RFCs** at the scope baseline, counting language mirro
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 | Draft; proposal only | P2: simulated immutable confirmation→effect→reconciliation→return; finance provider separate, no broader coordination grant |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Draft; partial M2 composition/successor | P1: independently verify observation/write-time gate/closure basis; defer inferred triggers and model selection |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Draft; M1 read-only observation | P2: matched shadow stride experiment with costs/events; no direct production cadence change |
+| [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Draft; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | S6/S11 | Draft; Stage 1 verified-outcome binding | P1 read-only reducer→P2 pilot: distinguish recalled/applied/utility, no automatic ranking change |
 | [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | S6/S8 | Draft; optional read-only evaluation | P2: explicit gap recall with resolvable provenance/access, off-path parity; no work authority |
 | [Frontier Science Research Program v0](frontier-science-research-program-v0.md) | S11 | Draft; ten-track research proposal | P2: sequential evidence/continuation/stride first; T01–T10 use existing owners and frozen experiment/promotion gates |
@@ -348,6 +361,45 @@ Chat, session, collaboration and presentation owners as R2/R3 integration work.
 Do not call a candidate catalog, spinner or queued inbox receipt a completed
 worker handoff. This checkpoint does not lower R1–R3 or G1 gates.
 
+### Attention-cost acceptance: create, connect, collaborate, understand
+
+The [public-safe golden-query pack](../../product/use-cases/steward/golden-queries.md)
+is the next product evaluation target, not a statement of current support.
+Users should express a short outcome or correction without finding Agent IDs,
+repeating known constraints, chasing work or transporting results themselves.
+Keep valuable learning, deliberate choices and necessary approvals separate
+from avoidable coordination. Preserve direct conversations with long-term owners.
+
+P0 starts at the entry: a creation request cannot disappear after submission;
+Goal creation, reuse of an existing Agent and authorized new-worker setup have
+observable outcomes. Then qualify R3/M2/M3 routing **alongside** R2 adoption:
+responsible receiver, actual work, exact artifact use, independent acceptance,
+and synthesized return to the initiating conversation. A registration is not a
+live binding; a missing catalog row is not proof that no suitable owner exists.
+Use scoped discovery and permitted recovery before requesting manual IDs.
+Private-owner discovery is broad by default across registered local resources
+and authorized connected sources; a delivery allowlist, missing live binding or
+bounded first page must not hide an otherwise visible responsible Agent.
+Keep discovery, audience evidence access, delegation and execution readiness
+separate, as specified by [manager §5.5](capable-manager-semantic-handoff-v0.md#55-responsibility-discovery-and-receiver-owned-planning).
+
+The P0 pilots are responsibility routing and real 2–3-worker coordination:
+parallel joins, peer help, disagreement, independent review and engineering-to-
+research adoption across two cycles. Entry checks, correction and recovery
+accompany them. P1 adds materials, decision summaries, dependency replanning,
+qualified mixed-model allocation and retained constraints;
+P2 broadens scale and cinematic presentation after real outcomes are legible.
+Reports, truthful activity and scoped controls support this same P0 journey;
+finishing every presentation surface is not a prerequisite for attempting it.
+Necessary R1/TS transaction repairs retain their owners, without making the
+journey wait for the entire migration or optional memory infrastructure.
+
+The pack freezes paired baseline/candidate tasks, outcome and attention measures,
+negative cases and per-surface evidence. All live case results start unqualified.
+Keep existing R/G/M/A identifiers and canonical Todos; do not create a parallel
+roadmap, scheduler or achievement ledger. Release claims require observed
+results, not this plan or merged prerequisite PRs.
+
 ### Collaboration and Handoff Between LoopX Agents
 
 Participants are long-running LoopX Agents with their own goals, commitments, frontiers and execution bindings, not merely temporary subtasks inside the steward process. Manager→worker and worker→worker share one collaboration contract. Workers can request help, provide results, challenge dependencies and propose replanning without asking the steward to relay every message. The steward owns overall progress and synthesis, not a serial transit point for every message or commit.
@@ -370,7 +422,7 @@ R2's dependency must use real requests/artifact handoff between LoopX Agents. Th
 | --- | --- | --- | --- |
 | R1 | P0: confirmed commitments survive materialization; failure/retry is recoverable | Current main and F1–F4 regressions | Other TS transactions and provider promotion |
 | R2 | P0: one steward drives 2–3 bound managed workers through continued work | R1 and real selected runtime/profile qualification | Full collaboration migration and PostgreSQL |
-| R3 | P1: semantic handoff and automatic return survive restart without owner polling | Existing inbox/outbox; new generic producers require transaction migration | Early answer/transport recovery can start with R1/R2 |
+| R3 | P0: eligible owner → actual work → original-request return on supported paths; P1: general migration and broader recovery | Existing inbox/outbox and qualified runtime; new generic producers require transaction migration | Complete a real journey with R1/R2 before universal transport/storage migration |
 | R4 | P1: shared intent/work basis and governed amendment close the loop | Alignment Stage 1/2 and affected TS transactions | R1–R3 that preserve shared intent |
 | R5 | P1: durable local authority and long-horizon storage qualification | Affected T0–T3 transactions and D1/D2/D3 | Preparation alongside R1–R4; no full TS rewrite prerequisite |
 | R6 | P2: local and cloud workers share authority and recover execution | R2/R3, selected shared profile, authenticated service and applicable R4 contracts | PostgreSQL service engineering can start earlier without promotion |
@@ -475,15 +527,13 @@ This qualifies a local execution-facts readback, not the full R2 ladder: assignm
 receipt integration, provisioning, remote probes, two-cycle continuation and Lark
 qualification remain open under their existing owners.
 For managed non-Chat work, [PR #4978](https://github.com/loopx-project/loopx/pull/4978)
-proposes an accepted, exact-version Goal result readback: canonical Todo
+added an accepted, exact-version Goal result readback and is merged: canonical Todo
 completion binds local report bytes, the CLI verifies them, and packaged Goal
 Files reads a Goal-scoped loopback projection. The [Live Team Workspace RFC](live-team-workspace-v0.md)
-defines this producer-to-reader boundary. Focused local File/SQLite and
-desktop/mobile checks pass on the proposed head; maintainer review and CI
-remain open. Return to the original requester conversation, mixed-team
-continuation and stop/recovery remain separate unqualified outcomes.
+defines this producer-to-reader boundary. This merged report readback does not
+qualify the full intent-routing, requester-adoption or recovery journey.
 
-The proposed managed-result readback binds a current accepted Todo report to
+The managed-result readback binds a current accepted Todo report to
 canonical completion and its exact digest. Goal Files can open it, and a
 manager conversation can show one report only when its confirmed team-plan
 receipt names that Todo. Multiple matching reports require selection in the

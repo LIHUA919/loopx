@@ -18,32 +18,26 @@ python examples/shared-goal-authority-e2e/ladder.py --list
 
 The pytest projection is `tests/control_plane/test_shared_goal_authority_e2e.py`;
 there, an unverified row skips as `unverified: <reason>` and a POSIX-only row
-skips on Windows. Five `s2c1.*` rows whose assertions
-`tests/control_plane/test_local_authority_shadow_cli_e2e.py` already pins
-through the same product path (configure round trip, default-off isolation,
-candidate failure, crash gap, dual runtime root) are skipped in the default CI
-projection to stay within the pytest job budget; `LOOPX_LADDER_FULL=1` runs
-them in pytest, and the example runner always runs every row. The ten
-`s2c2.*` rows carry the `stage2c_e2e` marker, so CI runs them in the stage2c
-correctness job next to the other real-CLI, process-death and recovery
-suites rather than in the pytest shards.
+skips on Windows. The `s2c1.retired_observation_upgrade` row is also covered by
+`tests/control_plane/test_local_authority_shadow_cli_e2e.py` and is skipped in
+the default pytest projection; `LOOPX_LADDER_FULL=1` runs it there too. The
+standalone example always runs selected rows. The eleven `s2c2.*` rows run in
+the stage2c correctness job alongside real-CLI process-death and recovery suites.
+
+The seven former `s2c1.*` observation-writer rows are retired with that writer.
+Historical reports retain their meaning; current runs validate explicit upgrade
+and the transaction-bound outbox instead of requiring a second writable history.
 
 ## Rows
 
 | Row | Stage | Path | Gate | Asserts |
 | --- | --- | --- | --- | --- |
-| `s0.file_matrix_twelve_rows` | 0 | store_direct | deterministic | `examples/nokv-shadow-provider/live_e2e.py` reports exactly the twelve known file-provider scenario rows, all true |
-| `s0.nokv_live_matrix` | 0 | store_direct | env:nokv_legacy | the same twelve rows plus `restored_lineage_fails_closed` are true on a live NoKV stack and file/NoKV outcomes are identical |
-| `s1.cli_document_decodes_through_ts_store` | 1 | real_cli | deterministic | three CLI writes (`todo add`, `task-lease acquire`, `todo update`) read back through `FileAuthorityStore`: `loadAuthority` loaded at cursor `3`, paged `scanCommitted` yields the three `observation_id`s in order, `readReceipt` finds the first |
+| `s0.native_file_conformance` | 0 | store_direct | deterministic | Runs the complete `authority_store.test.ts` suite against the current TS FileAuthorityStore; every selected test must pass, with no skip or missing trailer |
+| `s0.native_sqlite_conformance` | 0 | store_direct | deterministic | Runs the complete `sqlite_authority_store.test.ts` suite against real SQLite files and the same shared conformance contract |
+| `s1.cli_document_decodes_through_ts_store` | 1 | real_cli | deterministic | Explicit bootstrap plus three CLI writes load at cursor `4`; paged `scanCommitted` returns four distinct transactions in source order and `readReceipt` finds the first source write |
 | `s2a.nokv_live_qualification` | 2a | store_direct | env:nokv_authority | runs the merged `examples/nokv-authority-store/live-qualification.ts --execute-live` against an existing workbench with a fresh tenant/goal pair; requires `ok=true`, the single-node store-conformance scope, every check `passed`, NoKV SDK `0.11.1` / API `1`, the two stale-incarnation fence checks (`stale_incarnation_fence_rejected`, `stale_incarnation_fence_left_generation_unchanged`), and no promotion or availability claim; evidence carries check ids, counts, and config and workbench digest prefixes, never a configuration value or the workbench name |
 | `s2b.postgresql_conformance_live` | 2b | store_direct | env:postgresql | `postgresql_authority_store.integration.test.ts` under node's TAP reporter: `# pass >= 9`, `# fail 0`, `# skipped 0` |
-| `s2c1.configure_enable_disable_roundtrip` | 2c1 | real_cli | deterministic | `configure-goal` preview does not write, enable writes, captured observations for a todo and a lease, read-back summary `enabled/file_one_way`, disable writes and later writes neither observe nor touch candidate bytes |
-| `s2c1.every_writer_family_captures` | 2c1 | real_cli | deterministic | handoff-mode set, todo add/update/complete/supersede/archive-completed, task-lease acquire/renew/transfer each carry `outcome in {captured, replayed, ambiguous_reconciled}`, `primary_writeback_preserved=true`, `provider_to_local_writes=false`, `candidate_read_for_decision=false`; an idempotent re-acquire carries no `authority_shadow`; candidate `cursor == captured count`, operation ids equal observation ids, no time-active lease in the head, head todos equal `todo list` |
-| `s2c1.default_off_isolation` | 2c1 | real_cli | deterministic | a default-off goal returns the same response fields as an observed goal, carries no `authority_shadow`, and creates no `authority-shadow/` directory |
-| `s2c1.candidate_failure_preserves_primary` | 2c1 | real_cli | deterministic | a blocked candidate directory yields `outcome=failed`, `reason_code=shadow_observation_failed`, and the committed todo is in the primary state |
-| `s2c1.crash_gap_loses_observation` | 2c1 | real_cli | deterministic (POSIX) | a writer SIGKILLed while the observation lock is held commits its todo but leaves no candidate document; the next write captures the full two-todo snapshot without claiming an outbox or correlation |
-| `s2c1.dual_runtime_root_consistency` | 2c1 | real_cli | deterministic | with `common_runtime_root` different from `--runtime-root`, two todo adds, task-lease acquire, todo update, and a leased completion all observe into one store identity; the head holds both todos and the released lease; the registry root gains neither a candidate lineage nor lease state |
-| `s2c1.migration_seeds_new_lineage` | 2c1 | real_cli | deterministic | `migrate-state` dry run plans the seed without writing; execute seeds one fresh `file:` lineage at cursor `1` that carries no legacy identity, revision, source path, or private byte |
+| `s2c1.retired_observation_upgrade` | 2c1 | real_cli | deterministic | Old enable rejects without writes; retained settings create no history; explicit clear/configure/bootstrap captures the next source transaction |
 | `s2c2.outbox_prepared_then_committed_entries` | 2c2 | real_cli | deterministic | with the maintenance lock held, `todo add` (Python) and `task-lease acquire` (TypeScript) report `drain_deferred/drain_lock_busy`, `status` shows one `committed_pending` entry per partition with one prepared record and one committed marker on disk; one `drain` delivers both (`delivered=2`), history holds the bootstrap plus two committed receipts from both writer runtimes, and the next write delivers inline at cursor `4` |
 | `s2c2.drain_idempotent` | 2c2 | real_cli | deterministic | three deferred entries: `drain --max-entries 1` delivers one (`pending_after=2`, `budget_exhausted`), the next `drain` delivers two, an idle `drain` reports `nothing_pending` with unchanged cursor, `head_digest` and `provider_revision`; receipts settle sequences 1..3; an idempotent same-key re-acquire carries no capture evidence and adds no transaction |
 | `s2c2.sigkill_between_primary_write_and_drain` | 2c2 | real_cli | deterministic (POSIX) | `todo add` SIGKILLed at `before_replace`, `after_replace` and `before_marker` leaves one prepared-only entry each; `drain` settles it as `abandoned` (no-op, primary unchanged) or `committed_proven_by_readback`, the projection equals the primary, and `inspect` ends `matched` |
@@ -79,13 +73,65 @@ byte; every assertion still goes through `status`, `drain`, `inspect`,
 `qualify`, `read-candidate`, `rollback`, `migrate-state` and the retained
 TypeScript store read.
 
+## Native qualification and prototype retirement
+
+Stage 0 now exercises the providers used by current Goals. Run from a source
+checkout after `npm ci` and `uv sync --extra test`:
+
+```bash
+uv run --extra test python examples/shared-goal-authority-e2e/ladder.py --stage 0
+```
+
+These are complete suites, so allow several minutes. The regular TypeScript test
+job already runs them; the default pytest projection skips these two duplicate
+runs. Set `LOOPX_LADDER_FULL=1` for pytest to execute them too. The standalone
+ladder always executes selected rows. The test runner's successful
+exit is necessary but insufficient: all tests must pass, the selection must be
+nonempty, and failures, skips, cancellations or an incomplete TAP trailer fail
+qualification. Missing Node or source suites is explicitly `unverified`.
+Installing a wheel alone does not install the source qualification suite.
+
+The Python `CoordinationAuthorityExecutor`, head codec, `FileCoordinationProvider`
+and bootstrap bridge had no production CLI callers. Their remaining callers were
+the prototype examples, unit tests and the old ladder. They are removed together;
+current TS executors, stores, logical archives and File v0-to-v1 migration remain.
+`coordination-head-*.json` was the experimental head format, not a production
+`authority-store-*.json` journal. This retirement neither rewrites those prototype
+artifacts nor converts them into a full Goal. Historical probe records remain
+historical; `s0.file_matrix_twelve_rows` and `s0.nokv_live_matrix` are no longer
+selectable and are never aliases for current proof.
+
+Coverage follows the current semantic owner rather than reproducing prototype
+schemas or its superseded rules:
+
+| Retired prototype obligation | Retained native qualification |
+| --- | --- |
+| Same-Todo CAS winner, independent writes, stale revision and operation identity | `authority_store_conformance.ts`: CAS, replay/fencing, atomic Todo claim and lease acquisition |
+| Lost response, receipt recovery and bounded retries | `coordination_receipt_conformance.ts` and `claim_acquisition_proof_conformance.ts` |
+| Renew, release, transfer, expiry and stale ownership | `lease_lifecycle_conformance.ts`, `lease_acquisition_conformance.ts`, `claim_transfer_conformance.ts` and claim acquisition proof |
+| Completion plus successor, durable continuation and unchanged unrelated rows | Native terminal lifecycle and production-scale scenarios in `authority_store_conformance.ts` |
+| Restore lineage, corrupt records, publication and reopen | File/SQLite provider suites, authority source and promotion recovery conformance |
+| Large state and observation isolation | Existing production-scale coordination fixtures, complete snapshots and paginated authority scan conformance |
+
+Two intentional differences already belong to the current runtime: an expired
+lease may still be released by its matching holder for cleanup, and an original
+claim receipt does not authorize execution after the current lease has retired.
+Retiring the prototype must not reinstate its expired-release rejection or treat
+historical receipt replay as fresh execution authority.
+
+NoKV keeps its actual TS store and Stage 2A live qualification; removing the old
+head adapter does not remove that provider. Open #4726 touches both implementations:
+its native SDK routing/schema work remains relevant, while its prototype-only
+changes must be dropped when rebasing across this retirement. Local conformance does not certify
+SQLite D2 capacity/soak, production NoKV availability, PostgreSQL deployment or
+default cutover.
+
 ## Gates and environment variables
 
 | Gate | Requirement | Unverified reason when absent |
 | --- | --- | --- |
 | `deterministic` | none (needs `node` on `PATH` for the CLI's TypeScript runtime and the read-back probe) | `node_missing` when the probe cannot run |
 | `env:postgresql` | `LOOPX_TEST_POSTGRES_URL` plus `node_modules/pg` (`npm ci`) | `postgres_url_missing`, `pg_dependency_missing`, `node_missing` |
-| `env:nokv_legacy` | `NOKV_COORDINATION_LIVE=1` and `NOKV_ETCD`, `NOKV_ETCD_PREFIX`, `NOKV_ROOT_ID`, `NOKV_BUCKET`, `NOKV_OBJECT_ENDPOINT`, `NOKV_OBJECT_ROOT`, `NOKV_OBJECT_KEY`, `NOKV_OBJECT_SECRET`; the `nokv` SDK importable | `nokv_live_env_missing`, `nokv_coordination_live_not_enabled`, `nokv_sdk_missing` |
 | `env:nokv_authority` | `LOOPX_NOKV_AUTHORITY_LIVE=1` (the probe writes durable test data), `LOOPX_NOKV_AUTHORITY_CONFIG_JSON` (absolute path to the ignored NoKV client configuration), `LOOPX_NOKV_AUTHORITY_PYTHON` (absolute path to the Python executable that resolves NoKV SDK 0.11.1), `LOOPX_NOKV_AUTHORITY_WORKBENCH` (an existing workbench); `node` on `PATH` | `nokv_authority_env_missing`, `loopx_nokv_authority_live_not_enabled`, `nokv_authority_config_missing`, `nokv_authority_python_missing`, `node_missing` |
 
 POSIX-only rows report `unverified/posix_only` on Windows.

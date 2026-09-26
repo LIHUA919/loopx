@@ -12,6 +12,7 @@ PROJECT_COORDINATION_GUIDANCE = (
     "when available; otherwise use the supplied scoped evidence and disclose gaps. "
     "The Chat runtime is not the registered project coordinator: do not claim to be "
     "an existing Agent, attach to its session, or take its work by using its name. "
+    "Find responsible members with loopx_context_read view=agents; registration does not prove execution readiness. "
     "Use the supplied context_delegation catalog for an explicitly requested handoff "
     "to an exact registered member, preserving the objective, corrections, constraints "
     "and required return. The member independently assesses, investigates and plans. "
@@ -28,7 +29,7 @@ PROJECT_COORDINATION_GUIDANCE = (
 )
 
 
-PROJECT_CONTEXT_VERSION = 1
+PROJECT_CONTEXT_VERSION = 2
 
 
 def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope):
@@ -119,6 +120,15 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
             owner_scope=scope["private_conversation"],
             channel_id=session.get("channel_id"),
             scope_valid=scope_valid,
+            discovery_scope=(
+                (lambda: None) if scope["kind"] == "owner_portfolio" else
+                (lambda: [str(session["goal_id"])]) if scope["kind"] == "owner_goal" else
+                (lambda: controller.manager_scope_resolver(session) if controller.manager_scope_resolver else [])
+            ),
+            delegation_authority=lambda: authority(
+                controller.store.root.parent, controller.registry_path, session,
+                controller.store.load_turn(session_id, turn_id) or {},
+            ),
             record=lambda result: controller.store.append_event(
                 session_id, turn_id, kind="manager.evidence_read", payload=result,
             ),

@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from .local_authority_shadow_projection import source_effect_runtime_result as effect_runtime_result
-from . import local_authority_shadow_observation
 from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA as RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA,
@@ -28,6 +27,7 @@ from .coordination_state_contract_generated import (
     COORDINATION_RUNTIME_SHADOW_ROLLBACK_RESULT_SCHEMA,
     COORDINATION_RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA as RUNTIME_SHADOW_TODO_READ_REQUEST_SCHEMA_VERSION,
     COORDINATION_RUNTIME_SHADOW_TODO_READ_RESULT_SCHEMA,
+    LOCAL_AUTHORITY_SHADOW_CONFIG_SCHEMA,
     LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
     LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA,
 )
@@ -50,13 +50,50 @@ class CoordinationRuntimeShadowConfig:
     reason_code: str
 
 
+def local_authority_shadow_summary(goal: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Recognize retained config without granting it a writer or capture lineage."""
+    coordination = goal.get("coordination") if isinstance(goal, Mapping) else None
+    if not isinstance(coordination, Mapping) or "authority_shadow" not in coordination:
+        return {"enabled": False, "mode": None, "status": "disabled"}
+    raw = coordination["authority_shadow"]
+    valid = (isinstance(raw, Mapping) and set(raw) == {"schema_version", "mode"}
+             and raw.get("schema_version") == LOCAL_AUTHORITY_SHADOW_CONFIG_SCHEMA
+             and raw.get("mode") == "file_one_way")
+    return {"enabled": False, "mode": raw.get("mode") if isinstance(raw, Mapping) else None,
+            "status": "retired" if valid else "invalid", "configured": True,
+            "replacement": "coordination_runtime_shadow"}
+
+
+def validate_local_authority_shadow_change(enable_file: bool, clear: bool) -> None:
+    if enable_file and clear:
+        raise ValueError("--local-authority-shadow-file cannot be combined with --clear-local-authority-shadow")
+    if enable_file:
+        raise ValueError(
+            "local_authority_shadow_retired: post-commit observation is retired; "
+            "clear it with --clear-local-authority-shadow; explicitly configure "
+            "--coordination-runtime-shadow-file and run coordination-shadow bootstrap "
+            "before transaction-bound capture. Retained observations are not migration evidence."
+        )
+
+
+def apply_local_authority_shadow_change(goal: dict[str, Any], enable_file: bool, clear: bool) -> None:
+    validate_local_authority_shadow_change(enable_file, clear)
+    if not clear:
+        return
+    coordination = goal.get("coordination")
+    if isinstance(coordination, dict):
+        coordination.pop("authority_shadow", None)
+        if not coordination:
+            goal.pop("coordination", None)
+
+
 def coordination_shadow_summaries(
     goal: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, object]]:
-    """Project both distinct pre-promotion shadow configurations."""
+    """Report the active capture configuration and any retired observation setting."""
 
     return {
-        "local_authority_shadow": local_authority_shadow_observation.local_authority_shadow_summary(
+        "local_authority_shadow": local_authority_shadow_summary(
             goal
         ),
         "coordination_runtime_shadow": coordination_runtime_shadow_summary(goal),
@@ -69,9 +106,9 @@ def validate_coordination_shadow_changes(
     runtime_enable_file: bool,
     runtime_clear: bool,
 ) -> None:
-    """Validate both default-off shadow configuration seams."""
+    """Reject retired activation before any registry mutation."""
 
-    local_authority_shadow_observation.validate_local_authority_shadow_change(
+    validate_local_authority_shadow_change(
         local_enable_file, local_clear
     )
     validate_coordination_runtime_shadow_change(runtime_enable_file, runtime_clear)
@@ -84,9 +121,9 @@ def apply_coordination_shadow_changes(
     runtime_enable_file: bool,
     runtime_clear: bool,
 ) -> None:
-    """Apply observation and transaction-bound shadow settings together."""
+    """Clear retired settings and configure the transaction-bound shadow independently."""
 
-    local_authority_shadow_observation.apply_local_authority_shadow_change(
+    apply_local_authority_shadow_change(
         goal, local_enable_file, local_clear
     )
     apply_coordination_runtime_shadow_change(goal, runtime_enable_file, runtime_clear)
@@ -253,6 +290,32 @@ def build_runtime_shadow_source_snapshot(
     *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
     registry_path: Path,
 ) -> tuple[dict[str, object], dict[str, object]]:
+    """Bind the supplied Goal and every derived fact to one registry observation."""
+    from ...agent_registry import registered_agent_ids_for_goal
+    from ...history import load_registry
+    from ...registry import find_registry_goal
+    from .authority_source_capture import authority_registry_source
+    from .shadow_management import ShadowManagementError
+
+    with authority_registry_source(registry_path) as witness:
+        registry = load_registry(registry_path)
+        current = find_registry_goal(registry, str(goal["id"]))
+        if current is None or current != dict(goal):
+            raise ShadowManagementError("source_registry_changed_retry")
+        projection, snapshot = _build_runtime_shadow_source_snapshot(
+            goal=current, runtime_root=runtime_root, state_path=state_path,
+            registry_path=registry_path, registry=registry,
+        )
+        snapshot["registry_source"] = {
+            **witness, "registered_agents": registered_agent_ids_for_goal(current),
+        }
+    return projection, snapshot
+
+
+def _build_runtime_shadow_source_snapshot(
+    *, goal: Mapping[str, Any], runtime_root: Path, state_path: Path,
+    registry_path: Path, registry: dict[str, Any],
+) -> tuple[dict[str, object], dict[str, object]]:
     """Project exactly the bytes carried by one ephemeral source precondition.
 
     TS takes the shared source locks and verifies every byte/inventory before
@@ -260,7 +323,6 @@ def build_runtime_shadow_source_snapshot(
     """
     from ...event_sourced_state import build_state_projection, normalize_state_event, render_active_state_sections
     from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION, rollout_event_log_path
-    from ...history import load_registry
     from ...paths import resolve_runtime_root
     from ...state_refresh import resolve_goal_state
     from ..status.active_state_projection import state_event_log_candidates
@@ -322,7 +384,6 @@ def build_runtime_shadow_source_snapshot(
         inventory.append({"name": path.name, "bytes_sha256": "sha256:" + hashlib.sha256(data).hexdigest()})
     projection = build_todo_runtime_shadow_projection(goal_id=goal_id, todos=todos, leases=leases,
         handoff_mode=goal_handoff_mode(state_text))
-    registry = load_registry(registry_path)
     registered_root = resolve_runtime_root(registry, None, registry_path=registry_path)
     _, _, registered_state = resolve_goal_state(registry=registry, goal_id=goal_id,
         project_override=None, state_file_override=None)

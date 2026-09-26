@@ -7,7 +7,36 @@ from typing import Any
 from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 10
+REVIEW_POLICY_REVISION = 11
+
+# A red check is an observation, not evidence that the reviewed PR caused it.
+# This contract belongs to review judgment; merge readiness still owns whether
+# an unresolved required check permits integration.
+VALIDATION_FAILURE_ATTRIBUTION = {
+    "dispositions": [
+        "pr_regression", "pre_existing_unrelated", "external_unrelated", "unresolved",
+    ],
+    "non_blocking_dispositions": ["pre_existing_unrelated", "external_unrelated"],
+    "common_fields": ["disposition", "causal_scope_analysis", "affected_invariant_evidence"],
+    "pre_existing_fields": [
+        "base_revision", "head_revision", "same_command",
+        "baseline_observation", "head_observation",
+        "baseline_failure_signature", "head_failure_signature",
+    ],
+    "external_fields": ["independent_evidence", "retry_or_recovery_owner"],
+    "rule": (
+        "Classify every required failed or skipped validation before choosing a review verdict. "
+        "A pre-existing failure is non-blocking for review only when the same check on an "
+        "immutable base and exact head has the same normalized failing identity and detail, "
+        "the PR does not alter that failure's causal path, and the changed invariant has "
+        "independent passing evidence. Equal aggregate counts alone are insufficient. "
+        "An external failure needs independent outage or infrastructure evidence, a recovery "
+        "owner, and separate coverage of the changed invariant. Otherwise classify it as "
+        "pr_regression or unresolved and request changes. Report unrelated red checks and "
+        "their recovery separately from the PR verdict: APPROVE may be correct while merge "
+        "readiness remains on hold. Never relax a hard limit or required check to make it green."
+    ),
+}
 
 OUTCOME_IMPACT_ASSESSMENT = {
     "dimensions": ["long_horizon", "user_experience"],
@@ -718,13 +747,16 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                 "ci_policy": "required" if wait_for_ci else "not_consulted",
                 "wait_for_ci": wait_for_ci,
                 "validation_source": (
-                    "Repository-native local validation and final CI are required."
+                    "Repository-native local validation and final CI observation are required. "
+                    "Attribute failed checks before judging the PR; an unrelated red check "
+                    "may hold merging without requiring code changes on this PR."
                     if wait_for_ci else
                     "Repository-native local validation at the reviewed head. "
                     "Do not fetch, poll, or wait for GitHub CI. Missing, pending, "
-                    "or failed remote CI is not a review evidence gap. Local "
-                    "required validation failures and skips remain blocking."
+                    "or failed remote CI is not a review evidence gap. Attribute local "
+                    "failures against the base and changed invariant before judging the PR."
                 ),
+                "failure_attribution": VALIDATION_FAILURE_ATTRIBUTION,
                 "required_when": "always",
                 "items_field": "items",
                 "item_fields": [
@@ -1063,6 +1095,13 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
         },
         "verdict_policy": {
             "open_pr_blocking_finding": "REQUEST_CHANGES",
+            "unrelated_validation_failure": (
+                "APPROVE when a required red check is independently attributed to an unchanged "
+                "pre-existing failure or external infrastructure, and the PR's changed "
+                "invariant is covered. Record the separate merge-readiness hold; do not ask "
+                "this PR to repair unrelated code or budgets. Unattributed, introduced, or "
+                "worsened failures still block approval."
+            ),
             "open_pr_unjustified_delivery": (
                 "REQUEST_CHANGES when problem_context is off_goal, fragmented or "
                 "not_yet_proven. Green checks cannot replace an evidenced goal delta; "
@@ -1288,7 +1327,7 @@ def build_agent_response_contract(*, wait_for_ci: bool = True) -> dict[str, Any]
             "Before evidence commands, obey pull_requests[].review_action_kind. A null action stays in pull_requests inventory but is excluded from review_sequence, carries no execution artifacts, and remains readback-only; generic re-review wording selects the PR but does not force duplicate evidence for an already concluded or merged no-action row.",
             "Execute each non-null pull_requests[].review_plan against the shared review_execution_contract before drafting prose.",
             "Do not infer verified evidence from title, labels, changed-file counts, metadata_risk_hint, or green CI alone.",
-            ("Require final CI in addition to repository-native local validation." if wait_for_ci else "Do not fetch, poll, or wait for CI for approval or merge readiness. repository_required_checks means repository-native local validation; missing required local evidence remains blocking."),
+            ("Observe final CI in addition to repository-native local validation, then attribute red checks before judging this PR; review approval and merge readiness are separate." if wait_for_ci else "Do not fetch, poll, or wait for CI for review or merge readiness. repository_required_checks means repository-native local validation; attribute base-equivalent failures and keep missing affected-invariant evidence blocking."),
             "Recheck the exact remote head before verdict and publication.",
             "Render the verified result through a non-null pull_requests[].review_template; host skills must not maintain a competing depth checklist.",
         ],

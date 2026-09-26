@@ -1,9 +1,28 @@
 # 默认切换：按实现证据重算交付边界
 
-- 核对基线：2026-09-24 `main` 的 `d64c4d377`；开放 PR 状态是快照，不是合入承诺。
+- 核对基线：2026-09-25 `main` 的 `41ba6f4d9`；开放 PR 状态是快照，不是合入承诺。
 - 归属：总目标 #4574 R5/G2；shared authority L2–L9/D1–D3；TS 迁移 T1–T4。
-- 本次交付：既有 typed projection 与 shadow management 的完整来源传输。
+- 已交付 #5040：当前注册事实约束晋升，保存的模式意图完整执行，准确恢复 fence 状态。
+- 当前增量：长历史 closeout 读取复用与 TS monitor 回执归一；没有完成下列迁移工作包。
 - 本检查点取代此前交付记录中的剩余 PR 数量估算。
+
+## File 历史编码与自动升级增量
+
+本次最初 stack 在 #5063 上；#5063 合入后已接到 main `eaa0c0fd0`。
+#5063 解决读取缓存和 RPC 预算，File 每次写入仍复制全历史完整投影。本次复用
+SQLite 已有 TS checkpoint/delta 编码，保留原始版本、回执和完整扫描结果。
+正常读写只接受新格式；安装／更新通过统一命令先自动备份、验证再迁移，旧解析
+只留在迁移工具。跨 provider 则复用逻辑归档，不新增两两转换器。
+[格式、备份迁移及成本边界](../../../../reference/file-authority-state-log.md)。
+
+当前增量前是四个具名开发包：本次有实际证据的 File 成本／升级修复，加下文三个
+业务边界；完成本次后仍剩三个规划包，不是继续复述“5–8 PR”。#5063、#5054、
+#4931 是已有 PR，不能重复计为新任务。D1–D3 的未通过证据另列，不能保证总 PR 数。
+该 File 格式升级本身没有删除 Python 业务 owner，只有升级命令的薄适配。
+
+整 Goal 来源闭环须按 #5054 当前方向核对：它退役旧 Todo event 路径并分离 supervisor
+日志，不应为已经退役的来源重建捕获 writer。剩余支持来源、consumer、回退与 cohort
+仍需完整验证。
 
 ## 先纠正统计口径
 
@@ -15,28 +34,49 @@
 | --- | --- |
 | #4870 保留 claim 的写入、#4888 reviewed cutover、#4920 drain 规划 | 已实现。验收组合 head，不再重新安排一套替代实现。 |
 | #4922 完整 canonical 快照分页、#4960 SQLite runtime 准入、#4961 显示刷新恢复、#4964 共享来源摘要 | 已实现。消费者和打包客户端仍需组合验收，不等于还缺一个全新的分页/恢复实现。 |
-| #4967 TS 完整来源组装、#4968 原生 outbox 交付/恢复 | 已实现。下述大型来源 RPC 失败是另一个已复现缺口，不能称为 capture 组装未做。 |
-| #5003 event-owned completion 原子提交 | 开放。解决整批发布/重试，不负责 event writer 与 shadow capture 的绑定。 |
-| #4994 带 lease 的显式 Agent 交接、#4995 Monitor 命令 proof、#4991 拒绝 poll 后释放预约、#4992 延期且绑定 receipt 的 Turn | 开放。组合各自经过评审的 head 后盘点 caller，不能再开一个 caller 重构 PR 重做它们。 |
+| #4967 TS 完整来源组装、#4968 原生 outbox 交付/恢复 | 已实现。大型来源传输亦已通过 #5013 合入；不能再称为 capture 未做。 |
+| #5003 event-owned completion 原子提交 | 已合入。解决整批发布/重试，不负责 event writer 与 shadow capture 的绑定。 |
+| #4994 带 lease 的显式 Agent 交接、#4995 Monitor 命令 proof、#4991 拒绝 poll 后释放预约、#4992 延期且绑定 receipt 的 Turn | 已合入。组合现有实现盘点 caller，不能再开一个 caller 重构 PR 重做它们。 |
 | #4931 SQLite retained proof 编码、contributor #4224 | 优化 PR 开放，D2 资格未闭合。提速不等于容量、恢复和 soak 验收通过。 |
 | #4915 默认 `.loopx` 目录 | 独立的配置迁移，不会选择 File/SQLite authority。 |
 
-上表有六个相关的开放实现 PR（#5003、#4994、#4995、#4991、#4992、#4931），
-另列 #4915 排除目录迁移造成的混淆。它们不是六个尚未动手的新需求，也不宣称每个
-都是 storage default 的硬依赖。
+相关在途实现中现在只剩 #4931 的 SQLite 优化；#4915 是独立目录迁移。
+#5011/#5012/#5013/#5014/#5016 亦已合入，继续复用其事务、完整来源与来源见证。
+#4224 最新正式 1 MiB 报告仍有两项失败（receipt p95 269.03 ms / 50 ms；
+scan 100 p95 801.81 ms / 250 ms），#4931 尚未提供精确 head 的正式复测。
+十日 soak 到了计划结束日期，不等于已有通过结果。
 
-## 四个可明确描述的后续交付边界
+## 2026-09-26：提前完成的原型退役切片
 
-在整合已有工作之外，规划以下**四个新增交付批次，包含本次**。这是下一步开发
-安排，不是保证总共只剩四个 PR。命令清单和精确 profile 的验收仍可能发现缺陷；
-届时记录新证据和新边界，不再悄悄维持一个范围数字。
+核对 main `8cfc0dd4c`：#5102 已合入，不能继续把 File 历史编码／升级列为缺口。
+当前切片删除没有正式 caller 的 Python executor、head、File provider 和 bootstrap
+桥接；正式命令继续使用既有 TS owner，`authority_core.py` 仍有真实适配调用者。
+Stage 0 原来测试旧 Python provider，如今接到实际 File/SQLite 完整 conformance；
+旧原型的历史行不被重新解释为当前资格。
+[测试覆盖与格式边界](../../../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement)。
 
-| 批次 | 可观察结果与 owner | 退出证据及剩余依赖 |
+这是下表第 3 包中可以独立提前交付的 Python 退役部分。**本次 PR 之后仍计划下表
+三个实现 PR**：执行区间防护、迁移回退集成、默认入口；第 3 个不再包含已经删除
+的原型。不因为删除量大就把默认切换标成完成，也不再把“包”冒充保证的 PR 总数。
+把这次独立退役也计入，从本次开始是四个具名交付切片；其中只有本次已实施，其余
+是有明确退出条件的计划。#5054、#4931 是已有依赖，#4224/D1–D3 的缺证据另算。
+修正本页中文第 2 行与英文已接受方向的矛盾，避免重新建设已决定退役的 writer。
+
+## 三个明确的后续代码边界
+
+本次补的是整合后的真实晋升准入缺口：旧 registry 快照可初始化 shadow，以及保存
+后的模式转换参数被丢失。它是迁移闭环的缺陷修复，不是新的存储引擎，也不能据此
+将下表第三方资格门或整个迁移包标成完成。
+
+| 拟议 PR | 可观察结果与 owner | 退出条件 |
 | --- | --- | --- |
-| A. 完整来源流水线（本次） | 大于 RPC envelope 的来源可完整经过 TS projection、bootstrap、writer capture、inspect、qualify、reviewed promotion。Python 只传字节，TS 保留来源准入及 authority。 | 大型真实 CLI 链路、File/SQLite 完整读取、source witness 拒绝反例、真实来源隔离副本演练。不绑定 event writer，也不宣布 provider 默认合格。 |
-| B. 外部 effect executor fence | 复用 lease/effect owner，在真实外部 effect 执行区间保护当前 execution proof，覆盖接管、超时、退出与不确定完成。 | 过期 executor 不能执行或结算被围栏的工作，精确业务 receipt 可恢复。复用 #4994/#4995；执行前查一次 proof 不足以证明整个区间安全。 |
-| C. Event writer 绑定与整 Goal 迁移/回滚 | 将真实 event writer 的锁及发布生命周期接入现有 outbox lineage，组合 Markdown/event/lease writer、drain、reviewed cutover、canonical 消费者和 fenced export/rollback。随 TS owner 收口删除替代的 Python 决策。 | 整合 #5003，不重做原子完成。真实绑定通过之前保留 `event_log_writer_not_bound`。闭合 D1 消费者、命令清单与 D3 cohort 证据；若发现需要独立代码批次，明确记录该缺口。 |
-| D. 默认/onboarding 与最后一批有界 Python 退役 | 新 Goal、settings、安装和打包 frontend/Lark/CLI 一致选择合格本地 profile；已有 Goal 有显式迁移、停用指导。仅删除 caller 已切换的业务 writer。 | B/C、适用的 D1–D3、回滚及受影响入口读回。保留永久 Python renderer、宿主 IO 和合法 import/export。 |
+| 1. 外部动作执行区间保护 | lease/effect owner 将执行身份验证覆盖到实际外部动作、接管、超时、退出及不确定完成。复用已合入 #4994/#4995。 | 过期 executor 不能继续执行/结算；真实执行器及 receipt 恢复矩阵通过。执行前查一次 proof 不够。 |
+| 2. 整 Goal 迁移/回退与保留来源闭环 | 结合在途 #5054 的旧 Todo event 路径退役及 supervisor 日志拆分，组合仍受支持的来源、drain、saved cutover、消费者及 fenced export/rollback；删除被 TS 替代的 Python 决策。 | 按 #5054 合入后的清单证明 D1 与 D3 cohort；显式拒绝退役来源，不再为其重建捕获 writer。单个无 event overlay 的 Goal 晋升不证明本项。 |
+| 3. 默认入口与有界 Python 退役 | 新 Goal、settings、安装及 packaged frontend/Lark/CLI 一致选择合格 profile；存量有显式迁移与停用流程。 | 1/2 及适用 D1–D3 通过，验证用户入口，删除最后 caller 已转走的业务 writer；保留 renderer、host IO、合法导入导出。 |
+
+**计划是三个可命名的后续实现 PR，加已有 #4931 和未闭合证据；不是保证总计四个
+PR 即可切换。** 若验收发现新缺陷，记录具体缺陷与修复 PR，不能重新报一个不变
+的“5–8”。File-only 有界 opt-in、SQLite 合格默认、全部存量迁移分别验收。
 
 D2 的容量、crash/restore/upgrade/runtime 覆盖和**至少十天自然经过时间的 soak**，
 是精确 SQLite profile 的证据门，不预设为一个或两个 PR；#4224 继续拥有这项工作。
@@ -48,9 +88,34 @@ PostgreSQL 复用 typed command 和 AuthorityStore，部署 transport、认证/t
 策略、restore identity、运维和 capacity 资格仍是独立中期路线。本地默认不等待
 PostgreSQL 部署，conformance 通过也不等于生产服务已合格。
 
-## 完整来源传输与预算决定
+## 长历史收尾检查：本次修复与剩余边界
 
-此基线的 `test_canonical_snapshot_integration` 在 provider 准入之前失败：完整
+真实长期运行暴露了 `quota.prior_host_turn_closeout.preflight` 的 5 秒超时；
+后续只读检查和同 Turn 重试恢复。历史已经在单次请求内建索引，不能把该优化当作
+未做。本次去除跨请求重复 JSON 解码：每次仍读取并 SHA-256 核验完整既有前缀，
+只复用字节相同且以换行结尾的解析结果，追加只解析新行。截断、同长度改写、替换、
+损坏、未完成尾行均重新验证；旧 Turn 冲突仍阻止推进。缓存最多保留四份日志、
+128 MiB 原始输入对应的解析前缀，超限回到普通读取。它不是持久索引或新 authority，
+不改变日志格式；原始字节预算不等于 JS heap 的硬上限。
+
+冷解析按数据批次让出事件循环，避免长历史独占共享 runtime。仍需读取全部字节，
+因此不宣称任意历史长度恒定耗时，也不替代 retention、D2 容量/恢复资格。5 秒预算
+保持不变，原事故的瞬时进程/机器调度原因未能稳定重现；回归证明的是重复工作降低
+以及长历史/并发下的可用余量，不声称消灭所有环境超时。
+
+Monitor 的精确已提交回执复用 TS settlement 的同一个查询规则；Python 删除第二遍
+run log 扫描，只适配当前 Todo 事实。后来的未提交观察不再遮住较早的精确提交证据；
+跨 Goal/Agent/Turn/Todo 或错误 effect 仍不能结算。只读 preflight 丢失响应报告
+`closeout_query_unavailable`，不会建议寻找不存在的 preflight 写回执；查询失败依旧
+阻止推断准入，不自动重试 mutation 或重启共享进程。
+
+这是 R1/R5/S7 的实测阻塞修复与有界 Python 退役，不是上表第 2 项整体完成。
+三个后续实现边界和 #4931/D2 的独立证据门不变。CLI/heartbeat 收益来自原有配额
+入口；没有新增设置，frontend/Lark 也无需各维护一套策略。
+
+## 已交付 #5013：完整来源传输与预算决定
+
+在 #5013 之前，`test_canonical_snapshot_integration` 曾在 provider 准入之前失败：完整
 来源投影超过 2 MiB request 上限。canonical 读取分页已实现，但 source capture
 及管理命令仍传完整投影。裁剪来源记录会破坏 digest/parity；扩大通用 RPC 上限会
 影响所有方法。

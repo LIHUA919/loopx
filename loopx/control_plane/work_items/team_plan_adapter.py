@@ -150,4 +150,4 @@ def apply_team_plan(
                                   state_path=state, text=text)
         verify_state_text_durable(state, text)
     return settle_todo_runtime_shadow_capture(result, registry_path=registry_path,
-        runtime_root=runtime, goal_id=goal_id, write_class="todo_add", capture=capture)
+        runtime_root=runtime, goal_id=goal_id, capture=capture)

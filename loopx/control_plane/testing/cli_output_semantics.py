@@ -5,6 +5,21 @@ import json
 import re
 from typing import Any
 
+
+def heartbeat_user_language_prompt_revision(text: str) -> str | None:
+    """Attribute the one-time user-language prompt transition in CLI probes.
+
+    This recognizes the exact rendered policy, not runtime language or authority.
+    Full/compact/Goal and thin/brief prompts use different bounded wording.
+    """
+
+    rules = (
+        "Language=user; fallback=English; mix only if asked/scoped-bilingual.",
+        "Lang=user; default=en; mix=asked/scoped.",
+    )
+    return "heartbeat_user_language_v1" if any(rule in text for rule in rules) else None
+
+
 def host_prompt_static_safety_revision(text: str) -> str | None:
     """Exact renderer evidence for the one-time static-safety budget transition.
 
@@ -189,3 +204,9 @@ def markdown_headings(text: str) -> list[str]:
 
 def runtime_root_command_route_count(text: str) -> int:
     return len(_RUNTIME_ROOT_COMMAND_ROUTE.findall(text))
+
+
+def projection_envelope_schema_versions(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return sorted(set(re.findall(r"^- projection: (?:🔴 )?envelope=`([a-z0-9_]+)`", value, re.MULTILINE)))
+    return _schema_versions_for_key(value, "projection_envelope")

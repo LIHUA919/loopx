@@ -33,9 +33,9 @@ loopx todo update --goal-id example --todo-id todo_observation \
 
 The TypeScript transaction compares the current declaration digest, commits the
 new digest, monotonic revision and public-safe audit receipt under one provider
-CAS, and rejects terminal, archived or stale edits. The Python boundary stores
-the private command declaration only after provider success and verifies its
-readback. Reuse the same operation id, expected revision and replacement after
+CAS, and rejects terminal, archived or stale edits. The Python boundary durably prepares digest-addressed private command content
+before the provider can reference it. Canonical readback selects that exact
+digest; a lost response does not leave projection waiting for a sidecar. Reuse the same operation id, expected revision and replacement after
 a lost response; a different intent requires a new operation id and a fresh
 read. Validator replacement cannot be combined with another Todo edit.
 
@@ -52,7 +52,8 @@ introduced.
 读取当前 provider revision，再把新命令作为独立的 reviewed edit 提交。TypeScript
 事务在同一次 provider CAS 中核对旧声明摘要，并提交新摘要、单调递增的 revision 和
 公开安全的审计回执；已完成、已归档或基于旧 revision 的修改会被拒绝。Python 边界
-只在 provider 成功后保存私有命令声明，并校验读回结果。丢失响应时复用相同的
+在 provider 提交前持久保存按摘要寻址的私有命令声明；权威读回只选择匹配的摘要，
+因此丢失响应不再阻塞投影。丢失响应时复用相同的
 operation id、expected revision 和替换内容；新的意图必须使用新的 operation id 并
 重新读取。验证器修改不能和其他 Todo 编辑合并提交。
 
@@ -210,3 +211,42 @@ projection delivery before downgrading. Older binaries reject request v3 and
 cannot recover this operation through the old update route. Existing durable
 Todo/lease records, historical receipts and permanent import/export obligations
 are not removed by this change; never revive stale Markdown as authority.
+
+
+## Retrying canonical Todo creation
+
+For an already promoted File/SQLite Goal, provide a stable caller operation id:
+
+```sh
+loopx todo add --goal-id example --role agent --claimed-by agent-a \
+  --text 'Validate the artifact' --operation-id artifact-create-1 \
+  --validation-command-json '["python3","-m","pytest","-q","tests/test_artifact.py"]'
+loopx todo receipt --goal-id example --operation-id artifact-create-1
+```
+
+Retry the same `todo add` intent with the same id after a lost response. The
+TypeScript receipt recovers the original Todo even if its text or validator
+has since changed. Changing the intent under the same id is rejected. An
+omitted id is generated and returned on success or ambiguous timeout; callers
+that must survive process termination should choose the id before dispatch.
+Legacy Markdown creation rejects this option instead of pretending to provide
+canonical idempotency.
+
+Validation content is prepared privately before create/revision dispatch. Its
+presence alone never activates a validator: the authoritative Todo selects its
+exact digest. Corrupt selected content fails closed. Legacy per-Todo sidecars
+remain readable when no digest-addressed content exists. Rejected requests may
+leave unreferenced private content; this change introduces no automatic deletion
+of declarations that historical receipts may still reference. An old create
+retry cannot replace the current canonical validator. This repairs local
+publication recovery, not cross-host distribution of private validation commands.
+
+对已晋升的 File/SQLite Goal，调用方可在 `todo add` 传入稳定的
+`--operation-id`。响应丢失后用同一编号和同一意图重试，TS 回执返回原 Todo，
+不会因 Todo 后来改名、完成或修订验证器而重复创建。相同编号搭配不同意图会被拒绝。
+省略编号时会自动生成并在成功或不确定超时错误中返回；需要应对进程终止的调用方
+应在发送前自行确定编号。旧 Markdown 路径不支持此参数。
+
+私有声明先持久保存，权威摘要再引用它；没有被权威 Todo 引用的内容不会成为验证要求。
+被选中内容损坏时仍拒绝执行。旧 sidecar 可继续读取，历史创建回执不能回滚新验证器。
+此改动不提供私有验证命令的跨主机分发，也不会自动清理未引用内容。

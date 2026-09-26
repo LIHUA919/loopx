@@ -30,16 +30,6 @@ from .control_plane.coordination.coordination_state_contract_generated import (
 LEGACY_RUNTIME_ROOT = Path.home() / ".codex" / "goal-harness"
 LEGACY_GLOBAL_REGISTRY = LEGACY_RUNTIME_ROOT / "registry.global.json"
 MIGRATION_SHADOW_SEED_EVIDENCE_SCHEMA = "loopx_state_migration_shadow_seed_evidence_v0"
-_SHADOW_EVIDENCE_OUTCOMES = {
-    "captured",
-    "replayed",
-    "ambiguous_reconciled",
-    "ambiguous_unproved",
-    "unavailable",
-    "failed",
-    "protocol_mismatch",
-    "conflict_retry_required",
-}
 
 
 def now_local() -> str:
@@ -243,88 +233,12 @@ def _uses_file_authority_shadow(goal: dict[str, Any]) -> bool:
     )
 
 
-def _shadow_seed_evidence(
-    *,
-    goal_id: str,
-    attempted: bool,
-    outcome: str,
-    reason_code: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "schema_version": MIGRATION_SHADOW_SEED_EVIDENCE_SCHEMA,
-        "goal_id": goal_id,
-        "attempted": attempted,
-        "outcome": outcome,
-        "reason_code": reason_code,
-    }
-
-
-def _shadow_seed_result(*, goal_id: str, result: object) -> dict[str, Any]:
-    outcome = result.get("outcome") if isinstance(result, dict) else None
-    if outcome not in _SHADOW_EVIDENCE_OUTCOMES:
-        return _shadow_seed_evidence(
-            goal_id=goal_id,
-            attempted=True,
-            outcome="failed",
-            reason_code="post_migration_shadow_seed_invalid_evidence",
-        )
-
-    reason_code = (
-        None
-        if outcome in {"captured", "replayed", "ambiguous_reconciled"}
-        else f"post_migration_shadow_seed_{outcome}"
-    )
-    return _shadow_seed_evidence(
-        goal_id=goal_id,
-        attempted=True,
-        outcome=str(outcome),
-        reason_code=reason_code,
-    )
-
-
-def seed_migrated_authority_shadows(
-    *,
-    goals: list[dict[str, Any]],
-    target_registry_path: Path,
-    target_runtime_root: Path,
-    execute: bool,
-) -> list[dict[str, Any]]:
-    """Plan or seed fresh candidate lineage from migrated local authority."""
-
-    results: list[dict[str, Any]] = []
-    for goal in goals:
-        if not _uses_file_authority_shadow(goal):
-            continue
-        goal_id = str(goal.get("id") or "")
-        if not execute:
-            results.append(
-                _shadow_seed_evidence(
-                    goal_id=goal_id,
-                    attempted=False,
-                    outcome="planned",
-                )
-            )
-            continue
-        try:
-            from .control_plane.coordination.local_authority_shadow_observation import observe_local_authority_commit
-
-            result = observe_local_authority_commit(
-                registry_path=target_registry_path,
-                runtime_root=target_runtime_root,
-                goal_id=goal_id,
-                observation_trigger="state_migration_seed",
-            )
-            results.append(_shadow_seed_result(goal_id=goal_id, result=result))
-        except Exception:
-            results.append(
-                _shadow_seed_evidence(
-                    goal_id=goal_id,
-                    attempted=True,
-                    outcome="failed",
-                    reason_code="post_migration_shadow_seed_failed",
-                )
-            )
-    return results
+def retired_authority_shadow_notices(goals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the migration response field, but never seed the retired observer."""
+    return [{"schema_version": MIGRATION_SHADOW_SEED_EVIDENCE_SCHEMA,
+             "goal_id": str(goal.get("id") or ""), "attempted": False,
+             "outcome": "retired", "reason_code": "local_authority_shadow_retired"}
+            for goal in goals if _uses_file_authority_shadow(goal)]
 
 
 def migrate_legacy_state(
@@ -478,12 +392,7 @@ def migrate_legacy_state(
                 )
             target_transaction.commit(target_payload)
 
-        authority_shadow_seeds = seed_migrated_authority_shadows(
-            goals=incoming_goals,
-            target_registry_path=target_registry_path,
-            target_runtime_root=target_runtime_root,
-            execute=execute,
-        )
+        authority_shadow_seeds = retired_authority_shadow_notices(incoming_goals)
 
         return {
             "ok": True,

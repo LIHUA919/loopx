@@ -19,6 +19,16 @@ function snapshot(id) {
   const payload = structuredClone(require(resolve(root, "examples/status.example.json")));
   payload.run_history.goals = [{ ...payload.run_history.goals[0], id, display_name: `${id} project`, activation_state: id === "archived" ? "stopped" : "active", registry_member: true }];
   for (const item of payload.attention_queue.items) item.goal_id = id;
+  if (id === "ready") {
+    const native = { done: false, text: "Review public evidence", todo_id: "todo_native_ready" };
+    payload.attention_queue.items[0].agent_todos.items.unshift(native);
+    payload.attention_queue.items[0].project_asset = {
+      owner: "agent", gate: "none", next_action: "review", stop_condition: "accepted",
+      agent_todos: { items: [{ ...native, index: null }],
+        recent_completed_advancement_items: [{ ...native, todo_id: "todo_native_done", done: true }] },
+    };
+    payload.todo_index.items.unshift({ ...native, index: null, goal_id: id });
+  }
   payload.workspace_registry_revision = directory.registry_revision;
   return payload;
 }

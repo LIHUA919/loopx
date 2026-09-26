@@ -739,20 +739,11 @@ def event_sort_key(event: dict[str, Any]) -> tuple[int, str, str]:
     )
 
 
-def _todo_from_added_event(event: dict[str, Any]) -> dict[str, Any]:
+def _decode_added_todo_content(event: dict[str, Any]) -> dict[str, Any]:
     payload = event.get("payload") or {}
     refs = event.get("refs") or {}
     text = compact_text(payload.get("text") or payload.get("title"))
-    role = compact_text(payload.get("role") or "agent")
-    source_section = (
-        "User Todo / Owner Review Reading Queue" if role == "user" else "Agent Todo"
-    )
-    todo_id = normalize_todo_id(refs.get("todo_id")) or build_todo_id(
-        role=role,
-        source_section=source_section,
-        index=event.get("append_sequence"),
-        text=text,
-    )
+    todo_id = refs["todo_id"]  # The legacy decoder already requires this identity.
     task_class = normalize_explicit_todo_task_class(payload.get("task_class"))
     action_kind = normalize_todo_action_kind(payload.get("action_kind"))
     task_domain = normalize_todo_task_domain(payload.get("task_domain"))
@@ -781,16 +772,8 @@ def _todo_from_added_event(event: dict[str, Any]) -> dict[str, Any]:
     claimed_by = normalize_todo_claimed_by(payload.get("claimed_by"))
     actor_agent_id = normalize_todo_claimed_by(event.get("actor_agent_id"))
     todo: dict[str, Any] = {
-        "schema_version": "todo_item_v0",
-        "todo_id": todo_id,
-        "role": role,
-        "status": TODO_STATUS_OPEN,
-        "done": False,
-        "priority": compact_text(payload.get("priority") or "P2"),
-        "title": text,
-        "text": text if not payload.get("priority") else f"[{compact_text(payload.get('priority'))}] {text}",
-        "source_section": source_section,
-        "planner_order": payload.get("planner_order"),
+        "schema_version": "todo_item_v0", "todo_id": todo_id,
+        "title": text, "text": text, "planner_order": payload.get("planner_order"),
         "append_sequence": event.get("append_sequence"),
         "last_event_id": event.get("event_id"),
         "updated_at": compact_text(payload.get("updated_at")),
@@ -837,22 +820,20 @@ def _todo_from_added_event(event: dict[str, Any]) -> dict[str, Any]:
     return todo
 
 
-def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None:
+def _decode_todo_event_content(event: dict[str, Any]) -> dict[str, Any]:
+    """Normalize historical payload values without reading prior Todo state."""
+    todo: dict[str, Any] = {}
     payload = event.get("payload") or {}
     event_type = event.get("event_type")
     actor_agent_id = normalize_todo_claimed_by(event.get("actor_agent_id"))
     if actor_agent_id:
         todo["last_actor_agent_id"] = actor_agent_id
-    elif event_type not in (REFRESH_RECORDED, RUN_RECORDED, QUOTA_SPENT, EVIDENCE_ATTACHED):
-        todo.pop("last_actor_agent_id", None)
     if event_type == TODO_CLAIMED:
         claimed_by = normalize_todo_claimed_by(payload.get("claimed_by"))
         if claimed_by:
             todo["claimed_by"] = claimed_by
     elif event_type == TODO_UPDATED:
         for key in (
-            "priority",
-            "role",
             "title",
             "task_class",
             "action_kind",
@@ -866,9 +847,6 @@ def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None
             payload.get("capability_binding_ref")
         )
         if capability_binding_ref:
-            existing_binding_ref = todo.get("capability_binding_ref")
-            if existing_binding_ref and existing_binding_ref != capability_binding_ref:
-                raise StateEventError("capability_binding_ref is immutable once set")
             todo["capability_binding_ref"] = capability_binding_ref
         continuation_policy = normalize_todo_continuation_policy(
             payload.get("continuation_policy")
@@ -881,18 +859,9 @@ def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None
             payload.get("excluded_agents")
         )
         if removed_continuation_policy:
-            todo.pop("continuation_policy", None)
             todo["removed_continuation_policy"] = removed_continuation_policy
         elif continuation_policy:
-            explicit_repair = (
-                todo.get("removed_continuation_policy")
-                and continuation_policy == "independent_handoff"
-                and bool(update_excluded_agents)
-            )
-            if not todo.get("removed_continuation_policy") or explicit_repair:
-                todo["continuation_policy"] = continuation_policy
-            if explicit_repair:
-                todo.pop("removed_continuation_policy", None)
+            todo["continuation_policy"] = continuation_policy
         required_write_scopes = normalize_required_write_scopes(
             payload.get("required_write_scopes")
         )
@@ -914,12 +883,9 @@ def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None
         bound_agent = normalize_todo_bound_agent(payload.get("bound_agent"))
         if bound_agent:
             todo["bound_agent"] = bound_agent
-            todo.pop("goal_bound", None)
         goal_bound = normalize_todo_goal_bound(payload.get("goal_bound"))
         if goal_bound is not None:
             todo["goal_bound"] = goal_bound
-            if goal_bound:
-                todo.pop("bound_agent", None)
         global_gate = normalize_todo_global_gate(payload.get("global_gate"))
         if global_gate is not None:
             todo["global_gate"] = global_gate
@@ -931,23 +897,15 @@ def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None
         if payload.get("text") or payload.get("title"):
             title = compact_text(payload.get("text") or payload.get("title"))
             todo["title"] = title
-            priority = compact_text(todo.get("priority") or "")
-            todo["text"] = f"[{priority}] {title}" if priority else title
     elif event_type == TODO_BLOCKED:
-        todo["status"] = "blocked"
-        todo["done"] = False
         if payload.get("reason"):
             todo["reason"] = compact_text(payload["reason"])
     elif event_type == TODO_DEFERRED:
-        todo["status"] = "deferred"
-        todo["done"] = False
         if payload.get("reason"):
             todo["reason"] = compact_text(payload["reason"])
         if payload.get("resume_when"):
             todo["resume_when"] = compact_text(payload["resume_when"])
     elif event_type == TODO_COMPLETED:
-        todo["status"] = TODO_STATUS_DONE
-        todo["done"] = True
         for key in (
             "evidence",
             "reason",
@@ -966,6 +924,7 @@ def _update_todo_from_event(todo: dict[str, Any], event: dict[str, Any]) -> None
             todo["successor_todo_ids"] = successor_todo_ids
     todo["last_event_id"] = event.get("event_id")
     todo["last_append_sequence"] = event.get("append_sequence")
+    return todo
 
 
 def build_state_projection(
@@ -974,61 +933,98 @@ def build_state_projection(
     goal_id: str | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    normalized = _dedupe_events(normalize_state_event(event) for event in events)
-    ordered = sorted(normalized, key=event_sort_key)
-    inferred_goal_id = goal_id or (ordered[0]["goal_id"] if ordered else "")
-    todos: dict[str, dict[str, Any]] = {}
-    timeline: list[dict[str, Any]] = []
+    # Python owns legacy event normalization and exact historical checksum bytes.
+    # TS receives bounded semantic facts, never evidence, validation commands or
+    # arbitrary payloads; returned ordinals address this exact normalized batch.
+    from .control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
-    for event in ordered:
-        if inferred_goal_id and event["goal_id"] != inferred_goal_id:
-            raise StateEventError("all events in a projection must share one goal_id")
-        event_type = event["event_type"]
-        todo_id = (event.get("refs") or {}).get("todo_id")
-        if event_type == TODO_ADDED:
-            todo = _todo_from_added_event(event)
-            todos[todo["todo_id"]] = todo
-        elif event_type in TODO_EVENT_TYPES and todo_id:
-            todo = todos.get(todo_id)
-            if todo is None:
-                raise StateEventError(f"{event_type} references unknown todo_id: {todo_id}")
-            _update_todo_from_event(todo, event)
-        elif event_type in {REFRESH_RECORDED, RUN_RECORDED, QUOTA_SPENT, EVIDENCE_ATTACHED}:
-            timeline_entry: dict[str, Any] = {
-                "event_id": event["event_id"],
-                "event_type": event_type,
-                "append_sequence": event.get("append_sequence"),
-                "recorded_at": event.get("recorded_at"),
-                "summary": compact_text((event.get("payload") or {}).get("summary")),
-                "refs": event.get("refs") or {},
-            }
-            if event.get("actor_agent_id"):
-                timeline_entry["actor_agent_id"] = event["actor_agent_id"]
-            timeline.append(timeline_entry)
-
-    todo_items = sorted(
-        todos.values(),
-        key=lambda item: (
-            item.get("role") != "user",
-            str(item.get("priority") or "P9"),
-            int(item.get("planner_order") or 9999),
-            int(item.get("append_sequence") or 0),
-        ),
-    )
-    user_todos = [item for item in todo_items if item.get("role") == "user"]
-    agent_todos = [item for item in todo_items if item.get("role") != "user"]
+    normalized = sorted(_dedupe_events(normalize_state_event(event) for event in events), key=event_sort_key)
+    facts = []
+    contents = []
+    for event in normalized:
+        payload = event["payload"]
+        kind = event["event_type"]
+        edits = kind in (TODO_ADDED, TODO_UPDATED)
+        order = payload.get("planner_order") if kind == TODO_ADDED else None
+        # The typed fold rejects non-integer orders, so the adapter must not
+        # coerce them first: truncating 1.5 to 1 would sort a Todo by one value
+        # and report another. Every producer of this payload writes an integer.
+        if order is not None and (isinstance(order, bool) or not isinstance(order, int)):
+            raise StateEventError("planner_order must be an integer")
+        sequence = event.get("append_sequence")
+        for value in (order, sequence):
+            if value is not None and abs(value) > 2**53 - 1:
+                raise StateEventError("event replay integers must be safe integers")
+        content = (_decode_added_todo_content(event) if kind == TODO_ADDED else
+                   _decode_todo_event_content(event) if kind in TODO_EVENT_TYPES else {})
+        contents.append(content)
+        facts.append({
+            "event_id": event["event_id"], "goal_id": event["goal_id"],
+            "event_type": kind, "append_sequence": sequence,
+            "recorded_at": event["recorded_at"],
+            "todo_id": event["refs"].get("todo_id") if kind in TODO_EVENT_TYPES else None,
+            "role": compact_text(payload.get("role")) or None if edits else None,
+            "priority": compact_text(payload.get("priority")) or None if edits else None,
+            "planner_order": order, "fields": list(content),
+            "capability_binding_ref": content.get("capability_binding_ref"),
+            "continuation_policy": content.get("continuation_policy"),
+            "removed_continuation_policy": content.get("removed_continuation_policy"),
+            "has_exclusions": bool(content.get("excluded_agents")),
+            "goal_bound": content.get("goal_bound"),
+            "content_changed": bool(payload.get("text") or payload.get("title")) if edits else False,
+        })
+    # Only touched Todo continuation rows cross each bounded call. The host
+    # retains content and prior results; TS alone decides all state transitions.
+    rows: dict[str, dict[str, Any]] = {}
+    timeline_indices: list[int] = []
+    inferred_goal = goal_id or (normalized[0]["goal_id"] if normalized else "")
+    for offset in range(0, len(facts), 256):
+        batch = facts[offset:offset + 256]
+        touched = {fact["todo_id"] for fact in batch if fact["todo_id"] is not None}
+        try:
+            plan = effect_runtime_result("goal.state_event.plan_replay", {
+                "schema_version": "state_event_replay_request_v0", "events": batch,
+                "goal_id": inferred_goal, "offset": offset,
+                "initial_todos": [rows[key] for key in touched if key in rows],
+            })
+        except EffectRuntimeRejected as exc:
+            raise StateEventError(str(exc)) from exc
+        if not isinstance(plan, dict) or plan.get("schema_version") != "state_event_replay_plan_v0":
+            raise RuntimeError("invalid typed state event replay plan")
+        for row in plan["todos"]:
+            rows[row["todo_id"]] = row
+        timeline_indices.extend(plan["timeline_indices"])
+    ordered = normalized  # Exact historical checksum order remains in the codec.
+    todo_items = []
+    for row in sorted(rows.values(), key=lambda row: row["sort_key"]):
+        todo = {key: contents[index][key] for key, index in row["field_sources"].items()}
+        for key in ("role", "priority", "status", "done", "source_section"):
+            todo[key] = row[key]
+        if row["render_priority"]:
+            todo["text"] = f"[{row['priority']}] {todo['title']}"
+        todo_items.append(todo)
+    timeline = []
+    for index in timeline_indices:
+        event = normalized[index]
+        entry = {key: event.get(key) for key in (
+            "event_id", "event_type", "append_sequence", "recorded_at", "refs",
+        )}
+        entry["summary"] = compact_text(event["payload"].get("summary"))
+        if event.get("actor_agent_id"):
+            entry["actor_agent_id"] = event["actor_agent_id"]
+        timeline.append(entry)
     last_event = ordered[-1] if ordered else {}
     return {
         "schema_version": STATE_PROJECTION_SCHEMA_VERSION,
-        "goal_id": inferred_goal_id,
+        "goal_id": inferred_goal,
         "generated_at": generated_at or now_utc_iso(),
         "source_event_count": len(ordered),
         "source_checksum": event_stream_checksum(ordered),
         "last_event_id": last_event.get("event_id"),
         "last_append_sequence": last_event.get("append_sequence"),
         "projection_version": STATE_PROJECTION_VERSION,
-        "user_todos": _todo_summary(user_todos, role="user"),
-        "agent_todos": _todo_summary(agent_todos, role="agent"),
+        "user_todos": _todo_summary([item for item in todo_items if item["role"] == "user"], role="user"),
+        "agent_todos": _todo_summary([item for item in todo_items if item["role"] != "user"], role="agent"),
         "timeline": timeline,
     }
 

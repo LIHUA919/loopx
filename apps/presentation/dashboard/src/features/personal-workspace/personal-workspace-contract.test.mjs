@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
+const answerText = source("./answer-text.ts");
 const model = source("./personal-workspace-model.ts");
 const drawer = source("./context-drawer.tsx");
 const header = source("./channel-header.tsx");
@@ -122,9 +123,9 @@ for (const legacyClassifier of ["hasHeartbeatIntent", "hasMonitorIntent", "hasTo
 }
 assert.match(dashboard, /Agent 已返回结果/, "A completed task Session advertises its result instead of looking stalled");
 assert.match(dashboard, /sessionStatus: hasResult \? "completed"/, "A returned answer outranks a stale transport label in the visible Session status");
-assert.match(dashboard, /function visibleAgentMessage[\s\S]*GOAL_\(STATUS\|PROGRESS\)/, "Internal Session protocol markers stay out of the user-facing result");
-assert.match(dashboard, /GOAL_EVIDENCE[\s\S]*验证依据：/, "Session evidence uses a readable heading instead of an internal protocol marker");
-assert.match(dashboard, /NEXT_ACTION[\s\S]*下一步：/, "Session next actions use a readable heading instead of an internal protocol marker");
+assert.match(answerText, /function visibleAgentMessage[\s\S]*GOAL_\(STATUS\|PROGRESS\)/, "Internal Session protocol markers stay out of the user-facing result");
+assert.match(answerText, /GOAL_EVIDENCE[\s\S]*验证依据：/, "Session evidence uses a readable heading instead of an internal protocol marker");
+assert.match(answerText, /NEXT_ACTION[\s\S]*下一步：/, "Session next actions use a readable heading instead of an internal protocol marker");
 assert.match(tasks, /t\("tasks\.viewResult"\)/, "Tasks expose a direct result entry when a Session has answered");
 assert.match(tasks, /t\("tasks\.pendingAndRunning"\)/, "Tasks do not imply that every uncompleted Todo already has an active Run");
 assert.match(tasks, /t\("tasks\.chatRecent"\)/, "Tasks surface the latest Goal conversation without forcing a tab switch");

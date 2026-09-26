@@ -1,3 +1,4 @@
+import {verifyShadowRegistrySource, withShadowRegistrySource} from "./shadow_registry_source.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
 import { readFile, readdir, lstat } from "node:fs/promises";
@@ -77,7 +78,7 @@ export function decodeRuntimeShadowRequest(value: unknown, schema: string, extra
 /** Source preconditions are ephemeral. They never become an alternative state ledger. */
 function sourceSnapshot(request: ShadowRequest): JsonObject {
   const snapshot = request.source_snapshot;
-  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files"], "source_snapshot");
+  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files", "registry_source"], "source_snapshot");
   if (!isAbsolute(text(snapshot.state_path, "state_path")) ||
       !isAbsolute(text(snapshot.registered_runtime_root, "registered_runtime_root")) ||
       !isAbsolute(text(snapshot.registered_state_path, "registered_state_path")) ||
@@ -88,7 +89,7 @@ function sourceSnapshot(request: ShadowRequest): JsonObject {
   }
   return snapshot;
 }
-export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   const snapshot = request.source_snapshot;
   if (!isAbsolute(text(snapshot.state_path, "state_path"))) throw new ShadowManagementError("source_snapshot_invalid");
   const root = request.runtime_root;
@@ -96,14 +97,14 @@ export async function withShadowSourceLocks<T>(request: ShadowRequest, operation
   return await withFileMutationLock(legacyCoordinationTodoLockPath(root, goal), () =>
     withFileMutationLock(String(snapshot.state_path), () =>
       withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
-        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), operation))));
+        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation()))));
 }
-async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   return await withShadowSourceLocks(request, async () => {
     const fence = await loadLegacyCoordinationWriterFence(request.runtime_root, request.goal_id);
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     return await operation();
-  });
+  }, registryMode);
 }
 function bytesDigest(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -116,6 +117,7 @@ async function optionalBytes(path: string): Promise<Buffer | null> {
 }
 export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promise<void> {
   const snapshot = sourceSnapshot(request);
+  await verifyShadowRegistrySource(snapshot);
   if (resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path))) {
     throw new ShadowManagementError("shadow_source_state_path_mismatch");
   }
@@ -201,7 +203,7 @@ export async function rollbackCoordinationRuntimeShadow(value: unknown, _depende
     const revision = request.expected_provider_revision;
     const bootstrap = request.expected_bootstrap_operation_id;
     if ((typeof revision === "string") === (typeof bootstrap === "string")) throw new Error("rollback requires exactly one revision or bootstrap operation selector");
-    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation) });
+    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation, "retained") });
     return { schema_version: schema, ...result, primary_writeback_preserved: true, decision_read_from_shadow: false };
   } catch (error) { return failure(schema, error); }
 }

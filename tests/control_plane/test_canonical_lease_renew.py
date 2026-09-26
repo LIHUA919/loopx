@@ -105,7 +105,6 @@ def test_public_renew_preserves_canonical_authority_and_historical_receipt(tmp_p
             raise AssertionError("canonical renew used a legacy capture/write path")
         with monkeypatch.context() as guard:
             guard.setattr(task_lease_acquire_adapter, "task_lease_acquire_authority_facts", forbidden_legacy_path)
-            guard.setattr(task_lease_acquire_adapter, "_attach_local_authority_shadow", forbidden_legacy_path)
             third = renew_task_lease(registry_path=registry, runtime_root=runtime, goal_id=goal,
                 todo_id="todo_renew", owner="agent-a", idempotency_key="execution-a", expected_version=3, ttl_seconds=600)
         assert third["lease"]["version"] == 4

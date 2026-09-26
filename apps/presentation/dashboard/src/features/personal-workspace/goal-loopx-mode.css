@@ -90,7 +90,7 @@
 .goal-team-report .personal-md-list { list-style: revert; margin: 0; padding-left: 24px; }
 .goal-team-report .personal-md-list li { border: 0; padding: 0; }
 .personal-md-table-scroll { min-width: 0; max-width: 100%; overflow-x: auto; }
-.personal-md-table-scroll table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
+.personal-md-table-scroll table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
 .personal-md-table-scroll th, .personal-md-table-scroll td { padding: 12px; border-bottom: 1px solid var(--pw-line, #ebebeb); text-align: left; vertical-align: top; }
 .personal-md-table-scroll th { font-weight: 500; background: var(--pw-bg, #fafafa); }
 .goal-team-comparison-grid .goal-team-report { max-height: 480px; overflow: auto; }

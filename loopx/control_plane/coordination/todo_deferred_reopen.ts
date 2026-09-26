@@ -4,7 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import type {CoordinationProjectionMutation} from "./coordination_projection.ts";
 import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
-import {leaseIsActive, leaseVersion, leaseEpoch, TASK_LEASE_SCHEMA_VERSION} from "../work_items/task_lease_acquire.ts";
+import {leaseIsActive, leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {releasedTaskLeaseRecord} from "../work_items/task_lease_lifecycle_decision.ts";
 
 const REOPEN_FIELDS = new Set(["status", "clear_resume_when", "reason"]);
@@ -36,7 +36,7 @@ export function deferredReopenRejection(input: {
   }
   if (input.lease === undefined) return null;
   const lease = canonicalTaskLease(input.lease, input.goal_id, input.todo_id);
-  if (leaseIsActive({...lease, schema_version: TASK_LEASE_SCHEMA_VERSION}, input.now)) {
+  if (leaseIsActive(lease, input.now)) {
     return {code: "deferred_resume_active_lease",
       reason: "Release the active execution lease before resuming deferred work"};
   }

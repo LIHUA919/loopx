@@ -57,7 +57,7 @@ def register_todo_command(
     todo_parser.add_argument("--todo-id", help="Structured todo id from status/quota, such as todo_ab12cd34ef56.")
     todo_parser.add_argument(
         "--operation-id",
-        help="For todo receipt, read the exact historical canonical operation after an ambiguous response; this does not grant a retry or lease.",
+        help="For canonical todo add, reuse this identity with unchanged intent after an ambiguous response. For todo receipt, read the exact historical operation; a receipt grants no lease.",
     )
     todo_parser.add_argument(
         "--update-operation-id",

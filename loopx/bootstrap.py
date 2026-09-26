@@ -562,8 +562,7 @@ def bootstrap_project(
             registry_transaction.commit(registry)
         if shadow_capture is not None:
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
-                runtime_root=runtime_root, goal_id=goal_id, write_class="bootstrap_state",
-                capture=shadow_capture, observe_legacy=False, emit_disabled=False)
+                runtime_root=runtime_root, goal_id=goal_id, capture=shadow_capture, emit_disabled=False)
         if sync_global:
             global_sync = sync_project_registry_to_global(
                 registry_path=registry_path,

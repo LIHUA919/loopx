@@ -95,7 +95,11 @@ def test_completion_replay_does_not_need_private_validator(tmp_path, monkeypatch
     state.unlink()
     declaration_path = completion_validation_declaration_path(runtime_root=tmp_path / "runtime", goal_id="goal-a", todo_id=todo_id)
     saved_declaration = declaration_path.read_bytes()
+    declaration_digest = json.loads(saved_declaration)["declaration_sha256"]
+    prepared_blob_path = declaration_path.parent / "blobs" / f"{declaration_digest}.json"
+    saved_prepared_blob = prepared_blob_path.read_bytes()
     declaration_path.unlink()
+    prepared_blob_path.unlink()
     service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
     result = service.apply(proposal["proposal_id"])["proposal"]
     assert result["status"] == "failed"
@@ -103,8 +107,9 @@ def test_completion_replay_does_not_need_private_validator(tmp_path, monkeypatch
     assert result["failure"]["details"]["canonical_committed"] is True
     assert marker.read_text() == "x"
     # The business receipt needs no argv; lossless Markdown still needs the
-    # original private declaration. Restore it, never invent a replacement.
-    declaration_path.write_bytes(saved_declaration)
+    # canonical digest's original private declaration. The per-Todo copy and
+    # immutable prepared blob are alternate reads of the same declaration.
+    prepared_blob_path.write_bytes(saved_prepared_blob)
     result = service.apply(proposal["proposal_id"])["proposal"]
     assert result["status"] == "applied"
     assert marker.read_text() == "x"

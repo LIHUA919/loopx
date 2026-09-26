@@ -21,8 +21,12 @@ from ..control_plane.quota.cli_projection import (
 )
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
-from ..control_plane.quota.error_codes import QuotaCommandValidationError
+from ..control_plane.quota.error_codes import (
+    CloseoutQueryUnavailableError,
+    QuotaCommandValidationError,
+)
 from ..control_plane.quota.heartbeat_receipt import (
+    attach_uncommitted_heartbeat_receipt,
     fail_heartbeat_receipt,
     find_heartbeat_receipt,
     heartbeat_receipt_view,
@@ -65,7 +69,6 @@ from .lark_inbox import (
 )
 from .quota_action_selection import (
     RequestedQuotaActionSelection,
-    attach_uncommitted_action_selection_receipt,
     commit_requested_action_selection,
     load_requested_quota_action_selection,
     reconcile_requested_quota_action_selection,
@@ -333,6 +336,7 @@ def handle_quota_command(
     heartbeat_receipt_existing_appended = False
     heartbeat_receipt_ready = False
     action_selection_preflight_failed = False
+    closeout_query_unavailable = False
     action_selection: RequestedQuotaActionSelection | None = None
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
@@ -551,6 +555,7 @@ def handle_quota_command(
             runtime_root_arg=runtime_root_arg,
         )
     except Exception as exc:  # noqa: BLE001 - CLI fail-safe boundary; error_code is typed below.
+        closeout_query_unavailable = isinstance(exc, CloseoutQueryUnavailableError)
         payload = quota_failure_payload(
             args,
             registry_path=registry_path,
@@ -571,7 +576,7 @@ def handle_quota_command(
             replan_obligation_id=rollout_replan_obligation_id,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
-            if action_selection_preflight_failed:
+            if action_selection_preflight_failed or closeout_query_unavailable:
                 if heartbeat_receipt_existing:
                     render_existing_heartbeat_receipt_payload(
                         payload,
@@ -581,7 +586,7 @@ def handle_quota_command(
                         appended=heartbeat_receipt_existing_appended,
                     )
                 else:
-                    attach_uncommitted_action_selection_receipt(
+                    attach_uncommitted_heartbeat_receipt(
                         payload,
                         turn_instance_id=heartbeat_turn_id,
                     )

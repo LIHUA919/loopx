@@ -4,6 +4,13 @@ import json
 from enum import StrEnum
 
 
+class CloseoutQueryUnavailableError(RuntimeError):
+    """A read-only closeout query returned no verified result; no verdict exists."""
+
+    error_code = "quota_closeout_query_unavailable"
+    diagnostic_code = "closeout_query_unavailable"
+
+
 class QuotaCommandValidationError(ValueError):
     """Public-safe diagnostic for an invalid ``loopx quota`` invocation."""
 
@@ -199,6 +206,8 @@ class QuotaActionSelectionConflictError(RuntimeError):
 
 
 def quota_error_code(exc: BaseException) -> str:
+    if isinstance(exc, CloseoutQueryUnavailableError):
+        return exc.error_code
     if isinstance(exc, json.JSONDecodeError):
         return "quota_state_invalid_json"
     if isinstance(exc, QuotaCommandValidationError):

@@ -105,6 +105,9 @@ def _receipt_row(
             semantics.runtime_root_command_route_count(text)
         ),
         "host_prompt_static_safety_revision": semantics.host_prompt_static_safety_revision(text),
+        "heartbeat_user_language_prompt_revision": (
+            semantics.heartbeat_user_language_prompt_revision(text)
+        ),
         "reward_memory_outcome_prompt_revision": (
             semantics.reward_memory_outcome_prompt_revision(text)
         ),
@@ -115,6 +118,9 @@ def _receipt_row(
             semantics.guided_todo_delta_schema_versions(payload)
             if isinstance(payload, dict)
             else []
+        ),
+        "projection_envelope_schema_versions": (
+            semantics.projection_envelope_schema_versions(payload if isinstance(payload, dict) else text)
         ),
         "todo_work_counts_schema_versions": (
             semantics.todo_work_counts_schema_versions(payload)

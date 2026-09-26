@@ -49,7 +49,7 @@ def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
             assert (
                 "monitor_changed:<monitor>" in body
                 or "wait->monitor+successor/work" in body
-                or "外部等待须 open+monitor_changed+successor" in body
+                or "open + monitor_changed + successor" in body
             )
             assert "--codex-app" in body
             assert "LOOPX_TURN=<current_time_iso>" in body

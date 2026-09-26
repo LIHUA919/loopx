@@ -6,6 +6,7 @@ from ..agent_registry import registered_agent_ids_for_goal
 from ..history import load_registry
 from ..capabilities.manager_context import (
     acknowledge,
+    configure_delivery_target,
     configure_evidence_scope,
 )
 
@@ -28,6 +29,8 @@ def register_manager_inbox(subparsers, add_format):
             "status",
             "configure-read-scope",
             "configure-ssh-read-scope",
+            "grant-delivery-target",
+            "revoke-delivery-target",
         ),
     )
     parser.add_argument("--peer-agent-id", help="For request: a registered peer of the same Goal.")
@@ -71,6 +74,18 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry_path,
                 channel=args.channel_id or "",
                 goal_ids=args.read_goal_id,
+                execute=args.execute,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.manager_inbox_action in {"grant-delivery-target", "revoke-delivery-target"}:
+            result = configure_delivery_target(
+                runtime_root,
+                registry_path,
+                channel=args.channel_id or "",
+                goal_id=args.goal_id or "",
+                agent_id=args.agent_id or "",
+                grant=args.manager_inbox_action == "grant-delivery-target",
                 execute=args.execute,
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))

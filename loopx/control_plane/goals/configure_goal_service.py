@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from ...global_registry import (
     sanitize_goal_for_global,
     sync_project_registry_to_global,
 )
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ...history import load_registry
 from ...paths import global_registry_path, resolve_runtime_root
 from ...registry import registry_goals
@@ -28,6 +30,7 @@ from ..runtime.runtime_projection_route import (
     compact_runtime_projection_route,
     resolve_goal_source_runtime_route,
     resolve_runtime_projection_route,
+    runtime_projection_candidate_roots,
 )
 
 
@@ -217,7 +220,7 @@ def resolve_configure_goal_sync_target(
             )
         target_runtime = Path(target_text).expanduser().resolve()
 
-    target_registry = global_registry_path(target_runtime).expanduser().resolve()
+    target_registry = global_registry_path(target_runtime).expanduser()
     return {
         "ok": True,
         "schema_version": CONFIGURE_GOAL_GLOBAL_SYNC_SCHEMA_VERSION,
@@ -337,6 +340,101 @@ def _sync_plan(
     }
 
 
+@contextmanager
+def _locked_goal_projection(
+    *,
+    requested_registry: Path,
+    source_registry: Path,
+    goal_id: str,
+    runtime_root_override: str | None,
+    operation: str,
+) -> Iterator[
+    tuple[
+        ProjectRegistryTransaction,
+        set[Path],
+        Path,
+    ]
+]:
+    source_payload = load_registry(source_registry)
+    source_runtime = (
+        resolve_runtime_root(
+            source_payload,
+            None,
+            registry_path=source_registry,
+        )
+        .expanduser()
+        .resolve()
+    )
+    target_runtimes = (
+        [Path(runtime_root_override).expanduser().resolve()]
+        if runtime_root_override
+        else runtime_projection_candidate_roots(
+            source_runtime_root=source_runtime,
+        )
+    )
+    with ExitStack() as locks:
+        registry_transaction = locks.enter_context(
+            project_registry_transaction(
+                source_registry,
+                operation=operation,
+            )
+        )
+        secondary_paths = {
+            requested_registry,
+            *(global_registry_path(runtime_root) for runtime_root in target_runtimes),
+        }
+        secondary_paths = {
+            path
+            for path in secondary_paths
+            if not _same_path(path, source_registry)
+        }
+        for path in sorted(secondary_paths, key=str):
+            locks.enter_context(
+                exclusive_cross_runtime_file_lock(path, operation=operation)
+            )
+        locked_paths = {source_registry, *secondary_paths}
+        current_source_registry = _resolve_authoritative_source_registry(
+            registry_path=requested_registry,
+            goal_id=goal_id,
+        )
+        yield (
+            registry_transaction,
+            locked_paths,
+            current_source_registry,
+        )
+
+
+def _target_registry_under_locks(
+    *,
+    target_resolution: dict[str, Any],
+    source_registry: Path,
+    locked_paths: set[Path],
+) -> Path:
+    target_registry = Path(str(target_resolution["target_global_registry"]))
+    if (
+        not _same_path(target_registry, source_registry)
+        and target_registry not in locked_paths
+    ):
+        raise RuntimeError(
+            "configure-goal sync target changed outside the locked candidate set"
+        )
+    return target_registry
+
+
+def _preflight_global_projection(
+    *,
+    source_registry: Path,
+    goal_id: str,
+    target_resolution: dict[str, Any],
+) -> None:
+    sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(target_resolution["target_runtime_root"]),
+        goal_id=goal_id,
+        dry_run=True,
+    )
+
+
 def _configure_goal_with_global_sync_unlocked(
     *,
     registry_path: Path,
@@ -345,6 +443,8 @@ def _configure_goal_with_global_sync_unlocked(
     execute: bool,
     registry_transaction: ProjectRegistryTransaction | None = None,
     sync_if_unchanged: bool = False,
+    _target_resolution: dict[str, Any] | None = None,
+    _global_registry_lock_held: bool = False,
     **configure_options: Any,
 ) -> dict[str, Any]:
     """Configure one source goal and keep its authoritative shared read model current."""
@@ -358,15 +458,13 @@ def _configure_goal_with_global_sync_unlocked(
     )
     changed = bool(preview.get("changed"))
     sync_required = changed or sync_if_unchanged
-    target_resolution = (
-        resolve_configure_goal_sync_target(
+    target_resolution = None
+    if sync_required:
+        target_resolution = _target_resolution or resolve_configure_goal_sync_target(
             registry_path=registry_path,
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
         )
-        if sync_required
-        else None
-    )
     preview["global_sync"] = _sync_plan(
         changed=sync_required,
         target_resolution=target_resolution,
@@ -433,6 +531,7 @@ def _configure_goal_with_global_sync_unlocked(
         runtime_root_override=str(target_resolution["target_runtime_root"]),
         goal_id=goal_id,
         dry_run=False,
+        _global_registry_lock_held=_global_registry_lock_held,
     )
     readback = (
         _readback(
@@ -492,10 +591,12 @@ def configure_goal_with_global_sync(
     section across concurrent Dashboard and CLI configuration requests.
     """
 
+    requested_registry_path = registry_path.expanduser().resolve()
     source_registry_path = _resolve_authoritative_source_registry(
-        registry_path=registry_path,
+        registry_path=requested_registry_path,
         goal_id=goal_id,
     )
+
     def add_host_capacity(
         payload: dict[str, Any],
         *,
@@ -612,10 +713,19 @@ def configure_goal_with_global_sync(
             **configure_options,
         )
         return add_host_capacity(preview)
-    with project_registry_transaction(
-        source_registry_path,
+    with _locked_goal_projection(
+        requested_registry=requested_registry_path,
+        source_registry=source_registry_path,
+        goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
         operation="configure_goal_with_global_sync",
-    ) as registry_transaction:
+    ) as (
+        registry_transaction,
+        locked_paths,
+        current_source_registry,
+    ):
+        if not _same_path(current_source_registry, source_registry_path):
+            raise ValueError("Goal source route changed; preview again")
         if expected_goal_configuration_revision is not None:
             current = configure_goal(
                 registry_path=source_registry_path,
@@ -647,12 +757,37 @@ def configure_goal_with_global_sync(
         )
         preview = add_host_capacity(preview)
         capacity_plan = preview["codex_host_capacity"]
+        sync_plan = preview.get("global_sync")
+        preview_target_resolution = (
+            sync_plan.get("target_resolution")
+            if isinstance(sync_plan, dict) and sync_plan.get("enabled")
+            else None
+        )
+        target_resolution = preview_target_resolution
+        target_registry = None
+        if isinstance(preview_target_resolution, dict):
+            target_registry = _target_registry_under_locks(
+                target_resolution=preview_target_resolution,
+                source_registry=source_registry_path,
+                locked_paths=locked_paths,
+            )
+            _preflight_global_projection(
+                source_registry=source_registry_path,
+                goal_id=goal_id,
+                target_resolution=target_resolution,
+            )
+
         applied = _configure_goal_with_global_sync_unlocked(
             registry_path=source_registry_path,
             goal_id=goal_id,
             runtime_root_override=runtime_root_override,
             execute=True,
             registry_transaction=registry_transaction,
+            _target_resolution=target_resolution,
+            _global_registry_lock_held=(
+                target_registry is not None
+                and not _same_path(target_registry, source_registry_path)
+            ),
             **configure_options,
         )
         if not applied.get("ok"):
@@ -660,46 +795,47 @@ def configure_goal_with_global_sync(
                 applied,
                 plan_before_apply=capacity_plan,
             )
-        capacity_receipt = None
-        if align_codex_subagent_capacity and capacity_plan["write_required"]:
-            if codex_host_capacity_applier is None:
-                raise ValueError(
-                    "Codex host-capacity apply requires a host adapter"
-                )
-            try:
-                capacity_receipt = codex_host_capacity_applier(
-                    int(capacity_plan["required_children"]),
-                    expected_source_sha256=str(capacity_plan["source_sha256"]),
-                    home=codex_home_override,
-                )
-            except (OSError, ValueError) as exc:
-                partial = add_host_capacity(
-                    applied,
-                    plan_before_apply=capacity_plan,
-                )
-                partial["ok"] = False
-                partial["partial_write"] = bool(applied.get("written"))
-                partial["error"] = (
-                    "Goal configuration applied, but Codex host-capacity alignment failed: "
-                    f"{exc}"
-                )
-                partial["recommended_action"] = (
-                    "repair or refresh the Codex host configuration, then preview the "
-                    "same Goal capacity alignment again"
-                )
-                partial["codex_host_capacity"].update(
-                    {
-                        "status": "apply_failed",
-                        "readback_verified": False,
-                        "written": False,
-                    }
-                )
-                return partial
-        return add_host_capacity(
-            applied,
-            receipt=capacity_receipt,
-            plan_before_apply=capacity_plan,
-        )
+
+    capacity_receipt = None
+    if align_codex_subagent_capacity and capacity_plan["write_required"]:
+        if codex_host_capacity_applier is None:
+            raise ValueError(
+                "Codex host-capacity apply requires a host adapter"
+            )
+        try:
+            capacity_receipt = codex_host_capacity_applier(
+                int(capacity_plan["required_children"]),
+                expected_source_sha256=str(capacity_plan["source_sha256"]),
+                home=codex_home_override,
+            )
+        except (OSError, ValueError) as exc:
+            partial = add_host_capacity(
+                applied,
+                plan_before_apply=capacity_plan,
+            )
+            partial["ok"] = False
+            partial["partial_write"] = bool(applied.get("written"))
+            partial["error"] = (
+                "Goal configuration applied, but Codex host-capacity alignment failed: "
+                f"{exc}"
+            )
+            partial["recommended_action"] = (
+                "repair or refresh the Codex host configuration, then preview the "
+                "same Goal capacity alignment again"
+            )
+            partial["codex_host_capacity"].update(
+                {
+                    "status": "apply_failed",
+                    "readback_verified": False,
+                    "written": False,
+                }
+            )
+            return partial
+    return add_host_capacity(
+        applied,
+        receipt=capacity_receipt,
+        plan_before_apply=capacity_plan,
+    )
 
 
 def bind_goal_agent_with_global_sync(
@@ -713,8 +849,9 @@ def bind_goal_agent_with_global_sync(
 ) -> dict[str, Any]:
     """Bind one Agent through source authority and verify its shared projection."""
 
+    requested_registry_path = registry_path.expanduser().resolve()
     source_registry_path = _resolve_authoritative_source_registry(
-        registry_path=registry_path,
+        registry_path=requested_registry_path,
         goal_id=goal_id,
     )
     if not execute:
@@ -729,10 +866,41 @@ def bind_goal_agent_with_global_sync(
             "projection_verified": False,
         }
 
-    with project_registry_transaction(
-        source_registry_path,
+    with _locked_goal_projection(
+        requested_registry=requested_registry_path,
+        source_registry=source_registry_path,
+        goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
         operation="bind_goal_agent_with_global_sync",
-    ) as registry_transaction:
+    ) as (
+        registry_transaction,
+        locked_paths,
+        current_source_registry,
+    ):
+        if not _same_path(current_source_registry, source_registry_path):
+            current_goal = _goal(load_registry(current_source_registry), goal_id)
+            current_registered_agents = (
+                registered_agent_ids_for_goal(current_goal)
+                if current_goal is not None
+                else []
+            )
+            return {
+                "ok": False,
+                "status": "stale",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "expected_revision": expected_revision,
+                "actual_revision": _goal_agent_binding_revision(
+                    goal_id=goal_id,
+                    source_registry=current_source_registry,
+                    registered_agents=current_registered_agents,
+                ),
+                "registered_agents": current_registered_agents,
+                "changed": False,
+                "written": False,
+                "projection_verified": False,
+            }
+
         source_goal = _goal(registry_transaction.payload_copy(), goal_id)
         if source_goal is None:
             raise ValueError(f"goal id not found in source registry: {goal_id}")
@@ -767,23 +935,43 @@ def bind_goal_agent_with_global_sync(
                     "projection_verified": False,
                 }
 
+        target_resolution = resolve_configure_goal_sync_target(
+            registry_path=source_registry_path,
+            goal_id=goal_id,
+            runtime_root_override=runtime_root_override,
+        )
+        target_registry = _target_registry_under_locks(
+            target_resolution=target_resolution,
+            source_registry=source_registry_path,
+            locked_paths=locked_paths,
+        )
+        _preflight_global_projection(
+            source_registry=source_registry_path,
+            goal_id=goal_id,
+            target_resolution=target_resolution,
+        )
+
+        common_options = {
+            "registry_path": source_registry_path,
+            "goal_id": goal_id,
+            "runtime_root_override": runtime_root_override,
+            "execute": True,
+            "registry_transaction": registry_transaction,
+            "_target_resolution": target_resolution,
+            "_global_registry_lock_held": (
+                target_registry is not None
+                and not _same_path(target_registry, source_registry_path)
+            ),
+        }
         if already_bound:
             applied: dict[str, Any] = _configure_goal_with_global_sync_unlocked(
-                registry_path=source_registry_path,
-                goal_id=goal_id,
-                runtime_root_override=runtime_root_override,
-                execute=True,
-                registry_transaction=registry_transaction,
+                **common_options,
                 sync_if_unchanged=True,
                 registered_agents=registered_agents,
             )
         else:
             applied = _configure_goal_with_global_sync_unlocked(
-                registry_path=source_registry_path,
-                goal_id=goal_id,
-                runtime_root_override=runtime_root_override,
-                execute=True,
-                registry_transaction=registry_transaction,
+                **common_options,
                 registered_agents=sorted({*registered_agents, agent_id}),
             )
 

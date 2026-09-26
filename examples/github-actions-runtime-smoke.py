@@ -88,7 +88,7 @@ def main() -> int:
         r"^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)",
         python_workflow, re.MULTILINE | re.DOTALL,
     ))
-    for name in ("kernel-static-checks", "node-minimum-compatibility", "dashboard-acceptance", "windows-powershell"):
+    for name in ("typescript-core", "node-minimum-compatibility", "dashboard-acceptance", "windows-powershell"):
         assert SQLITE_NODE_VERSION in node_version_pattern.findall(jobs[name]), name
     postgresql_versions = node_version_pattern.findall(
         workflows["postgresql-integration.yml"]

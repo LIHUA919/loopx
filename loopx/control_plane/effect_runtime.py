@@ -38,6 +38,12 @@ STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
+# Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
+# another 5 seconds for the provider lock. Keep the client connected through
+# that declared critical section and a bounded readback; a shorter RPC budget
+# turns an in-flight write into an avoidable ambiguous response.
+CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
+CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
@@ -662,7 +668,9 @@ def _startup_diagnostic(raw: bytes) -> tuple[str, str] | None:
 
     if not raw:
         return None
-    for line in reversed(raw.decode("utf-8", errors="replace").splitlines()):
+    # Not splitlines(): it also breaks on U+0085/U+2028/U+2029, which a rejected
+    # setting can echo back unescaped inside the envelope and tear the record.
+    for line in reversed(raw.decode("utf-8", errors="replace").split("\n")):
         candidate = line.strip()
         if not candidate.startswith("{"):
             continue

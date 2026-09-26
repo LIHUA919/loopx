@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -476,6 +476,59 @@ test("settled history is read and indexed once instead of rescanned per Turn", a
   } finally {
     await runtime.close();
   }
+});
+
+test("warm history still discovers an appended older identity conflict and repaired rewrite", async () => {
+  const runtime = await runtimeWithSettledTurns(1000);
+  const path = join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl");
+  try {
+    assert.equal((await preflight(runtime.root)).status, "none");
+    await appendFile(path, JSON.stringify(
+      receipt("turn-0000", closeoutRequired("turn-0000", "todo_changed")),
+    ) + "\n");
+    await assert.rejects(() => preflight(runtime.root), /conflicting settlement identities/);
+    // An authoritative repair/rewrite must also retire the cached conflict.
+    await writeFile(path, JSON.stringify(receipt("repaired-turn", {closeout_required: false})) + "\n");
+    const repaired = await preflight(runtime.root);
+    assert.equal(repaired.status, "none");
+    assert.equal(repaired.turns_validated, 1);
+  } finally { await runtime.close(); }
+});
+
+test("monitor closeout comes from exact committed history, not a second Python scan", async () => {
+  const todo = "todo_monitor";
+  const runtime = await runtimeWith([receipt("turn-a", closeoutRequired("turn-a", todo))]);
+  const runs = join(runtime.root, "goals", GOAL, "runs");
+  const effectId = `quota-monitor-poll:${GOAL}:${AGENT}:turn-a:todo:${todo}`;
+  const poll = {
+    classification: "quota_monitor_poll", goal_id: GOAL, agent_id: AGENT,
+    turn_instance_id: "turn-a", todo_id: todo,
+    quota_monitor_poll_commit: {effect_id: effectId},
+  };
+  try {
+    await mkdir(runs);
+    assert.equal((await preflight(runtime.root)).committed_monitor_poll, null);
+    for (const override of [
+      {goal_id: "other-goal"}, {agent_id: "other-agent"},
+      {turn_instance_id: "other-turn"}, {todo_id: "todo_other"},
+      {quota_monitor_poll_commit: {effect_id: "uncommitted"}},
+    ]) {
+      await writeFile(join(runs, "index.jsonl"), JSON.stringify({...poll, ...override}) + "\n");
+      assert.equal((await preflight(runtime.root)).committed_monitor_poll, null);
+    }
+    await writeFile(join(runs, "index.jsonl"), JSON.stringify(poll) + "\n");
+    // A later observation without a commit cannot revoke a durable exact poll.
+    await appendFile(join(runs, "index.jsonl"), JSON.stringify({...poll, quota_monitor_poll_commit: {}}) + "\n");
+    const result = await preflight(runtime.root);
+    assert.deepEqual(result.committed_monitor_poll, {effect_id: effectId});
+    const verdict = reduce(candidateFrom(result), result.missing_receipts as string[], READ_TODO(
+      {...ADVANCEMENT_OPEN, task_class: "continuous_monitor"},
+      result.committed_monitor_poll as JsonObject,
+    ));
+    assert.equal(verdict.accepted_closeout, "exact_committed_quota_monitor_poll");
+    await appendFile(join(runs, "index.jsonl"), "malformed\n");
+    await assert.rejects(() => preflight(runtime.root), /malformed/);
+  } finally { await runtime.close(); }
 });
 
 test("an unsettled Turn cannot be decided without its bound Todo facts", async () => {

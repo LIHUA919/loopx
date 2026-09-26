@@ -19,7 +19,9 @@ from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
 from ..control_plane.effect_runtime import EffectRuntimeStartupError
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
+    CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
     QuotaCommandValidationError,
@@ -112,7 +114,8 @@ def quota_failure_payload(
     public_reason = (
         str(error)
         if isinstance(
-            error, (HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError)
+            error,
+            (CloseoutQueryUnavailableError, HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError),
         )
         else "quota collection failed"
     )
@@ -134,6 +137,16 @@ def quota_failure_payload(
         **verbose_debug,
         **lock_timeout_fields,
     }
+    if isinstance(error, CloseoutQueryUnavailableError):
+        payload.update({
+            "status": error.diagnostic_code,
+            "effective_action": EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR.value,
+            "recommended_action": (
+                "check runtime health, then retry quota should-run with the same "
+                "Turn identity to read the closeout state; do not infer settlement "
+                "or replay work from a missing query response"
+            ),
+        })
     if isinstance(error, QuotaActionSelectionConflictError):
         # The requested Todo could not be reconciled with the projection. Report
         # the real conflict and the next read to make, rather than the generic

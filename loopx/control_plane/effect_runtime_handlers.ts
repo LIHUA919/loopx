@@ -1,3 +1,4 @@
+import {planStateEventReplay} from "./goals/state_event_replay.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -12,6 +13,7 @@ import {evaluateTodoPriority} from "./todos/priority.ts";
 import {evaluateUserCompletion} from "./todos/user_completion.ts";
 import {projectTodoSuccession} from "./todos/succession.ts";
 import {projectLegacyTodoWorkCounts} from "./todos/summary_lanes.ts";
+import {sealProjectionEnvelope} from "./projection_envelope.ts";
 import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "./collaboration/delegation.ts";
 import {planChatMode} from "./collaboration/chat_mode.ts";
 import {resolveConversationScope} from "./collaboration/conversation_scope.ts";
@@ -438,6 +440,7 @@ export function createEffectRuntimeHandlers(
       (params) => interpretTurnJournal(turnJournalInspectionRequest(params)),
     ],
     ["turn_journal.write", commitTurnJournal],
+    ["goal.state_event.plan_replay", planStateEventReplay],
     ["todo.completion_fence.evaluate", evaluateTodoCompletionFence],
     ["todo.completion_state.normalize", normalizeTodoCompletionValue],
     ["todo.completion_state.require_metadata", requireTodoCompletionMetadataValue],
@@ -451,6 +454,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.periodic_report.approval_retry.select", selectPeriodicReportApprovalRetry],
     ["todo.succession.project", projectTodoSuccession],
     ["todo.work_counts.project", projectLegacyTodoWorkCounts],
+    ["projection.envelope.seal", sealProjectionEnvelope],
     ["todo.decision_scope.evaluate", evaluateDecisionScope],
     ["todo.user_completion.plan", evaluateUserCompletion],
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],

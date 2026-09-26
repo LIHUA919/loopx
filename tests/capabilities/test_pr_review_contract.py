@@ -104,6 +104,15 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "silent behavior changes" in requirements["behavior_change_disclosure"]["rule"]
     )
     assert "must_attempt_work" in requirements["guidance_vs_obligation"]["rule"]
+    attribution = requirements["validation_matrix"]["failure_attribution"]
+    assert attribution["non_blocking_dispositions"] == [
+        "pre_existing_unrelated", "external_unrelated",
+    ]
+    assert "same normalized failing identity" in attribution["rule"]
+    assert "merge readiness remains on hold" in attribution["rule"]
+    assert "APPROVE when a required red check" in contract["verdict_policy"][
+        "unrelated_validation_failure"
+    ]
     proportionality = requirements["change_proportionality"]
     assert proportionality["required_when"] == "code_change"
     assert proportionality["verdict_values"] == [

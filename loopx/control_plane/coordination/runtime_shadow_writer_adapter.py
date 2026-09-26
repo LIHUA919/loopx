@@ -141,14 +141,11 @@ def settle_todo_runtime_shadow_capture(
     registry_path: Path,
     runtime_root: Path,
     goal_id: str,
-    write_class: str,
     capture: outbox.TodoPartitionCapture,
-    observe_legacy: bool = True,
     emit_disabled: bool = True,
 ) -> dict[str, Any]:
     """Boundedly drain one transaction capture after releasing the Todo lock."""
 
-    from .local_authority_shadow_observation import observe_todo_local_authority_commit
     from .local_authority_shadow_adapter import capture_evidence, drain_local_authority_shadow_outbox
 
     drain = (
@@ -164,15 +161,7 @@ def settle_todo_runtime_shadow_capture(
         payload["coordination_runtime_shadow"] = capture_evidence(
             goal_id=goal_id, capture=capture.outcome, drain=drain,
         )
-    if not observe_legacy:
-        return payload
-    return observe_todo_local_authority_commit(
-        payload,
-        registry_path,
-        goal_id,
-        write_class,
-        runtime_root=runtime_root,
-    )
+    return payload
 
 
 def settle_lease_runtime_shadow_capture(

@@ -309,7 +309,7 @@ def _turn_prompt(
 ) -> str:
     envelope = {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": "Short answer for the operator.",
+        "message": "Complete answer for the operator, at the depth this task needs.",
         "proposals": [
             {
                 "kind": "todo",
@@ -369,8 +369,9 @@ def _turn_prompt(
         "If you encounter an identity, approval, or host-tool gate, stop and describe it in gate. "
         "Reply in Chinese unless the operator asks for another language. Keep proposals bounded and reviewable. "
         "Do not expose chain-of-thought, tool narration, intended steps, or scratch work. "
-        "First write the complete operator-facing answer as ordinary text. Start with the conclusion, "
-        "use short sentences or lines so the answer can stream, and include at most five actionable items. "
+        "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "
+        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate, raw ID inventories and more than five actionable items. "
+        "Do not emit executable HTML. The complete answer must stay in this conversation, even when a separate report artifact also exists. "
         "Then append exactly one machine-readable envelope whose message field repeats that complete answer. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '

@@ -739,6 +739,7 @@ def add_goal_todo(
     project: Path | None = None,
     state_file: Path | None = None,
     dry_run: bool = False,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
@@ -852,6 +853,7 @@ def add_goal_todo(
         enforce_boundedness=True,
     )
     canonical_create = create_canonical_todo_if_promoted(
+        operation_id=operation_id,
         registry_path=registry_path,
         runtime_root=shadow_runtime_root,
         goal_id=goal_id,
@@ -897,6 +899,8 @@ def add_goal_todo(
     )
     if canonical_create is not None:
         return canonical_create
+    if operation_id is not None:
+        raise ValueError("todo add --operation-id requires promoted canonical authority")
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -1027,7 +1031,7 @@ def add_goal_todo(
     )
     return settle_todo_runtime_shadow_capture(
         payload, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_add", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -1541,7 +1545,7 @@ def update_goal_todo(
     )
     return settle_todo_runtime_shadow_capture(
         payload, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class=write_class, capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -1798,7 +1802,7 @@ def complete_goal_todo(
                 return settle_todo_runtime_shadow_capture(
                     event_result, registry_path=registry_path,
                     runtime_root=shadow_runtime_root, goal_id=goal_id,
-                    write_class="todo_complete_event_projection", capture=shadow_capture,
+                    capture=shadow_capture,
                 )
         if not isinstance(completion_state, dict):
             raise RuntimeError(
@@ -1931,7 +1935,7 @@ def complete_goal_todo(
     result["self_merged"] = effective_self_merged
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_complete", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 @provider_first_terminal_lifecycle("supersede")
@@ -2091,7 +2095,7 @@ def supersede_goal_todo(
     }
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_supersede", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -2157,5 +2161,5 @@ def archive_completed_todos(
     }
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_archive_completed", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )

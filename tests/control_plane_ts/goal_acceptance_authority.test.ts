@@ -591,3 +591,73 @@ test("legacy omitted scope preserves document bytes, bindings and global admissi
   assert.equal(acceptanceWorkGuard(value, goal, "todo_first")?.allowed, true);
   assert.equal(acceptanceWorkGuard(value, goal, "todo_new")?.state, "unbound");
 });
+
+for (const provider of providers) {
+  test(`${provider}: exact stale-declaration restoration preserves owner authority and lease lineage`,
+    {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL || provider === "sqlite" && !sqliteQualified}, async t => {
+      const {executeCoordinationTodoUpdate} = await import("../../loopx/control_plane/coordination/todo_update.ts");
+      const store = await fixture(t, provider);
+      const wait = "resume_at:2020-01-01T00:00:00Z";
+      const original = todo("todo_first", {claimed_by: "agent-a", resume_when: wait});
+      const lease = {todo_id: "todo_first", goal_id: goal, owner: "agent-a", status: "released",
+        idempotency_key: "previous-execution", version: 1, lease_epoch: 1,
+        expires_at: "2020-01-01T00:00:00Z", write_scopes: []};
+      await store.commitAuthority({operation_id: "seed", expected_provider_revision: null, events: [], receipts: [],
+        next_projection: authorityProjectionFixture(goal, [original], [lease], "native", {handoff_mode: "hard_lease"})});
+      await configureGoalAcceptance(store, await configureRequest(store, {document: {...document(),
+        bindings: [{todo_id: "todo_first", criterion_ids: ["outcome"]}]}}));
+      const confirmed = (await head(store)).head.goal_acceptance;
+      const current = await head(store);
+      const changedTodo = {...(current.head.todos as JsonObject[])[0]}; delete changedTodo.resume_when;
+      await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal, operation_id: "prior-unintended-edit",
+        expected_provider_revision: current.provider_revision, projection: current.head,
+        mutations: [{kind: "todo_upsert", todo: changedTodo, clear_fields: ["resume_when"]}]}));
+      const stale = await head(store);
+      assert.equal(acceptanceWorkGuard(stale.head, goal, "todo_first")?.state, "stale");
+      const request = {goal_id: goal, todo_id: "todo_first", expected_role: "agent", actor_agent_id: "agent-a",
+        registered_agents: ["agent-a", "agent-b"], operation_id: "restore-exact-declaration",
+        expected_provider_revision: stale.provider_revision, patch: {}, clear_fields: [],
+        planning_intent: {resume_when: wait}, dry_run: false, now: new Date("2030-01-01T00:00:00Z")};
+      for (const change of [
+        {actor_agent_id: "agent-b"}, {expected_provider_revision: undefined},
+        {expected_provider_revision: "stale"}, {planning_intent: {resume_when: "resume_at:2021-01-01T00:00:00Z"}},
+        {patch: {text: "Different scope"}}, {planning_intent: {resume_when: wait, status: "done"}},
+        {lease_idempotency_key: "previous-execution", lease_expected_version: 1},
+      ]) {
+        const refused = await executeCoordinationTodoUpdate(store, {...request, ...change});
+        assert.equal(refused.status, "failed", JSON.stringify(refused));
+        assert.deepEqual(await head(store), stale);
+      }
+      // Exercise the full admission path against rejected current facts too.
+      for (const [name, patch, activeLease] of [
+        ["excluded", {excluded_agents: ["agent-a"]}, false],
+        ["active-lease", {}, true],
+      ] as const) {
+        const basis = await head(store);
+        await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal, operation_id: `facts-${name}`,
+          expected_provider_revision: basis.provider_revision, projection: basis.head,
+          mutations: [{kind: "todo_upsert", todo: {...changedTodo, ...patch}},
+            {kind: "lease_upsert", lease: activeLease ? {...lease, status: "active", expires_at: "2031-01-01T00:00:00Z"} : lease}]}));
+        const held = await head(store);
+        const denied = await executeCoordinationTodoUpdate(store, {...request,
+          expected_provider_revision: held.provider_revision});
+        assert.equal(denied.status, "failed", name);
+        assert.deepEqual(await head(store), held);
+        await store.commitAuthority({operation_id: `reset-${name}`, expected_provider_revision: held.provider_revision,
+          next_projection: stale.head, events: [], receipts: []});
+      }
+      request.expected_provider_revision = (await head(store)).provider_revision;
+      const readyToRestore = await head(store);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, dry_run: true})).status, "planned");
+      assert.deepEqual(await head(store), readyToRestore);
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "applied");
+      const restored = await head(store);
+      assert.equal(acceptanceWorkGuard(restored.head, goal, "todo_first")?.state, "ready");
+      assert.deepEqual(restored.head.goal_acceptance, confirmed);
+      assert.deepEqual(restored.head.leases, stale.head.leases);
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "replayed");
+      assert.deepEqual(await head(store), restored);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, patch: {text: "Changed replay"}})).status, "failed");
+      assert.deepEqual(await head(store), restored);
+    });
+}

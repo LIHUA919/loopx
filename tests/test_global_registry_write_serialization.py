@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -11,7 +12,7 @@ import pytest
 
 from loopx import global_registry
 from loopx import project_uninstall as project_uninstall_module
-from loopx.file_lock import fcntl
+from loopx.file_lock import exclusive_cross_runtime_file_lock, fcntl
 from loopx.global_registry import (
     global_registry_path,
     retire_global_registry_goals,
@@ -104,7 +105,7 @@ def test_sync_reads_and_writes_inside_the_global_registry_lock(
             events.append(f"write:{'locked' if held else 'unlocked'}")
         real_write(path, payload)
 
-    monkeypatch.setattr(global_registry, "exclusive_file_lock", recording_lock)
+    monkeypatch.setattr(global_registry, "exclusive_cross_runtime_file_lock", recording_lock)
     monkeypatch.setattr(global_registry, "_load_global_registry", recording_load)
     monkeypatch.setattr(global_registry, "write_json", recording_write)
 
@@ -140,7 +141,7 @@ def test_dry_run_sync_does_not_take_the_write_lock(
         acquired.append(path)
         yield path
 
-    monkeypatch.setattr(global_registry, "exclusive_file_lock", recording_lock)
+    monkeypatch.setattr(global_registry, "exclusive_cross_runtime_file_lock", recording_lock)
 
     result = sync_project_registry_to_global(
         registry_path=registry_path,
@@ -195,7 +196,7 @@ def test_retire_reads_and_writes_inside_the_global_registry_lock(
             events.append(f"backup:{'locked' if held else 'unlocked'}")
         real_write(path, payload)
 
-    monkeypatch.setattr(global_registry, "exclusive_file_lock", recording_lock)
+    monkeypatch.setattr(global_registry, "exclusive_cross_runtime_file_lock", recording_lock)
     monkeypatch.setattr(global_registry, "_load_global_registry", recording_load)
     monkeypatch.setattr(global_registry, "write_json", recording_write)
 
@@ -231,7 +232,7 @@ def test_retire_rechecks_live_route_inside_the_global_registry_lock(
     registry_path.unlink()
     state_path.unlink()
     global_path = global_registry_path(runtime_root)
-    real_lock = global_registry.exclusive_file_lock
+    real_lock = global_registry.exclusive_cross_runtime_file_lock
     restored: list[Path] = []
 
     @contextmanager
@@ -247,7 +248,7 @@ def test_retire_rechecks_live_route_inside_the_global_registry_lock(
 
     monkeypatch.setattr(
         global_registry,
-        "exclusive_file_lock",
+        "exclusive_cross_runtime_file_lock",
         restore_live_route_before_lock,
     )
 
@@ -322,6 +323,69 @@ def test_sync_preserves_a_goal_committed_between_preview_and_write(
     assert synced == ["goal-alpha", "goal-beta"], (
         f"a concurrently synced goal was overwritten by a stale merge preview: {synced}"
     )
+
+
+def test_queued_sync_refreshes_source_after_acquiring_global_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    global_path = global_registry_path(runtime_root)
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+
+    worker_loaded_source = threading.Event()
+    worker_results: list[dict[str, Any]] = []
+    worker_errors: list[BaseException] = []
+    worker: threading.Thread
+    real_load_registry = global_registry.load_registry
+
+    def recording_load_registry(path: Path) -> dict[str, Any]:
+        payload = real_load_registry(path)
+        if threading.current_thread() is worker and path == registry_path:
+            worker_loaded_source.set()
+        return payload
+
+    monkeypatch.setattr(global_registry, "load_registry", recording_load_registry)
+
+    def queued_sync() -> None:
+        try:
+            worker_results.append(
+                sync_project_registry_to_global(
+                    registry_path=registry_path,
+                    runtime_root_override=str(runtime_root),
+                    dry_run=False,
+                )
+            )
+        except BaseException as exc:
+            worker_errors.append(exc)
+
+    worker = threading.Thread(target=queued_sync)
+    with exclusive_cross_runtime_file_lock(
+        global_path,
+        operation="test_queued_sync_refreshes_source",
+    ):
+        worker.start()
+        assert worker_loaded_source.wait(timeout=2)
+        source_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        source_payload["goals"][0]["objective"] = "new source value"
+        registry_path.write_text(json.dumps(source_payload), encoding="utf-8")
+        sync_project_registry_to_global(
+            registry_path=registry_path,
+            runtime_root_override=str(runtime_root),
+            dry_run=False,
+            _global_registry_lock_held=True,
+        )
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert worker_errors == []
+    assert worker_results and worker_results[0]["ok"] is True
+    projected_goal = json.loads(global_path.read_text(encoding="utf-8"))["goals"][0]
+    assert projected_goal["objective"] == "new source value"
 
 
 def test_project_uninstall_preserves_a_goal_committed_after_preview(

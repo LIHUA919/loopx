@@ -912,6 +912,82 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
     )
 
 
+def _envelope(code: str, received: str) -> bytes:
+    """Frame one startup rejection the way the managed server publishes it.
+
+    ``ensure_ascii=False`` mirrors ``JSON.stringify``, which leaves U+0085 and
+    the two separators raw while escaping everything below U+0020.
+    """
+
+    return (
+        json.dumps(
+            {
+                "schema_version": (
+                    effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION
+                ),
+                "code": code,
+                "message": 'idle timeout guidance (received "' + received + '")',
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("received", "label"),
+    [
+        ("\u0085150\u0085", "NEL"),
+        ("\u2028150\u2028", "LINE SEPARATOR"),
+        ("\u2029150\u2029", "PARAGRAPH SEPARATOR"),
+        ("\u001c150\u001c", "FILE SEPARATOR"),
+        (" 150 ", "ASCII space"),
+    ],
+)
+def test_startup_diagnostic_survives_a_padding_value_it_quotes_back(
+    received: str,
+    label: str,
+) -> None:
+    """One envelope is one record, whatever the rejected value contains."""
+
+    envelope = _envelope("invalid_idle_timeout", received)
+
+    recovered = effect_runtime._startup_diagnostic(envelope)
+
+    assert recovered is not None, label
+    code, message = recovered
+    assert code == "invalid_idle_timeout"
+    assert "150" in message
+
+
+def test_startup_diagnostic_recovers_the_envelope_beside_other_output() -> None:
+    """Framing is per record, so earlier noise does not bury the diagnostic."""
+
+    envelope = _envelope("invalid_idle_timeout", " 150 ").decode("utf-8")
+    stderr = (
+        "npm warn ignoring empty lockfile\n"
+        "node:events:496\n" + envelope + "Warning: fsync() failed\n"
+    ).encode("utf-8")
+
+    recovered = effect_runtime._startup_diagnostic(stderr)
+
+    assert recovered is not None
+    assert recovered[0] == "invalid_idle_timeout"
+
+
+def test_startup_diagnostic_ignores_stderr_without_an_envelope() -> None:
+    """A crash trace is not a typed configuration diagnostic."""
+
+    stderr = (
+        "node:internal/process/promises:391\n"
+        "    triggerUncaughtException(err, true);\n"
+        "    ^\n"
+        "Error: listen EACCES\n"
+    ).encode("utf-8")
+
+    assert effect_runtime._startup_diagnostic(stderr) is None
+
+
 @pytest.mark.parametrize(
     "raw_idle_ms",
     [
@@ -924,6 +1000,12 @@ def test_managed_runtime_releases_memory_after_idle_timeout(
         "0x10",
         " 150",
         "150 ",
+        # Echoed back by the runtime without escaping, and honoured as a
+        # newline by str.splitlines(): the two together used to mask the
+        # typed diagnostic behind runtime_exited_before_ready.
+        "\u0085150\u0085",
+        "\u2028150\u2028",
+        "\u2029150\u2029",
         "2147483648",
         "9007199254740993",
     ],

@@ -1,6 +1,8 @@
 """A global settings entry must survive ordinary project-to-global projection."""
 
+from contextlib import contextmanager
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -10,7 +12,9 @@ from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
 from loopx.configuration_transaction import goal_capability_configuration_revision
 from loopx.configure_goal import configure_goal
+from loopx.control_plane.goals import configure_goal_service
 from loopx.control_plane.goals.configure_goal_service import (
+    bind_goal_agent_with_global_sync,
     configure_goal_with_global_sync,
     read_goal_configuration_with_source_route,
 )
@@ -85,6 +89,64 @@ def preview_agent_binding(tmp_path, mirror):
     return service, proposal
 
 
+def switch_source_route_after_source_lock(monkeypatch, *, mirror, source):
+    original_transaction = configure_goal_service.project_registry_transaction
+    switched = {}
+
+    @contextmanager
+    def switching_transaction(*args, **kwargs):
+        with original_transaction(*args, **kwargs) as transaction:
+            mirror_payload = json.loads(mirror.read_text())
+            mirror_payload["goals"][0]["source_registry"] = str(source)
+            mirror_payload["goals"][0]["repo"] = str(source.parents[1])
+            mirror.write_text(json.dumps(mirror_payload))
+            switched["mirror_bytes"] = mirror.read_bytes()
+            yield transaction
+
+    monkeypatch.setattr(
+        configure_goal_service,
+        "project_registry_transaction",
+        switching_transaction,
+    )
+    return switched
+
+
+def switch_projection_target_before_candidate_locks(
+    monkeypatch,
+    *,
+    source,
+    target_runtime,
+):
+    original_candidate_roots = (
+        configure_goal_service.runtime_projection_candidate_roots
+    )
+    switched = {}
+
+    def switching_candidate_roots(**kwargs):
+        roots = original_candidate_roots(**kwargs)
+        if not switched:
+            source_payload = json.loads(source.read_text())
+            switched["initial_target"] = str(
+                Path(source_payload["common_runtime_root"])
+                / "registry.global.json"
+            )
+            sync_project_registry_to_global(
+                registry_path=source,
+                runtime_root_override=str(target_runtime),
+                goal_id="example",
+                dry_run=False,
+            )
+            switched["new_target"] = target_runtime / "registry.global.json"
+        return roots
+
+    monkeypatch.setattr(
+        configure_goal_service,
+        "runtime_projection_candidate_roots",
+        switching_candidate_roots,
+    )
+    return switched
+
+
 def test_global_cli_change_survives_source_resync(mirrored_goal):
     source, mirror, runtime = mirrored_goal
     result = subprocess.run(
@@ -133,6 +195,31 @@ def test_global_cli_change_survives_source_resync(mirrored_goal):
     assert policy(mirror) == expected
 
 
+def test_goal_configuration_locks_and_reads_back_symlinked_target(mirrored_goal):
+    source, mirror, runtime = mirrored_goal
+    backing = runtime.parent / "registry-backing.json"
+    backing.write_bytes(mirror.read_bytes())
+    mirror.unlink()
+    try:
+        mirror.symlink_to(backing)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    applied = configure_goal_with_global_sync(
+        registry_path=source,
+        goal_id="example",
+        runtime_root_override=str(runtime),
+        execute=True,
+        max_children=4,
+    )
+
+    assert applied["ok"] is True
+    assert applied["global_sync"]["selected_target"]["global_registry"] == str(mirror)
+    assert policy(source)["max_children"] == 4
+    assert policy(mirror)["max_children"] == 4
+    assert policy(backing)["max_children"] == 3
+
+
 def test_stale_mirror_reads_source_and_rejects_stale_source_revision(mirrored_goal):
     source, mirror, runtime = mirrored_goal
     configure_goal(
@@ -164,6 +251,191 @@ def test_stale_mirror_reads_source_and_rejects_stale_source_revision(mirrored_go
             expected_goal_configuration_revision=revision,
         )
     assert (source.read_bytes(), mirror.read_bytes()) == before
+
+
+def test_goal_configuration_rechecks_source_route_inside_write_lock(
+    mirrored_goal,
+    monkeypatch,
+):
+    source_a, mirror, runtime = mirrored_goal
+    source_b = source_a.parents[2] / "project-b" / ".loopx" / "registry.json"
+    source_b.parent.mkdir(parents=True)
+    source_b.write_bytes(source_a.read_bytes())
+    current = read_goal_configuration_with_source_route(
+        registry_path=mirror,
+        goal_id="example",
+        execute=False,
+    )
+    revision = goal_capability_configuration_revision(
+        "example",
+        current["configuration_catalog"]["capability_catalog"],
+    )
+    switched = switch_source_route_after_source_lock(
+        monkeypatch,
+        mirror=mirror,
+        source=source_b,
+    )
+    before_sources = source_a.read_bytes(), source_b.read_bytes()
+
+    with pytest.raises(ValueError) as exc_info:
+        configure_goal_with_global_sync(
+            registry_path=mirror,
+            goal_id="example",
+            runtime_root_override=str(runtime),
+            execute=True,
+            max_children=4,
+            expected_goal_configuration_revision=revision,
+        )
+
+    assert "mirror_bytes" in switched
+    assert (source_a.read_bytes(), source_b.read_bytes()) == before_sources
+    assert mirror.read_bytes() == switched["mirror_bytes"]
+    assert "source route changed; preview again" in str(exc_info.value)
+
+
+def test_goal_configuration_preflights_global_route_before_source_write(
+    mirrored_goal,
+    monkeypatch,
+):
+    source_a, mirror, runtime = mirrored_goal
+    source_b = source_a.parents[2] / "project-b" / ".loopx" / "registry.json"
+    source_b.parent.mkdir(parents=True)
+    source_b.write_bytes(source_a.read_bytes())
+    current = read_goal_configuration_with_source_route(
+        registry_path=source_a,
+        goal_id="example",
+        execute=False,
+    )
+    revision = goal_capability_configuration_revision(
+        "example",
+        current["configuration_catalog"]["capability_catalog"],
+    )
+    switched = switch_source_route_after_source_lock(
+        monkeypatch,
+        mirror=mirror,
+        source=source_b,
+    )
+    before_sources = source_a.read_bytes(), source_b.read_bytes()
+
+    with pytest.raises(ValueError, match="global route collision"):
+        configure_goal_with_global_sync(
+            registry_path=source_a,
+            goal_id="example",
+            runtime_root_override=str(runtime),
+            execute=True,
+            max_children=4,
+            expected_goal_configuration_revision=revision,
+        )
+
+    assert "mirror_bytes" in switched
+    assert (source_a.read_bytes(), source_b.read_bytes()) == before_sources
+    assert mirror.read_bytes() == switched["mirror_bytes"]
+
+
+def test_goal_configuration_reselects_projection_target_inside_write_lock(
+    tmp_path,
+    mirrored_goal,
+    monkeypatch,
+):
+    source, mirror_a, _runtime_a = mirrored_goal
+    runtime_b = tmp_path / "runtime-b"
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_b))
+    current = read_goal_configuration_with_source_route(
+        registry_path=source,
+        goal_id="example",
+        execute=False,
+    )
+    revision = goal_capability_configuration_revision(
+        "example",
+        current["configuration_catalog"]["capability_catalog"],
+    )
+    switched = switch_projection_target_before_candidate_locks(
+        monkeypatch,
+        source=source,
+        target_runtime=runtime_b,
+    )
+
+    applied = configure_goal_with_global_sync(
+        registry_path=source,
+        goal_id="example",
+        runtime_root_override=None,
+        execute=True,
+        max_children=4,
+        expected_goal_configuration_revision=revision,
+    )
+
+    mirror_b = switched["new_target"]
+    assert switched["initial_target"] == str(mirror_a)
+    assert applied["ok"] is True
+    assert applied["global_sync"]["selected_target"]["global_registry"] == str(
+        mirror_b
+    )
+    assert policy(source)["max_children"] == 4
+    assert policy(mirror_a)["max_children"] == 3
+    assert policy(mirror_b)["max_children"] == 4
+
+    retry = configure_goal_with_global_sync(
+        registry_path=source,
+        goal_id="example",
+        runtime_root_override=None,
+        execute=True,
+        max_children=4,
+    )
+
+    assert retry["ok"] is True
+    assert retry["global_sync"]["enabled"] is False
+    assert policy(mirror_b)["max_children"] == 4
+
+
+def test_goal_configuration_locks_source_then_candidates_in_path_order(
+    tmp_path,
+    mirrored_goal,
+    monkeypatch,
+):
+    source, mirror_a, _runtime_a = mirrored_goal
+    runtime_b = tmp_path / "runtime-b"
+    mirror_b = runtime_b / "registry.global.json"
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_b))
+    real_lock = configure_goal_service.exclusive_cross_runtime_file_lock
+    real_transaction = configure_goal_service.project_registry_transaction
+    locked_paths = []
+
+    @contextmanager
+    def recording_transaction(path, **kwargs):
+        locked_paths.append(path)
+        with real_transaction(path, **kwargs) as transaction:
+            yield transaction
+
+    @contextmanager
+    def recording_lock(path, **kwargs):
+        locked_paths.append(path)
+        with real_lock(path, **kwargs) as lock_path:
+            yield lock_path
+
+    monkeypatch.setattr(
+        configure_goal_service,
+        "exclusive_cross_runtime_file_lock",
+        recording_lock,
+    )
+    monkeypatch.setattr(
+        configure_goal_service,
+        "project_registry_transaction",
+        recording_transaction,
+    )
+
+    applied = configure_goal_with_global_sync(
+        registry_path=source,
+        goal_id="example",
+        runtime_root_override=None,
+        execute=True,
+        max_children=4,
+    )
+
+    assert applied["ok"] is True
+    assert locked_paths[0] == source
+    assert locked_paths[1:] == sorted(set(locked_paths[1:]), key=str)
+    assert mirror_a in locked_paths[1:]
+    assert mirror_b in locked_paths[1:]
 
 
 def test_missing_source_never_falls_back_to_writing_mirror(mirrored_goal):
@@ -303,6 +575,72 @@ def test_chat_agent_binding_rejects_equal_peer_set_after_source_route_change(
     assert (source_a.read_bytes(), source_b.read_bytes(), mirror.read_bytes()) == before
 
 
+def test_chat_agent_binding_rechecks_source_route_inside_write_lock(
+    tmp_path,
+    mirrored_goal,
+    monkeypatch,
+):
+    source_a, mirror, _runtime = mirrored_goal
+    source_b = tmp_path / "project-b" / ".loopx" / "registry.json"
+    source_b.parent.mkdir(parents=True)
+    source_b.write_bytes(source_a.read_bytes())
+    service, proposal = preview_agent_binding(tmp_path, mirror)
+    switched = switch_source_route_after_source_lock(
+        monkeypatch,
+        mirror=mirror,
+        source=source_b,
+    )
+    before_sources = source_a.read_bytes(), source_b.read_bytes()
+
+    stale = service.apply(proposal["proposal_id"])["proposal"]
+
+    assert "mirror_bytes" in switched
+    assert stale["status"] == "stale"
+    assert stale["receipt"] is None
+    assert (source_a.read_bytes(), source_b.read_bytes()) == before_sources
+    assert mirror.read_bytes() == switched["mirror_bytes"]
+
+
+def test_chat_agent_binding_reselects_projection_target_inside_write_lock(
+    tmp_path,
+    mirrored_goal,
+    monkeypatch,
+):
+    source, mirror_a, _runtime_a = mirrored_goal
+    runtime_b = tmp_path / "runtime-b"
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_b))
+    service, proposal = preview_agent_binding(tmp_path, mirror_a)
+    switched = switch_projection_target_before_candidate_locks(
+        monkeypatch,
+        source=source,
+        target_runtime=runtime_b,
+    )
+
+    applied = service.apply(proposal["proposal_id"])["proposal"]
+
+    mirror_b = switched["new_target"]
+    assert switched["initial_target"] == str(mirror_a)
+    assert applied["status"] == "applied"
+    assert applied["receipt"]["outcome"] == "agent_bound"
+    assert registered_agents(source) == ["agent-a", "agent-b"]
+    assert registered_agents(mirror_a) == ["agent-a"]
+    assert registered_agents(mirror_b) == ["agent-a", "agent-b"]
+
+    mirror_b_payload = json.loads(mirror_b.read_text())
+    mirror_b_payload["goals"][0]["coordination"]["registered_agents"] = ["agent-a"]
+    mirror_b.write_text(json.dumps(mirror_b_payload))
+    retry_service, retry_proposal = preview_agent_binding(
+        tmp_path / "retry",
+        mirror_a,
+    )
+
+    recovered = retry_service.apply(retry_proposal["proposal_id"])["proposal"]
+
+    assert recovered["status"] == "applied"
+    assert recovered["receipt"]["outcome"] == "agent_already_bound"
+    assert registered_agents(mirror_b) == ["agent-a", "agent-b"]
+
+
 def test_chat_agent_binding_does_not_recover_across_source_route_change(
     tmp_path, mirrored_goal
 ):
@@ -352,3 +690,87 @@ def test_chat_agent_binding_recovers_after_receipt_loss(
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "agent_already_bound"
     assert registered_agents(mirror) == ["agent-a", "agent-b"]
+
+
+@pytest.fixture
+def single_runtime_goal(tmp_path, monkeypatch):
+    """A source registry that is itself the route's global registry."""
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime))
+    registry = runtime / "registry.global.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {
+                        "id": "example",
+                        "repo": str(tmp_path / "project"),
+                        "status": "active",
+                        "coordination": {"registered_agents": ["agent-a"]},
+                        "spawn_policy": {
+                            "mode": "default",
+                            "allowed": False,
+                            "max_children": 3,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    return registry, runtime
+
+
+def test_single_runtime_configure_keeps_the_source_write(single_runtime_goal):
+    registry, _runtime = single_runtime_goal
+
+    applied = configure_goal_with_global_sync(
+        registry_path=registry,
+        goal_id="example",
+        runtime_root_override=None,
+        execute=True,
+        max_children=4,
+    )
+
+    assert applied["ok"] is True
+    assert applied["written"] is True
+    assert policy(registry)["max_children"] == 4
+    global_sync = applied["global_sync"]
+    assert global_sync["target_resolution"]["status"] == "single_runtime"
+    assert global_sync["sync"]["skipped"] is True
+    assert global_sync["readback"]["verified"] is True
+
+
+def test_single_runtime_agent_binding_keeps_the_source_write(single_runtime_goal):
+    registry, _runtime = single_runtime_goal
+
+    applied = bind_goal_agent_with_global_sync(
+        registry_path=registry,
+        goal_id="example",
+        agent_id="agent-b",
+        execute=True,
+    )
+
+    assert applied["ok"] is True
+    assert applied["written"] is True
+    assert applied["projection_verified"] is True
+    assert registered_agents(registry) == ["agent-a", "agent-b"]
+
+
+def test_single_runtime_standalone_sync_skips_without_lock_wait(single_runtime_goal):
+    registry, _runtime = single_runtime_goal
+
+    payload = sync_project_registry_to_global(
+        registry_path=registry,
+        runtime_root_override=None,
+        goal_id="example",
+        dry_run=False,
+    )
+
+    assert payload["ok"] is True
+    assert payload["skipped"] is True
+    assert payload["reason"] == "source registry is already the global registry"
+    assert policy(registry)["max_children"] == 3

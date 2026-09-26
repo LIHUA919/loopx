@@ -8,7 +8,7 @@ from typing import Any
 INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
     "compact": 6_500,
-    "brief": 3_500,
+    "brief": 4_300,
     "thin": 2_500,
     "visible_goal": 4_000,
 }

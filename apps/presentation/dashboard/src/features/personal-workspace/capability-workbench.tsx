@@ -50,6 +50,7 @@ export function CapabilityEditorStatus({ available, description, t }: Readonly<{
 }
 
 function capabilityPresentationTier(capability: CapabilityDescriptor) {
+  if (capability.availability === "retired") return 5;
   if (capability.availability?.includes("experimental")) return 4;
   if (capability.capability_id === "multi_subagent") return 3;
   if (capability.configuration_editor.writable_scopes.length === 0) return 2;

@@ -8,7 +8,10 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, single_snapshot_page
+from canonical_authority_fixture import (
+    initialize_canonical_authority, single_snapshot_page,
+    promoted_create_fixture as _promoted_create_fixture,
+)
 
 from loopx.control_plane.coordination import local_authority as local_authority_module
 from loopx.control_plane.coordination.coordination_state_contract import (
@@ -196,7 +199,8 @@ def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
     _engage_fence(tmp_path)
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _claim(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _claim(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "applied",
@@ -263,7 +267,8 @@ def test_promoted_add_invokes_native_create_without_markdown_state(
         lambda **_kwargs: {"todos": []},
     )
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         todo = params["todo"]
         assert isinstance(todo, dict)
@@ -329,7 +334,8 @@ def test_promoted_add_delegates_semantic_duplicate_to_typescript(
     )
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "no_change",
@@ -370,47 +376,6 @@ def test_promoted_add_delegates_semantic_duplicate_to_typescript(
     assert result["todo_id"] == "todo_existing"
     assert calls[0][0] == "coordination.local_authority.todo_create"
 
-
-def _promoted_create_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
-    runtime_root = tmp_path / "runtime"
-    project = tmp_path / "project"
-    state_file = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
-    state_file.parent.mkdir(parents=True)
-    state_file.write_text(
-        "# Goal\n\n## User Todo / Owner Review Reading Queue\n\n"
-        "## Agent Todo\n\n## Completed Work Archive\n",
-        encoding="utf-8",
-    )
-    registry_path = tmp_path / "registry.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "common_runtime_root": str(runtime_root),
-                "goals": [
-                    {
-                        "id": "goal-a",
-                        "repo": str(project),
-                        "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
-                        "coordination": {"registered_agents": ["agent-a"]},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    projection = build_todo_runtime_shadow_projection(
-        goal_id="goal-a", todos=[], handoff_mode="soft_claim"
-    )
-    projection["todo_read_model"] = {
-        **projection["todo_read_model"],
-        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
-    }
-    initialize_canonical_authority(
-        runtime_root, "goal-a", projection, state_path=state_file
-    )
-    return registry_path, runtime_root, state_file
 
 
 def test_rejected_validated_create_publishes_no_private_sidecar(
@@ -1035,7 +1000,7 @@ def test_promoted_claim_protocol_failure_stays_infrastructure_outage(
     _engage_fence(tmp_path)
     monkeypatch.setattr(
         "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params: {
+        lambda method, params, **_kwargs: {
             "status": "failed",
             "reason_code": "invalid_local_coordination_todo_claim_request",
             "reason": "registered_agents must be a JSON array",

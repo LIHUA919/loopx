@@ -12,6 +12,8 @@ from loopx.control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
 )
 from loopx.chat_goal_subagent_api import GoalSubagentConfigurationRequestMixin
+from loopx.file_lock import exclusive_cross_runtime_file_lock
+from loopx.paths import global_registry_path
 
 
 def _apply(home: Path, required: int) -> dict:
@@ -283,6 +285,72 @@ def test_goal_apply_and_host_alignment_share_one_preview_locked_receipt(
     assert settled["changed"] is False
     assert settled["goal_configuration_changed"] is False
     assert settled["codex_host_capacity"]["status"] == "explicit_sufficient"
+
+
+def test_goal_apply_releases_projection_lock_before_host_alignment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    registry = tmp_path / "project" / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True)
+    runtime = tmp_path / "shared-runtime"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(tmp_path / "source-runtime"),
+                "goals": [
+                    {
+                        "id": "capacity-goal",
+                        "repo": str(tmp_path / "project"),
+                        "status": "active",
+                        "spawn_policy": {
+                            "allowed": False,
+                            "max_children": 0,
+                            "mode": "default",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    def apply_after_projection_lock(
+        required_children: int,
+        *,
+        expected_source_sha256: str,
+        home: Path | None,
+    ) -> dict:
+        with exclusive_cross_runtime_file_lock(
+            global_registry_path(runtime),
+            timeout_seconds=0.05,
+            operation="test_host_alignment_after_projection",
+        ):
+            return apply_codex_subagent_capacity(
+                required_children,
+                expected_source_sha256=expected_source_sha256,
+                home=home,
+            )
+
+    applied = configure_goal_with_global_sync(
+        registry_path=registry,
+        goal_id="capacity-goal",
+        runtime_root_override=str(runtime),
+        multi_subagent_feature="enabled",
+        max_children=6,
+        align_codex_subagent_capacity=True,
+        codex_host_capacity_planner=plan_codex_subagent_capacity,
+        codex_host_capacity_applier=apply_after_projection_lock,
+        execute=True,
+    )
+
+    assert applied["ok"] is True
+    assert applied["codex_host_capacity"]["readback_verified"] is True
 
 
 def test_host_failure_after_goal_write_returns_truthful_partial_receipt(

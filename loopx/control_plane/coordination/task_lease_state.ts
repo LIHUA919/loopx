@@ -5,11 +5,11 @@ import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {normalizeTodoAgent} from "./todo_agents.ts";
 import {leaseOwnerRejection} from "../work_items/task_lease_eligibility.ts";
 import {leaseVersion, leaseEpoch, leaseInteger, leaseIsActive, normalizeOwner,
-  normalizeIdempotencyKey, type LeaseRecord, type TodoFact} from "../work_items/task_lease_acquire.ts";
+  normalizeIdempotencyKey, TASK_LEASE_SCHEMA_VERSION, type LeaseRecord, type TodoFact} from "../work_items/task_lease_acquire.ts";
 import type {AcquireDecisionInput} from "../work_items/task_lease_acquire_decision.ts";
 
 export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: string): LeaseRecord {
-  if ((value.schema_version !== undefined && value.schema_version !== "task_lease_v0") ||
+  if ((value.schema_version !== undefined && value.schema_version !== TASK_LEASE_SCHEMA_VERSION) ||
       (value.goal_id !== undefined && value.goal_id !== goalId) || value.todo_id !== todoId ||
       (value.status !== "active" && value.status !== "released")) {
     throw new AuthorityStoreProtocolError("canonical lease identity or schema is invalid");
@@ -23,7 +23,9 @@ export function canonicalTaskLease(value: JsonObject, goalId: string, todoId: st
       value.write_scopes.some(scope => typeof scope !== "string"))) {
     throw new AuthorityStoreProtocolError("canonical lease write_scopes must be strings");
   }
-  return value;
+  // Older canonical records may omit the wire tag. Normalize once before
+  // shared lease rules inspect it, without rewriting the persisted record.
+  return {...value, schema_version: TASK_LEASE_SCHEMA_VERSION};
 }
 
 export function canonicalLeaseTodoFact(todo: JsonObject | undefined): TodoFact | null {

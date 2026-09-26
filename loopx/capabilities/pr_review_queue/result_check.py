@@ -8,6 +8,7 @@ from .review_contract import (
     OUTCOME_IMPACT_ASSESSMENT,
     SCOPE_COVERAGE_ASSESSMENT,
     SEMANTIC_CANDIDATE_DECISIONS,
+    VALIDATION_FAILURE_ATTRIBUTION,
     build_review_execution_contract,
     build_review_plan,
 )
@@ -95,6 +96,61 @@ def _required_validation_case_ids(
         ):
             required.add(case_id)
     return required
+
+
+def _check_validation_failures(
+    blockers: list[str], items: list[Mapping[str, Any]],
+) -> None:
+    """Separate review causality from the merge gate's red-check observation."""
+
+    for item in items:
+        case_id = str(item.get("case_id") or "unknown")
+        key = f"validation_matrix:{case_id}"
+        status = item.get("status")
+        if not isinstance(status, str) or status not in {
+            "passed", "failed", "skipped", "pending", "unverified", "not_applicable",
+        }:
+            blockers.append(f"{key}:invalid_status")
+        if type(item.get("required")) is not bool:
+            blockers.append(f"{key}:required_not_boolean")
+        if not isinstance(status, str):
+            continue
+        if item.get("required") is not True or status == "passed":
+            continue
+        if status in {"pending", "unverified", "not_applicable"}:
+            blockers.append(f"{key}:required_validation_not_proven")
+            continue
+        attribution = item.get("failure_attribution")
+        if not isinstance(attribution, Mapping):
+            blockers.append(f"{key}:failure_attribution_missing")
+            continue
+        disposition = attribution.get("disposition")
+        if disposition not in VALIDATION_FAILURE_ATTRIBUTION["dispositions"]:
+            blockers.append(f"{key}:invalid_failure_disposition")
+            continue
+        if disposition not in VALIDATION_FAILURE_ATTRIBUTION["non_blocking_dispositions"]:
+            blockers.append(f"{key}:attributable_or_unresolved_failure")
+            continue
+        _require_fields(
+            blockers, evidence_id=key, value=attribution,
+            fields=VALIDATION_FAILURE_ATTRIBUTION["common_fields"],
+        )
+        if disposition == "pre_existing_unrelated":
+            _require_fields(
+                blockers, evidence_id=key, value=attribution,
+                fields=VALIDATION_FAILURE_ATTRIBUTION["pre_existing_fields"],
+            )
+            baseline = attribution.get("baseline_failure_signature")
+            head = attribution.get("head_failure_signature")
+            if not isinstance(baseline, str) or not baseline.strip() or baseline != head:
+                blockers.append(f"{key}:failure_signature_changed")
+            if attribution.get("base_revision") == attribution.get("head_revision"):
+                blockers.append(f"{key}:base_and_head_not_distinct")
+        else:
+            _require_fields(
+                blockers, evidence_id=key, value=attribution,
+                fields=VALIDATION_FAILURE_ATTRIBUTION["external_fields"],
+            )
 
 
 def _check_compatibility_assessment(blockers: list[str], value: object) -> None:
@@ -286,6 +342,8 @@ def check_review_result(
                 row=row,
                 requirement=requirement,
             )
+            if key == "validation_matrix":
+                _check_validation_failures(blockers, items)
             positive_field = requirement.get("positive_field")
             if isinstance(positive_field, str):
                 _require_fields(
@@ -350,6 +408,8 @@ def check_review_result(
         errors.append("unsupported_verdict")
     if verdict == "APPROVE" and blockers:
         errors.append("approval_contradicts_evidence")
+    if verdict == "REQUEST_CHANGES" and not blockers:
+        errors.append("request_changes_without_blocker")
     return {
         "ok": not errors,
         "schema_version": "pull_request_review_result_check_v0",

@@ -11,7 +11,6 @@ from ..control_plane.quota.error_codes import (
     QuotaActionSelectionConflictKind,
 )
 from ..control_plane.quota.heartbeat_receipt import (
-    HEARTBEAT_RECEIPT_SCHEMA_VERSION,
     find_heartbeat_receipt,
     heartbeat_receipt_pending_action_todo_id,
     heartbeat_receipt_settlement_replan_obligation_id,
@@ -280,24 +279,6 @@ def reconcile_requested_quota_action_selection(
         receipt_status=receipt_status,
         receipt_appended=receipt_appended,
     )
-
-
-def attach_uncommitted_action_selection_receipt(
-    payload: dict[str, object],
-    *,
-    turn_instance_id: str,
-) -> None:
-    """Expose an accurate non-durable receipt for a rejected preflight."""
-
-    payload["heartbeat_receipt"] = {
-        "schema_version": HEARTBEAT_RECEIPT_SCHEMA_VERSION,
-        "turn_instance_id": turn_instance_id,
-        "status": "not_committed",
-        "stall_observation": "not_evaluated",
-        "reason_code": str(
-            payload.get("error_code") or "quota_action_selection_rejected"
-        ),
-    }
 
 
 def commit_requested_action_selection(

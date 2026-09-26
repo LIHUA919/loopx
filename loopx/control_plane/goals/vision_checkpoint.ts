@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { isBoundedBlockedRetry } from "../quota/blocked_retry.ts";
+import { isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,

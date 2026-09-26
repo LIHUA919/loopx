@@ -1,4 +1,4 @@
-"""Use the installed CLI transport and real local stores through cutover and recovery."""
+"""Real public CLI cutover, registration drift and receipt recovery on local stores."""
 
 from __future__ import annotations
 
@@ -9,29 +9,17 @@ import subprocess
 
 import pytest
 
-from tests.control_plane.test_local_authority_shadow_cli_e2e import (
-    _workspace,
-    _cli,
-    _command,
-    _env,
-    REPO_ROOT,
-)
+from tests.control_plane.shadow_e2e_fixture import REPO, workspace
 
 
-def command_result(registry, root, *args):
-    process = subprocess.run(
-        _command(registry, root, *args),
-        cwd=REPO_ROOT,
-        env=_env(),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    return process.returncode, json.loads(process.stdout)
-
-
-def prepare(tmp_path: Path, provider: str):
-    registry, state, root = _workspace(tmp_path, goal_id="goal-a")
+def prepare(tmp_path: Path, provider: str, strategy: str | None = None):
+    ws = workspace(tmp_path, bootstrap=False)
+    if strategy is not None:
+        ws.state.write_text(
+            ws.state.read_text().replace(
+                "handoff_mode: hard_lease", "handoff_mode: legacy"
+            )
+        )
     if provider == "sqlite":
         subprocess.run(
             [
@@ -41,105 +29,61 @@ def prepare(tmp_path: Path, provider: str):
                 "--experimental-sqlite",
                 "loopx/control_plane/coordination/local_authority_provider.ts",
                 "--runtime-root",
-                str(root),
+                str(ws.runtime),
                 "--goal-id",
-                "goal-a",
+                ws.goal,
                 "--execute",
             ],
-            cwd=REPO_ROOT,
+            cwd=REPO,
             check=True,
             capture_output=True,
             text=True,
         )
-    _cli(
-        registry,
-        root,
-        "configure-goal",
-        "--goal-id",
-        "goal-a",
-        "--coordination-runtime-shadow-file",
-        "--execute",
+    assert (
+        ws.cli("coordination-shadow", "bootstrap", "--execute")["bootstrap"]["status"]
+        == "applied"
     )
-    bootstrap = _cli(
-        registry,
-        root,
-        "coordination-shadow",
-        "bootstrap",
-        "--goal-id",
-        "goal-a",
-        "--execute",
-    )
-    assert bootstrap["bootstrap"]["status"] == "applied"
     for index in range(3):
-        _cli(
-            registry,
-            root,
-            "todo",
-            "add",
-            "--goal-id",
-            "goal-a",
-            "--role",
-            "agent",
-            "--text",
-            f"Preserve migration record {index}",
-        )
-    preview = _cli(
-        registry, root, "coordination-shadow", "promote", "--goal-id", "goal-a"
-    )
+        ws.add(f"Preserve migration record {index}")
+    drained = ws.drain(budget_seconds="60")
+    assert drained["ok"] is True, drained
+    arguments = () if strategy is None else ("--handoff-mode-migration", strategy)
+    preview = ws.cli("coordination-shadow", "promote", *arguments)
     assert preview["promotion"]["status"] == "preview_ready", preview
     saved = tmp_path / "reviewed.json"
     saved.write_text(json.dumps(preview), encoding="utf-8")
-    return registry, state, root, saved, preview
+    return ws, saved, preview
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("strategy", [None, "preserve", "hard_lease"])
 def test_saved_plan_cutover_and_recovery_after_canonical_write_and_missing_legacy(
-    tmp_path, provider
+    tmp_path, provider, strategy
 ):
-    registry, state, root, saved, preview = prepare(tmp_path, provider)
-    args = (
-        "coordination-shadow",
-        "promote",
-        "--goal-id",
-        "goal-a",
-        "--reviewed-plan",
-        str(saved),
-    )
-    dry_run = _cli(registry, root, *args)
+    ws, saved, preview = prepare(tmp_path, provider, strategy)
+    arguments = ("coordination-shadow", "promote", "--reviewed-plan", str(saved))
+    dry_run = ws.cli(*arguments)
     assert dry_run["promotion"]["status"] == "preview_ready"
     assert dry_run["executed"] is False
-    applied = _cli(registry, root, *args, "--execute")
+    applied = ws.cli(*arguments, "--execute")
     assert applied["promotion"]["status"] == "applied", applied
     assert applied["promotion"]["canonical_authority"] == f"{provider}_v0"
     assert (
         applied["promotion"]["promotion_plan_sha256"]
         == preview["promotion"]["plan"]["promotion_plan_sha256"]
     )
-    _cli(
-        registry,
-        root,
-        "todo",
-        "add",
-        "--goal-id",
-        "goal-a",
-        "--role",
-        "agent",
-        "--text",
-        "Continue after provider cutover",
-    )
-    state.unlink()
-    # Recovery belongs to the durable cutover, not the transient shadow opt-in.
-    config = json.loads(registry.read_text())
+    created = ws.add("Continue after provider cutover")
+    readback = ws.cli("todo", "list", "--todo-id", created["todo_id"])
+    assert readback["authority_read"]["source_authority"] == f"{provider}_v0"
+    ws.state.unlink()
+    # Recovery follows durable proof, not a fresh source or shadow opt-in.
+    config = json.loads(ws.registry.read_text())
     config["goals"][0]["coordination"].pop("runtime_shadow", None)
-    registry.write_text(json.dumps(config))
+    ws.registry.write_text(json.dumps(config))
     for execution in [(), ("--execute",)]:
-        replay = _cli(
-            registry,
-            root,
+        replay = ws.cli(
             "coordination-shadow",
             "recover-promotion",
-            "--goal-id",
-            "goal-a",
             "--reviewed-plan",
             str(saved),
             *execution,
@@ -151,80 +95,67 @@ def test_saved_plan_cutover_and_recovery_after_canonical_write_and_missing_legac
             == applied["promotion"]["provider_revision"]
         )
         assert replay["executed"] is False
-        assert not state.exists()
+        assert not ws.state.exists()
 
 
 def test_saved_plan_source_drift_does_not_freeze_legacy_writes(tmp_path):
-    registry, _state, root, saved, _preview = prepare(tmp_path, "file")
-    _cli(
-        registry,
-        root,
-        "todo",
-        "add",
-        "--goal-id",
-        "goal-a",
-        "--role",
-        "agent",
-        "--text",
-        "New work before cutover",
-    )
-    code, result = command_result(
-        registry,
-        root,
+    ws, saved, _ = prepare(tmp_path, "file")
+    ws.add("New work before cutover")
+    result = ws.cli(
         "coordination-shadow",
         "promote",
-        "--goal-id",
-        "goal-a",
         "--reviewed-plan",
         str(saved),
         "--execute",
+        success=False,
     )
-    assert code == 1
+    assert result["ok"] is False
     assert result["promotion"]["reason_code"] == "local_authority_reviewed_plan_changed"
     assert result["promotion"]["legacy_writer_fenced"] is False
-    _cli(
-        registry,
-        root,
-        "todo",
-        "add",
-        "--goal-id",
-        "goal-a",
-        "--role",
-        "agent",
-        "--text",
-        "Legacy writer remains usable",
-    )
+    assert ws.add("Legacy writer remains usable")["ok"] is True
 
 
 def test_saved_plan_rejects_policy_override_and_recovery_without_fence(tmp_path):
-    registry, _state, root, saved, _preview = prepare(tmp_path, "file")
-    code, result = command_result(
-        registry,
-        root,
+    ws, saved, _ = prepare(tmp_path, "file")
+    result = ws.cli(
         "coordination-shadow",
         "promote",
-        "--goal-id",
-        "goal-a",
         "--reviewed-plan",
         str(saved),
         "--minimum-operations",
         "1",
         "--execute",
+        success=False,
     )
-    assert code == 1 and "owns qualification policy" in result["error"]
-    code, result = command_result(
-        registry,
-        root,
+    assert result["ok"] is False and "owns qualification policy" in result["error"]
+    result = ws.cli(
         "coordination-shadow",
         "recover-promotion",
-        "--goal-id",
-        "goal-a",
         "--reviewed-plan",
         str(saved),
         "--execute",
+        success=False,
     )
-    assert code == 1
+    assert result["ok"] is False
     assert (
         result["promotion"]["reason_code"]
         == "local_authority_writer_fence_not_verified"
     )
+
+
+def test_saved_plan_rechecks_current_registered_agents(tmp_path):
+    ws, saved, _ = prepare(tmp_path, "file", "preserve")
+    registry = json.loads(ws.registry.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"].remove("agent-b")
+    ws.registry.write_text(json.dumps(registry))
+    result = ws.cli(
+        "coordination-shadow",
+        "promote",
+        "--reviewed-plan",
+        str(saved),
+        "--execute",
+        success=False,
+    )
+    assert result["ok"] is False
+    assert result["promotion"]["reason_code"] == "promotion_registration_changed_retry"
+    assert result["promotion"]["legacy_writer_fenced"] is False

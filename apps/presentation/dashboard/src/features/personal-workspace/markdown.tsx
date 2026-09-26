@@ -4,8 +4,8 @@ import { Fragment, type ReactNode } from "react";
  * Minimal, safe Markdown renderer for visible Agent prose.
  * Builds React nodes directly (no dangerouslySetInnerHTML), so raw HTML in
  * model output renders as inert text. Supports the subset LoopX Agents
- * actually emit in chat: fenced code, inline code, bold, links, headings,
- * and ordered/unordered lists.
+ * actually emit in chat and reports: fenced code, inline code, bold, links,
+ * headings, ordered/unordered lists and tables.
  */
 
 const INLINE_PATTERN = /(`[^`\n]+`)|(\*\*[^*\n]+(\*[^*\n]*)?\*\*)|(\[[^\]\n]{1,120}\]\(https?:\/\/[^)\s]+\))/g;
@@ -49,7 +49,7 @@ function tableCells(line: string) {
   return line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, "|"));
 }
 
-function parseBlocks(text: string, report: boolean): Block[] {
+function parseBlocks(text: string): Block[] {
   const lines = text.split("\n");
   const blocks: Block[] = [];
   let paragraph: string[] = [];
@@ -83,8 +83,7 @@ function parseBlocks(text: string, report: boolean): Block[] {
       i += 1;
       continue;
     }
-    // Report tables are opt-in; ordinary chat keeps its existing rendering.
-    if (report && line.includes("|") && i + 1 < lines.length) {
+    if (line.includes("|") && i + 1 < lines.length) {
       const headers = tableCells(line), separators = tableCells(lines[i + 1]);
       if (headers.length === separators.length && separators.every(cell => /^:?-{3,}:?$/.test(cell))) {
         flushParagraph();
@@ -125,10 +124,10 @@ function parseBlocks(text: string, report: boolean): Block[] {
   return blocks;
 }
 
-export function MarkdownText({ text, report = false }: { text: string; report?: boolean }) {
+export function MarkdownText({ text }: { text: string }) {
   return (
     <div className="personal-md">
-      {parseBlocks(text, report).map((block, index) => {
+      {parseBlocks(text).map((block, index) => {
         const key = `b${index}`;
         if (block.type === "code") {
           return <pre className="personal-md-pre" key={key}><code>{block.text}</code></pre>;

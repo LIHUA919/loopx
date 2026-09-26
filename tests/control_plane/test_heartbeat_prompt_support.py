@@ -91,7 +91,7 @@ def test_heartbeat_envelope_and_body_overflow_are_both_rejected() -> None:
     # Check the envelope boundary independently of the real prompt's remaining
     # headroom: adding a metadata key can already put a valid prompt over budget.
     envelope = {"interface_budget": payload["interface_budget"], "extra": ""}
-    envelope["extra"] = "x" * (4800 - smoke["json_size"](envelope))
+    envelope["extra"] = "x" * (5400 - smoke["json_size"](envelope))
     check("heartbeat_prompt_json", envelope)
     envelope["extra"] += "x"
     with pytest.raises(AssertionError):
@@ -173,7 +173,7 @@ def test_public_facade_still_builds_and_renders_prompts() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12000), ("compact", 6500), ("brief", 3500), ("thin", 2500)],
+    [("full", 12000), ("compact", 6500), ("brief", 4300), ("thin", 2500)],
 )
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
     mode: str, base_budget: int

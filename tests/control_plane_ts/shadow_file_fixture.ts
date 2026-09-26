@@ -29,6 +29,15 @@ export function projection(todos: JsonObject[] = [], leases: JsonObject[] = [], 
 }
 export interface ShadowFixture { root: string; statePath: string; store: FileAuthorityStore; baseline: JsonObject }
 export async function sourceRequest(f: ShadowFixture, head: JsonObject): Promise<JsonObject> {
+  const registryPath = join(f.root, "registry.json");
+  let registryBytes: Buffer;
+  try { registryBytes = await readFile(registryPath); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    registryBytes = Buffer.from(JSON.stringify({goals: [{id: "goal-a", coordination: {registered_agents: ["agent-a", "agent-b"]}}]}));
+    await writeFile(registryPath, registryBytes);
+  }
+  const agents = JSON.parse(registryBytes.toString("utf8")).goals[0].coordination.registered_agents;
   const directory = join(f.root, "goals", "goal-a", "task-leases");
   let names: string[];
   try { names = (await readdir(directory)).filter((name) => /^[A-Za-z0-9_.-]+\.json$/.test(name)).sort(); } catch { names = []; }
@@ -37,7 +46,8 @@ export async function sourceRequest(f: ShadowFixture, head: JsonObject): Promise
   return { runtime_root: f.root, goal_id: "goal-a", projection: head,
     source_snapshot: { state_path: f.statePath, registered_runtime_root: f.root, registered_state_path: f.statePath,
       state_bytes_sha256: sha(await readFile(f.statePath)),
-      lease_inventory: inventory, projection_sha256: canonicalAuthoritySha256(head), evidence_files: [] } };
+      lease_inventory: inventory, projection_sha256: canonicalAuthoritySha256(head), evidence_files: [], registry_source: {path: registryPath,
+        sha256: sha(registryBytes).slice(7), registered_agents: agents} } };
 }
 export async function fixture(t: TestContext): Promise<ShadowFixture> {
   const root = await mkdtemp(join(tmpdir(), "loopx-file-outbox-test-"));

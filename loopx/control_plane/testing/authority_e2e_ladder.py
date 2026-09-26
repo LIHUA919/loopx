@@ -34,22 +34,15 @@ from .authority_e2e_row_support import (
     RowOutcome,
     acquire_lease,
     add_todo,
-    committed_observation,
     expect,
     passed,
     sha256_hex,
     unverified,
 )
-from .authority_e2e_rows_stage2c import (
-    row_candidate_failure_preserves_primary,
-    row_configure_enable_disable_roundtrip,
-    row_crash_gap_loses_observation,
-    row_default_off_isolation,
-    row_dual_runtime_root_consistency,
-    row_every_writer_family_captures,
-    row_migration_seeds_new_lineage,
-)
+from .authority_e2e_rows_stage2c import row_retired_observation_upgrade
 from .authority_e2e_rows_stage2c2 import (
+    capture_workspace,
+    delivered,
     row_archive_after_leased_completion_parity,
     row_drain_idempotent,
     row_event_only_todo_source_holds,
@@ -67,8 +60,6 @@ from .authority_e2e_fixtures import (
     CliOutputError,
     TS_READBACK_PROBE,
     JsonObject,
-    build_goal_workspace,
-    candidate_document,
     node_executable,
     parse_json_object,
     run_cli,
@@ -85,7 +76,6 @@ GATES: tuple[str, ...] = (
     "deterministic",
     "env:postgresql",
     "env:nokv_authority",
-    "env:nokv_legacy",
 )
 ROW_STATUSES: tuple[str, ...] = ("pass", "fail", "unverified")
 EXIT_POLICY_RULE = (
@@ -94,18 +84,6 @@ EXIT_POLICY_RULE = (
 )
 
 POSTGRES_URL_VARIABLE = "LOOPX_TEST_POSTGRES_URL"
-NOKV_LIVE_FLAG = "NOKV_COORDINATION_LIVE"
-NOKV_STACK_VARIABLES: tuple[str, ...] = (
-    "NOKV_ETCD",
-    "NOKV_ETCD_PREFIX",
-    "NOKV_ROOT_ID",
-    "NOKV_BUCKET",
-    "NOKV_OBJECT_ENDPOINT",
-    "NOKV_OBJECT_ROOT",
-    "NOKV_OBJECT_KEY",
-    "NOKV_OBJECT_SECRET",
-)
-NOKV_SECRET_VARIABLES: tuple[str, ...] = ("NOKV_OBJECT_KEY", "NOKV_OBJECT_SECRET")
 # Stage 2A qualification inputs: the probe writes durable test data into an
 # existing workbench, so it needs an explicit opt-in flag plus the ignored
 # client configuration file, the Python executable that resolves the qualified
@@ -119,20 +97,21 @@ NOKV_AUTHORITY_VARIABLES: tuple[str, ...] = (
     NOKV_AUTHORITY_PYTHON_VARIABLE,
     NOKV_AUTHORITY_WORKBENCH_VARIABLE,
 )
-LIVE_OPT_IN_FLAGS: tuple[str, ...] = (NOKV_LIVE_FLAG, NOKV_AUTHORITY_LIVE_FLAG)
+LIVE_OPT_IN_FLAGS: tuple[str, ...] = (NOKV_AUTHORITY_LIVE_FLAG,)
 GATE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "deterministic": (),
     "env:postgresql": (POSTGRES_URL_VARIABLE,),
     "env:nokv_authority": (NOKV_AUTHORITY_LIVE_FLAG, *NOKV_AUTHORITY_VARIABLES),
-    "env:nokv_legacy": (NOKV_LIVE_FLAG, *NOKV_STACK_VARIABLES),
 }
 GATE_UNVERIFIED_REASON: dict[str, str] = {
     "env:postgresql": "postgres_url_missing",
     "env:nokv_authority": "nokv_authority_env_missing",
-    "env:nokv_legacy": "nokv_live_env_missing",
 }
 
-LIVE_E2E_SCRIPT = Path("examples") / "nokv-shadow-provider" / "live_e2e.py"
+LOCAL_CONFORMANCE_TESTS = {
+    "file": Path("tests/control_plane_ts/authority_store.test.ts"),
+    "sqlite": Path("tests/control_plane_ts/sqlite_authority_store.test.ts"),
+}
 PG_INTEGRATION_TEST = (
     Path("tests") / "control_plane_ts" / "postgresql_authority_store.integration.test.ts"
 )
@@ -149,7 +128,8 @@ NOKV_INCARNATION_FENCE_CHECKS: tuple[str, ...] = (
     "stale_incarnation_fence_left_generation_unchanged",
 )
 PROBE_SOURCES: tuple[Path, ...] = (
-    LIVE_E2E_SCRIPT,
+    *LOCAL_CONFORMANCE_TESTS.values(),
+    Path("tests/control_plane_ts/authority_store_conformance.ts"),
     TS_READBACK_PROBE,
     PG_INTEGRATION_TEST,
     NOKV_QUALIFICATION_SCRIPT,
@@ -160,21 +140,6 @@ PROBE_SOURCES: tuple[Path, ...] = (
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_rows_stage2c.py",
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_rows_stage2c2.py",
 )
-FILE_MATRIX_ROWS: tuple[str, ...] = (
-    "same_todo_one_winner",
-    "independent_todo_applies",
-    "replay_returns_original_receipt",
-    "identity_mismatch_rejected",
-    "stale_revision_conflicts",
-    "lost_response_recovers_receipt",
-    "receipts_retained",
-    "authority_revision_advanced_twice",
-    "renew_extends_the_active_lease",
-    "expired_lease_reclaimed_with_new_epoch",
-    "superseded_executor_cannot_write_back",
-    "complete_creates_claimable_successor_atomically",
-)
-NOKV_ONLY_MATRIX_ROW = "restored_lineage_fails_closed"
 MINIMUM_POSTGRES_TAP_PASSES = 9
 @dataclass(frozen=True)
 class LadderRow:
@@ -242,73 +207,38 @@ class RowResult:
         }
 
 
-def _run_live_matrix_script(environ: Mapping[str, str], *, live: bool) -> JsonObject:
-    env = dict(environ)
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    if not live:
-        env.pop(NOKV_LIVE_FLAG, None)
-    completed = subprocess.run(
-        [sys.executable, str(REPO_ROOT / LIVE_E2E_SCRIPT)],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+# ---------------------------------------------------------------------------
+# Stage 0: current native local providers, not the retired Python head prototype
+# ---------------------------------------------------------------------------
+
+
+def _row_local_conformance(context: RowContext, provider: str) -> RowOutcome:
+    node = node_executable()
+    if node is None:
+        return unverified("node_missing")
+    suite = LOCAL_CONFORMANCE_TESTS[provider]
+    if not (REPO_ROOT / suite).is_file():
+        return unverified("local_conformance_suite_missing")
+    summary = tap_summary(
+        [node, "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+         "--test", "--test-reporter=tap", str(suite)],
+        env=context.environ,
         timeout=900,
-        check=False,
     )
-    matrix = parse_json_object(completed.stdout)
-    matrix["_exit_code"] = completed.returncode
-    return matrix
-
-
-def _matrix_rows(matrix: Mapping[str, object], key: str) -> dict[str, object]:
-    rows = matrix.get(key)
-    expect(isinstance(rows, dict), f"live matrix must report {key}")
-    assert isinstance(rows, dict)
-    return {str(name): value for name, value in rows.items()}
-
-
-def _false_rows(rows: Mapping[str, object]) -> list[str]:
-    return sorted(name for name, value in rows.items() if value is not True)
-
-
-# ---------------------------------------------------------------------------
-# Stage 0: recoverable reference foundation (store_direct)
-# ---------------------------------------------------------------------------
-
-
-def _row_file_matrix_twelve_rows(context: RowContext) -> RowOutcome:
-    matrix = _run_live_matrix_script(context.environ, live=False)
-    file_rows = _matrix_rows(matrix, "file_provider")
-    expect(
-        set(file_rows) == set(FILE_MATRIX_ROWS),
-        "file provider matrix must contain exactly the twelve known rows",
-    )
-    expect(not _false_rows(file_rows), "every file provider matrix row must be true")
-    expect(matrix["_exit_code"] == 0, "live matrix script must exit 0 without a stack")
-    return passed(matrix_rows=len(file_rows), script_exit_code=matrix["_exit_code"])
-
-
-def _row_nokv_live_matrix(context: RowContext) -> RowOutcome:
-    matrix = _run_live_matrix_script(context.environ, live=True)
-    nokv_rows = _matrix_rows(matrix, "nokv_provider")
-    if "unverified" in nokv_rows:
-        reason = str(nokv_rows["unverified"])
-        code = "nokv_sdk_missing" if "SDK" in reason else "nokv_matrix_unverified"
-        return unverified(code)
-    expected = {*FILE_MATRIX_ROWS, NOKV_ONLY_MATRIX_ROW}
-    expect(set(nokv_rows) == expected, "NoKV matrix must contain the shared rows plus the lineage row")
-    expect(not _false_rows(nokv_rows), "every NoKV matrix row must be true")
-    parity = _matrix_rows(matrix, "file_nokv_parity")
-    expect(parity.get("identical_row_outcomes") is True, "file and NoKV rows must be identical")
-    expect(parity.get("rows") == len(FILE_MATRIX_ROWS), "parity must cover the twelve shared rows")
-    expect(matrix["_exit_code"] == 0, "live matrix script must exit 0")
-    return passed(
-        nokv_rows=len(nokv_rows),
-        parity_rows=parity.get("rows"),
-        restored_lineage_fails_closed=True,
-        script_exit_code=matrix["_exit_code"],
-    )
+    # A successful process alone is insufficient: a missing/truncated trailer,
+    # empty selection, cancellation, TODO or skipped test is not qualification.
+    expect(summary.returncode == 0,
+           f"native {provider} conformance exited {summary.returncode}; "
+           f"TAP tests={summary.tests}, pass={summary.passed}, "
+           f"fail={summary.failed}, skipped={summary.skipped}")
+    expect(summary.failed == 0, "native local conformance must report zero failures")
+    expect(summary.skipped == 0, "native local conformance must not skip tests")
+    expect(summary.tests is not None and summary.tests > 0
+           and summary.passed == summary.tests,
+           "native local conformance must execute and pass every selected test")
+    return passed(provider=provider, suite=suite.as_posix(),
+                  tap_tests=summary.tests, tap_pass=summary.passed,
+                  tap_fail=summary.failed, tap_skipped=summary.skipped)
 
 
 # ---------------------------------------------------------------------------
@@ -319,14 +249,8 @@ def _row_nokv_live_matrix(context: RowContext) -> RowOutcome:
 def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcome:
     if node_executable() is None:
         return unverified("node_missing")
-    workspace = build_goal_workspace(
-        context.root,
-        goal_id=unique_goal_id("ladder-s1"),
-        handoff_mode="hard_lease",
-        shadow_enabled=True,
-        runtime_root_binding="registry",
-    )
-    added = add_todo(workspace, "Decode this observation through the TypeScript store.")
+    workspace = capture_workspace(context, "ladder-s1")
+    added = add_todo(workspace, "Decode this source transaction through the TypeScript store.")
     todo_id = str(added["todo_id"])
     acquired = acquire_lease(
         workspace,
@@ -347,37 +271,28 @@ def _row_cli_document_decodes_through_ts_store(context: RowContext) -> RowOutcom
         "--agent-id",
         AGENT_A,
     )
-    observations = [
-        committed_observation(payload, label=label)
-        for label, payload in (("todo add", added), ("task-lease acquire", acquired), ("todo update", updated))
-    ]
-    expect(
-        all(evidence["outcome"] == "captured" for evidence in observations),
-        "three distinct CLI writes must each be captured",
-    )
-    observation_ids = [str(evidence["observation_id"]) for evidence in observations]
-    probe = ts_readback(workspace, receipt=observation_ids[0])
+    for label, payload in (("todo add", added), ("task-lease acquire", acquired), ("todo update", updated)):
+        delivered(payload, label=label)
+    probe = ts_readback(workspace, directory=workspace.runtime_root / "authority-shadow" / "file-v0")
     expect(probe is not None, "read-back probe requires node")
     assert probe is not None
-    load = probe.get("load")
-    scan = probe.get("scan")
-    receipt = probe.get("receipt")
+    load, scan = probe.get("load"), probe.get("scan")
     expect(isinstance(load, dict) and load.get("status") == "loaded", "TS store must load the CLI document")
-    expect(isinstance(load, dict) and load.get("cursor") == "3", "TS store cursor must be 3 after three writes")
-    expect(
-        isinstance(load, dict)
-        and load.get("provider_revision") == observations[-1]["provider_revision"],
-        "TS store head revision must equal the last observation revision",
-    )
-    expect(
-        isinstance(scan, dict) and scan.get("operation_ids") == observation_ids,
-        "scanCommitted must page through the three observation ids in order",
-    )
-    expect(isinstance(receipt, dict) and receipt.get("status") == "found", "readReceipt must find the first observation")
-    document = candidate_document(workspace)
-    expect(document.cursor == "3" and document.operation_ids == observation_ids, "candidate bytes must match the probe")
+    expect(isinstance(load, dict) and load.get("cursor") == "4", "bootstrap and three writes must advance four cursors")
+    expect(isinstance(scan, dict), "scan must return a page summary")
     assert isinstance(scan, dict)
-    return passed(cursor="3", scan_pages=scan.get("pages"), observation_count=len(observation_ids))
+    operations = scan.get("operation_ids")
+    expect(isinstance(operations, list) and len(operations) == len(set(operations)) == 4,
+           "paged scan must return four distinct transactions")
+    expect(scan.get("cursors") == ["1", "2", "3", "4"], "transactions must retain source order")
+    assert isinstance(operations, list)
+    receipt_probe = ts_readback(workspace, receipt=str(operations[1]),
+                               directory=workspace.runtime_root / "authority-shadow" / "file-v0")
+    expect(isinstance(receipt_probe, dict), "receipt probe must load")
+    assert isinstance(receipt_probe, dict)
+    receipt = receipt_probe.get("receipt")
+    expect(isinstance(receipt, dict) and receipt.get("status") == "found", "readReceipt must find the first source write")
+    return passed(cursor="4", scan_pages=scan.get("pages"), transaction_count=4)
 
 
 # ---------------------------------------------------------------------------
@@ -565,22 +480,22 @@ def _row_postgresql_conformance_live(context: RowContext) -> RowOutcome:
 
 LADDER_ROWS: tuple[LadderRow, ...] = (
     LadderRow(
-        id="s0.file_matrix_twelve_rows",
+        id="s0.native_file_conformance",
         stage="0",
-        title="Twelve shared lifecycle scenarios pass on the file coordination provider",
+        title="Current TS FileAuthorityStore passes its complete native conformance suite",
         product_path="store_direct",
         gate="deterministic",
         posix_only=False,
-        run=_row_file_matrix_twelve_rows,
+        run=lambda context: _row_local_conformance(context, "file"),
     ),
     LadderRow(
-        id="s0.nokv_live_matrix",
+        id="s0.native_sqlite_conformance",
         stage="0",
-        title="The same matrix passes on a live NoKV stack with identical outcomes",
+        title="Current TS SqliteAuthorityStore passes its complete native conformance suite",
         product_path="store_direct",
-        gate="env:nokv_legacy",
+        gate="deterministic",
         posix_only=False,
-        run=_row_nokv_live_matrix,
+        run=lambda context: _row_local_conformance(context, "sqlite"),
     ),
     LadderRow(
         id="s1.cli_document_decodes_through_ts_store",
@@ -610,67 +525,13 @@ LADDER_ROWS: tuple[LadderRow, ...] = (
         run=_row_postgresql_conformance_live,
     ),
     LadderRow(
-        id="s2c1.configure_enable_disable_roundtrip",
+        id="s2c1.retired_observation_upgrade",
         stage="2c1",
-        title="configure-goal previews, enables, reads back, and disables the observer",
+        title="Retired settings cannot write; explicit replacement bootstrap captures the next transaction",
         product_path="real_cli",
         gate="deterministic",
         posix_only=False,
-        run=row_configure_enable_disable_roundtrip,
-    ),
-    LadderRow(
-        id="s2c1.every_writer_family_captures",
-        stage="2c1",
-        title="Every local writer family records a post-commit observation",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_every_writer_family_captures,
-    ),
-    LadderRow(
-        id="s2c1.default_off_isolation",
-        stage="2c1",
-        title="Default-off goals produce identical responses and no candidate storage",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_default_off_isolation,
-    ),
-    LadderRow(
-        id="s2c1.candidate_failure_preserves_primary",
-        stage="2c1",
-        title="Candidate construction failure never reverses the primary commit",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_candidate_failure_preserves_primary,
-    ),
-    LadderRow(
-        id="s2c1.crash_gap_loses_observation",
-        stage="2c1",
-        title="A SIGKILL between primary commit and observer loses only that observation",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=True,
-        run=row_crash_gap_loses_observation,
-    ),
-    LadderRow(
-        id="s2c1.dual_runtime_root_consistency",
-        stage="2c1",
-        title="A --runtime-root override that differs from common_runtime_root keeps one candidate lineage",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_dual_runtime_root_consistency,
-    ),
-    LadderRow(
-        id="s2c1.migration_seeds_new_lineage",
-        stage="2c1",
-        title="migrate-state excludes the legacy lineage and seeds a fresh candidate",
-        product_path="real_cli",
-        gate="deterministic",
-        posix_only=False,
-        run=row_migration_seeds_new_lineage,
+        run=row_retired_observation_upgrade,
     ),
     LadderRow(
         id="s2c2.outbox_prepared_then_committed_entries",
@@ -819,7 +680,7 @@ def default_forbidden_tokens(roots: Iterable[Path], environ: Mapping[str, str]) 
     tokens.update({str(temp_root), str(temp_root.resolve())})
     tokens.add(environ.get("HOME") or str(Path.home()))
     tokens.update({str(REPO_ROOT), str(REPO_ROOT.resolve())})
-    for name in (POSTGRES_URL_VARIABLE, *NOKV_STACK_VARIABLES, *NOKV_AUTHORITY_VARIABLES):
+    for name in (POSTGRES_URL_VARIABLE, *NOKV_AUTHORITY_VARIABLES):
         value = environ.get(name)
         if value:
             tokens.add(value)
@@ -954,14 +815,7 @@ def _nokv_client_config_digest(environ: Mapping[str, str]) -> str | None:
             return _nokv_authority_config_sha256(config_path)
         except (OSError, ValueError):
             return None
-    public = {
-        name: environ[name]
-        for name in NOKV_STACK_VARIABLES
-        if name not in NOKV_SECRET_VARIABLES and environ.get(name)
-    }
-    if len(public) != len(NOKV_STACK_VARIABLES) - len(NOKV_SECRET_VARIABLES):
-        return None
-    return sha256_hex(json.dumps(public, sort_keys=True, separators=(",", ":")))
+    return None
 
 
 def _nokv_sdk_version() -> str | None:
@@ -1222,7 +1076,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "EXIT_POLICY_RULE",
-    "FILE_MATRIX_ROWS",
     "GATES",
     "GATE_REQUIREMENTS",
     "LADDER_ROWS",
@@ -1232,8 +1085,6 @@ __all__ = [
     "NOKV_AUTHORITY_PYTHON_VARIABLE",
     "NOKV_AUTHORITY_VARIABLES",
     "NOKV_AUTHORITY_WORKBENCH_VARIABLE",
-    "NOKV_LIVE_FLAG",
-    "NOKV_STACK_VARIABLES",
     "PENDING_ROWS",
     "POSTGRES_URL_VARIABLE",
     "PRODUCT_PATHS",

@@ -63,7 +63,9 @@ export const reviewMaterialSchema = z.object({
 });
 
 export const todoItemSchema = z.object({
-  index: z.number(),
+  // Legacy Markdown Todos have a source index. Native Todos are addressed by
+  // todo_id and intentionally have no synthetic index.
+  index: z.number().optional().nullable(),
   done: z.boolean(),
   text: z.string(),
   schema_version: z.string().optional().nullable(),
@@ -96,7 +98,10 @@ export const todoItemSchema = z.object({
     revised_at: z.string(),
   }).passthrough()).optional().default([]),
   review_materials: z.array(reviewMaterialSchema).optional().default([]),
-}).passthrough();
+}).passthrough().refine(
+  (todo) => todo.index != null || Boolean(todo.todo_id?.trim()),
+  { path: ["todo_id"], message: "Todo without a source index requires todo_id" },
+);
 
 export const todoGroupSchema = z.object({
   source_section: z.string().optional().nullable(),
@@ -108,7 +113,7 @@ export const todoGroupSchema = z.object({
   deferred_items: z.array(todoItemSchema).optional(),
 });
 
-export const todoIndexItemSchema = todoItemSchema.extend({
+export const todoIndexItemSchema = todoItemSchema.safeExtend({
   goal_id: z.string(),
   source: z.string().optional().nullable(),
   event_count: z.number().optional().default(0),

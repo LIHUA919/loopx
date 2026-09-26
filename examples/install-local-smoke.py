@@ -291,6 +291,16 @@ def main() -> int:
         release_python = release_root / ".loopx-python"
         assert release_python.read_text(encoding="utf-8").strip() == sys.executable
         assert (release_root / "loopx" / "cli.py").is_file(), release_root
+        repair = codex_home / "skills" / "loopx-self-repair" / "scripts" / "find_pattern.py"
+        assert repair.with_name("lexical_retrieval.py").read_bytes() == (
+            release_root / "loopx" / "lexical_retrieval.py"
+        ).read_bytes()
+        repair_query = subprocess.run(
+            [sys.executable, "-I", str(repair), "--query", "closeout recovery"],
+            cwd=root, env={"PATH": str(root / "empty-path")},
+            check=True, capture_output=True, text=True,
+        )
+        assert json.loads(repair_query.stdout)["total_matches"] > 0
         runtime_package = release_root / "loopx" / "control_plane" / "runtime"
         assert (runtime_package / "run_compaction.py").is_file(), release_root
         assert (runtime_package / "session_runtime.py").is_file(), release_root
@@ -405,8 +415,8 @@ def main() -> int:
             "loopx review-packet --goal-id <STABLE_GOAL_ID> --handoff-only",
             "loopx --format json review-packet --goal-id",
             "target project agent must not run this draft",
-            "This command is read-only",
-            "JSON output returns a minimized handoff payload with `handoff_text` instead of the full operator packet",
+            "This read-only command assembles agent context directly from current status",
+            "JSON `handoff_text` and `project_agent_handoff` always contain complete prepared text",
             "--classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION>",
             "--delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE>",
             "--delivery-outcome <ACTUAL_DELIVERY_OUTCOME>",
@@ -512,12 +522,10 @@ def main() -> int:
         self_repair_skill = codex_home / "skills" / "loopx-self-repair" / "SKILL.md"
         self_repair_text = " ".join(self_repair_skill.read_text(encoding="utf-8").split())
         for phrase in (
-            "Build a compact evidence packet",
-            "loopx --format json diagnose --goal-id <goal-id>",
-            "loopx --format json status --goal-id <goal-id> --limit 20",
-            "status` defaults to the registry/dashboard view, but accepts `--goal-id`",
-            "registry-declared active state file",
-            "references/repair-patterns.md",
+            "Reuse evidence before collecting more",
+            "scripts/find_pattern.py",
+            "references/targeted-diagnostics.md",
+            "references/pattern-lookup.md",
             "Repair at the lowest durable layer",
             "Do not solve contradictory payloads by guessing",
         ):

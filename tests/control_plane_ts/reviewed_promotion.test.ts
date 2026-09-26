@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { qualifiedShadow } from "./local_promotion_fixture.ts";
@@ -284,4 +284,97 @@ test("the unmodified CLI preview envelope is accepted and cross-Goal wrappers ar
     operation(root, { ...cli, goal_id: "other" }, "apply", true, request),
   );
   assert.equal(rejected.reason_code, "invalid_reviewed_promotion_plan");
+});
+
+
+test("registry removal rejects a captured preview before fencing", async (t) => {
+  const {root, request} = await fixture(t);
+  await rm(join(root, "registry.json"));
+  const result = await reviewLocalCoordinationAuthorityPromotion({...request, execute: true});
+  assert.equal(result.reason_code, "source_registry_changed_retry");
+  assert.equal(result.legacy_writer_fenced, false);
+  assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "missing");
+});
+
+test("saved plan cannot carry old registrations through a fresh source snapshot", async (t) => {
+  const {root, request} = await fixture(t);
+  const explicit = {...request, handoff_mode_migration: "preserve", registered_agents: ["agent-a", "agent-b"]};
+  const plan = await reviewed(explicit);
+  await writeFile(join(root, "registry.json"), JSON.stringify({goals: [{id: "goal-a", coordination: {registered_agents: ["agent-a"]}}]}));
+  const snapshot = (request as JsonObject).source_snapshot as JsonObject;
+  const {createHash} = await import("node:crypto");
+  const current = {...snapshot, registry_source: {path: join(root, "registry.json"), registered_agents: ["agent-a"],
+    sha256: createHash("sha256").update(await readFile(join(root, "registry.json"))).digest("hex")}};
+  const result = await executeReviewedCoordinationPromotion(operation(root, plan, "apply", true,
+    {...request, source_snapshot: current}));
+  assert.equal(result.reason_code, "promotion_registration_changed_retry");
+  assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "missing");
+});
+
+test("registry exclusion spans canonical commit and releases after success", async (t) => {
+  const {root, request} = await fixture(t);
+  const {withFileMutationLock} = await import("../../loopx/control_plane/effect_runtime_io.ts");
+  const {EffectRuntimeLockTimeoutError} = await import("../../loopx/control_plane/effect_runtime_errors.ts");
+  class RegistryCheckingStore extends FileAuthorityStore {
+    override async commitAuthority(input: Parameters<FileAuthorityStore["commitAuthority"]>[0]) {
+      await assert.rejects(withFileMutationLock(join(root, "registry.json"), async () => {}, 0), EffectRuntimeLockTimeoutError);
+      return await super.commitAuthority(input);
+    }
+  }
+  const store = new RegistryCheckingStore(join(root, "authority", "file-v0"), "goal-a");
+  const result = await reviewLocalCoordinationAuthorityPromotion({...request, execute: true}, {createCanonicalStore: () => store});
+  assert.equal(result.status, "applied", JSON.stringify(result));
+  await withFileMutationLock(join(root, "registry.json"), async () => {}, 0);
+});
+
+test("stale source reports an existing fence and saved recovery needs no legacy registry", async (t) => {
+  const {root, request} = await fixture(t);
+  const plan = await reviewed(request);
+  const result = await executeReviewedCoordinationPromotion(operation(root, plan, "apply", true, request));
+  assert.equal(result.status, "applied");
+  await rm(join(root, "registry.json"));
+  const stale = await reviewLocalCoordinationAuthorityPromotion({...request, execute: true});
+  assert.equal(stale.reason_code, "source_registry_changed_retry");
+  assert.equal(stale.legacy_writer_fenced, true);
+  const replay = await executeReviewedCoordinationPromotion(operation(root, plan, "recover", true));
+  assert.equal(replay.status, "replayed", JSON.stringify(replay));
+  assert.equal(replay.executed, false);
+});
+
+
+for (const strategy of ["preserve", "hard_lease"] as const) {
+  test(`saved reviewed apply preserves the explicit ${strategy} policy`, async (t) => {
+    const {root, request} = await fixture(t);
+    const explicit = {...request, handoff_mode_migration: strategy, registered_agents: ["agent-a", "agent-b"]};
+    const plan = await reviewed(explicit);
+    const result = await executeReviewedCoordinationPromotion(operation(root, plan, "apply", true, request));
+    assert.equal(result.status, "applied", JSON.stringify(result));
+    const replay = await executeReviewedCoordinationPromotion(operation(root, plan, "recover", true));
+    assert.equal(replay.status, "replayed");
+  });
+}
+
+for (const rejection of ["qualification", "plan", "migration"] as const) {
+  test(`failed ${rejection} admission observes the existing promotion fence`, async (t) => {
+    const {root, request} = await fixture(t);
+    assert.equal((await reviewLocalCoordinationAuthorityPromotion({...request, execute: true})).status, "applied");
+    const changed = rejection === "qualification" ? {minimum_operations: 10000}
+      : rejection === "plan" ? {expected_promotion_plan_sha256: "0".repeat(64)}
+      : {handoff_mode_migration: "hard_lease", registered_agents: []};
+    const result = await reviewLocalCoordinationAuthorityPromotion({...request, ...changed});
+    assert.equal(result.status, "not_ready", JSON.stringify(result));
+    assert.equal(result.legacy_writer_fenced, true);
+    assert.equal(result.executed, false);
+    assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "loaded");
+  });
+}
+
+test("a downstream timeout is not mislabeled as registry contention", async (t) => {
+  const {request} = await fixture(t);
+  const {withShadowRegistrySource} = await import("../../loopx/control_plane/coordination/shadow_registry_source.ts");
+  const {EffectRuntimeLockTimeoutError} = await import("../../loopx/control_plane/effect_runtime_errors.ts");
+  const downstream = new EffectRuntimeLockTimeoutError("canonical store lock timed out");
+  await assert.rejects(withShadowRegistrySource((request as JsonObject).source_snapshot as JsonObject, async () => {
+    throw downstream;
+  }), (error) => error === downstream);
 });

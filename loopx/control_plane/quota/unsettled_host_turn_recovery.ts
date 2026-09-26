@@ -37,6 +37,7 @@ import {
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 import {
+  committedMonitorPollFromSnapshot,
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlementFromSnapshot,
   readQuotaSettlementSnapshot,
@@ -267,9 +268,18 @@ export async function preflightPriorHostTurnCloseout(
     if (readback.found !== true || bundleFailed(readback, "spend")) {
       missingReceipts.push(SPEND_RECEIPT);
     }
+    const monitorPoll = selected.binding_kind === "todo"
+      ? committedMonitorPollFromSnapshot(settlementSnapshot, {
+        goal_id: request.goal_id, agent_id: request.agent_id,
+        turn_instance_id: selected.prior_turn_instance_id,
+        todo_id: selected.binding_id,
+      }) : null;
     return {
       schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_RESULT_SCHEMA,
       status: "candidate",
+      committed_monitor_poll: monitorPoll === null ? null : {
+        effect_id: jsonObject(monitorPoll.quota_monitor_poll_commit)!.effect_id,
+      },
       turns_validated: turnsValidated,
       candidate: selected,
       missing_receipts: missingReceipts,

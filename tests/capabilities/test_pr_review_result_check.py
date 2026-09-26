@@ -72,6 +72,8 @@ def _review(*, area="product_runtime"):
                     field: (
                         case_id
                         if field == "case_id"
+                        else "passed"
+                        if field == "status"
                         else True
                         if field == "required"
                         else "Synthetic consistency fixture, not a real review."
@@ -99,6 +101,97 @@ def test_result_check_is_not_semantic_or_merge_authority():
     assert not checked["evidence_truth_verified"]
     assert not checked["remote_head_verified"]
     assert not checked["external_writes_performed"]
+
+
+def _required_red_review():
+    packet, result = _review()
+    row = next(item for item in result["evidence"]["validation_matrix"]["items"]
+               if item["case_id"] == "repository_required_checks")
+    row.update(status="failed", result="The same maintained-twin rule fails at base and head.",
+               skip_or_failure_reason="The same rule_a/rule_b pair remains over the 43 limit at both revisions.")
+    return packet, result, row
+
+
+def test_unrelated_baseline_red_check_does_not_force_request_changes():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The reviewed change edits a presentation helper, not the vocabulary scanner or its inputs.",
+        "affected_invariant_evidence": "Focused presentation tests pass at the exact head.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "head_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "baseline_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+        "head_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+    }
+    checked = check_review_result(packet, result)
+    assert checked["ok"] and checked["approval_consistent"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
+
+
+def test_required_red_check_needs_causal_attribution_and_unchanged_failure():
+    packet, result, row = _required_red_review()
+    checked = check_review_result(packet, result)
+    assert "validation_matrix:repository_required_checks:failure_attribution_missing" in checked["approval_blockers"]
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The changed code does not feed this check.",
+        "affected_invariant_evidence": "Focused affected-path test passes.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1 with failure A.",
+        "head_observation": "Exit 1 with failure B.",
+        "baseline_failure_signature": "failure A",
+        "head_failure_signature": "failure B",
+    }
+    assert "validation_matrix:repository_required_checks:failure_signature_changed" in check_review_result(packet, result)["approval_blockers"]
+    row["failure_attribution"]["disposition"] = "pr_regression"
+    assert "validation_matrix:repository_required_checks:attributable_or_unresolved_failure" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_equal_red_count_with_different_failure_identity_still_blocks_approval():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The reviewed change does not edit the vocabulary scanner.",
+        "affected_invariant_evidence": "Focused changed-path tests pass.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "head_observation": "Exit 1: maintained twin rule_c/rule_d, budget 44/43.",
+        "baseline_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+        "head_failure_signature": "semantic-vocabulary-drift: rule_c/rule_d: maintained twin 44/43",
+    }
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "validation_matrix:repository_required_checks:failure_signature_changed" in checked["approval_blockers"]
+
+
+def test_malformed_required_validation_status_is_reported_not_raised():
+    packet, result, row = _required_red_review()
+    row["status"] = {"unexpected": "object"}
+    assert "validation_matrix:repository_required_checks:invalid_status" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_external_required_failure_is_review_only_when_independently_attributed():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "external_unrelated",
+        "causal_scope_analysis": "The provider outage predates this head; changed behavior has separate coverage.",
+        "affected_invariant_evidence": "Focused real-path test passes at this head.",
+        "independent_evidence": "Provider status incident and retry on unchanged base fail identically.",
+        "retry_or_recovery_owner": "CI operator retries after provider recovery; merge remains held.",
+    }
+    assert check_review_result(packet, result)["approval_consistent"]
+    del row["failure_attribution"]["independent_evidence"]
+    assert not check_review_result(packet, result)["approval_consistent"]
 
 
 def _outcome_review(dimension):

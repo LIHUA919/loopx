@@ -37,15 +37,17 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     assert "python -m mypy" not in dashboard
 
     assert "if: always() && needs.changes.outputs.core_tests == 'true'" in aggregate
-    assert "needs: [changes, kernel-static-checks, dashboard-acceptance]" in aggregate
+    assert "needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance]" in aggregate
     assert "needs.kernel-static-checks.result" in aggregate
+    assert "needs.typescript-coverage.result" in aggregate
     assert "needs.dashboard-acceptance.result" in aggregate
 
 
 @pytest.mark.parametrize("kernel", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("typescript", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("dashboard", ["success", "failure", "cancelled", "skipped"])
-def test_checks_aggregate_requires_both_parallel_lanes(
-    kernel: str, dashboard: str,
+def test_checks_aggregate_requires_every_parallel_lane(
+    kernel: str, typescript: str, dashboard: str,
 ) -> None:
     gate = WORKFLOW.split("name: Require kernel and Dashboard qualification", 1)[1]
     script = gate.split("run: |", 1)[1].split("\n\n  node-minimum-compatibility:", 1)[0]
@@ -55,11 +57,12 @@ def test_checks_aggregate_requires_both_parallel_lanes(
             **os.environ,
             "DASHBOARD_RESULT": dashboard,
             "KERNEL_RESULT": kernel,
+            "TYPESCRIPT_RESULT": typescript,
         },
         capture_output=True,
         check=False,
     )
-    assert (result.returncode == 0) == (kernel == dashboard == "success")
+    assert (result.returncode == 0) == (kernel == typescript == dashboard == "success")
 
 
 def test_minimum_node_lane_exercises_sqlite_without_a_skip_list() -> None:
@@ -194,7 +197,7 @@ def test_merge_gate_runs_on_all_prs_and_checks_every_core_aggregate() -> None:
     for name, output in (("checks", "core_tests"), ("test-shard", "python_tests"), ("stage2c-suite", "stage2c_tests"), ("windows-powershell", "python_tests"), ("presentation", "presentation_tests")):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         if name == "checks":
-            assert "needs: [changes, kernel-static-checks, dashboard-acceptance]" in job
+            assert "needs: [changes, kernel-static-checks, typescript-coverage, dashboard-acceptance]" in job
             assert "if: always() && needs.changes.outputs.core_tests == 'true'" in job
         else:
             assert "needs: [changes, chat-bundle]" in job
@@ -327,7 +330,49 @@ def test_four_shards_execute_each_test_once_and_merge_portable_coverage(
 def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:
     producer = WORKFLOW.split("  chat-bundle:\n", 1)[1].split("  kernel-static-checks:\n", 1)[0]
     assert "needs.changes.outputs.core_tests == 'true'" in producer
-    for name in ("kernel-static-checks", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
+    for name in ("kernel-static-checks", "typescript-core", "dashboard-acceptance", "test-shard", "stage2c-suite", "windows-powershell", "presentation"):
         job = WORKFLOW.split(f"  {name}:\n", 1)[1].split("      - uses: actions/setup-", 1)[0]
         assert "needs: [changes, chat-bundle]" in job
         assert "name: chat-bundle-${{ github.sha }}" in job
+
+
+def test_typescript_shards_select_every_test_file_exactly_once() -> None:
+    expected = sorted(
+        f"tests/control_plane_ts/{path.name}"
+        for path in (WORKFLOW_ROOT / "tests/control_plane_ts").glob("*.test.ts")
+    )
+    for shards in (1, 3, 4):
+        selected = []
+        for shard in range(1, shards + 1):
+            result = subprocess.run(
+                [sys.executable, "-m", "scripts.ci.ts_test_shard", "--shards", str(shards), "--shard", str(shard)],
+                cwd=WORKFLOW_ROOT, capture_output=True, text=True, check=True,
+            )
+            assert result.stdout.strip(), (shards, shard)
+            selected += result.stdout.split()
+        assert sorted(selected) == expected, shards
+    invalid = subprocess.run(
+        [sys.executable, "-m", "scripts.ci.ts_test_shard", "--shards", "3", "--shard", "4"],
+        cwd=WORKFLOW_ROOT, capture_output=True, check=False,
+    )
+    assert invalid.returncode != 0
+
+
+def test_typescript_core_shards_feed_one_complete_coverage_report() -> None:
+    core = WORKFLOW.split("  typescript-core:\n", 1)[1].split("  typescript-coverage:\n", 1)[0]
+    report = WORKFLOW.split("  typescript-coverage:\n", 1)[1].split("  dashboard-acceptance:\n", 1)[0]
+    assert "shard: [1, 2, 3]" in core
+    assert "fail-fast: false" in core
+    assert 'node-version: "22.22.3"' in core
+    assert 'LOOPX_TEST_REQUIRE_SQLITE_QUALIFIED: "1"' in core
+    assert "--shards 3 --shard ${{ matrix.shard }}" in core
+    assert "--test-name-pattern" not in core
+    assert "npm run typecheck:control-plane" in core
+    assert "needs: [changes, typescript-core]" in report
+    assert "for shard in 1 2 3; do" in report
+    assert "c8 report --temp-directory=coverage/v8 --all" in report
+    assert "name: typescript-control-plane-coverage" in report
+    assert "path: coverage/control-plane/lcov.info" in report
+    forward = WORKFLOW.split("  node-forward-compatibility:\n", 1)[1].split("  test-shard:\n", 1)[0]
+    assert "github.event_name != 'pull_request'" in forward
+    assert "continue-on-error: true" in forward

@@ -324,18 +324,15 @@ def main() -> int:
         assert "--clear-execution-replan-after-todos" in replan_commands["preview_disable"]
         assert "--execute" not in replan_commands["preview_disable"]
         assert "--execute" in replan_commands["apply_disable"]
-        assert features["local_authority_shadow"]["availability"] == "experimental_opt_in"
+        assert features["local_authority_shadow"]["availability"] == "retired"
         assert features["local_authority_shadow"]["default"] == {"enabled": False}
         assert features["local_authority_shadow"]["current"] == {
             "enabled": False,
             "mode": None,
             "status": "disabled",
         }
-        assert "--local-authority-shadow-file" in features[
-            "local_authority_shadow"
-        ]["commands"]["preview_enable"]
-        assert "--execute" not in features["local_authority_shadow"]["commands"]["preview_enable"]
-        assert "--execute" in features["local_authority_shadow"]["commands"]["apply_enable"]
+        assert "preview_enable" not in features["local_authority_shadow"]["commands"]
+        assert "apply_enable" not in features["local_authority_shadow"]["commands"]
         assert features["periodic_report"]["availability"] == "supported_explicit_override"
         assert features["periodic_report"]["default"] == {"enabled": False, "timezone": "UTC"}
         # A Goal without an explicit override follows the machine default, so the

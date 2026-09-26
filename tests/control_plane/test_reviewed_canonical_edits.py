@@ -122,6 +122,27 @@ def test_registry_change_invalidates_uncommitted_review(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_reviewed_chat_block_uses_the_narrow_lifecycle_intent(tmp_path, provider):
+    registry, state, service = service_fixture(tmp_path, provider)
+    request = {"action_kind": "todo.update", "summary": "Pause research",
+               "normalized_parameters": {"goal_id": "goal-a", "todo_id": "todo_target",
+                                         "agent_id": "agent-a", "operation": "block",
+                                         "note": "Owner paused this research lane"},
+               "context": {}, "idempotency_key": "reviewed-pause"}
+    before = records(registry)
+    proposal = service.preview(request)
+    assert records(registry) == before and not state.exists()
+    applied = service.apply(proposal["proposal_id"])["proposal"]
+    assert applied["status"] == "applied"
+    todo = records(registry)["todo_target"]
+    assert todo["status"] == "blocked"
+    assert todo["reason"] == "Owner paused this research lane"
+    assert todo.get("resume_when") is None
+    assert todo["claimed_by"] == "agent-a"
+    assert service.apply(proposal["proposal_id"])["proposal"] == applied
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_cli_reason_is_evidence_not_a_grant_and_cas_is_recoverable(tmp_path, provider):
     registry, _state, service = service_fixture(tmp_path, provider)
     before = records(registry)

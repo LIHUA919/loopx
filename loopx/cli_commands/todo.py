@@ -305,6 +305,7 @@ def handle_todo_command(
                 runtime_root_arg=runtime_root_arg,
             )
             payload = add_goal_todo(
+                operation_id=args.operation_id,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,

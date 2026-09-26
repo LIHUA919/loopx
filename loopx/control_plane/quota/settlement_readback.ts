@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import { isAbsolute, join } from "node:path";
 
 import {
@@ -30,12 +30,12 @@ import {
   type DeliveryWorkspaceCausality,
 } from "./settlement_workspace_causality.ts";
 import {
+  isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
-import { isBoundedBlockedRetry } from "./blocked_retry.ts";
 import {
   decodeRefreshRetry,
   isMaterialMonitorPoll,
@@ -185,40 +185,15 @@ function decodeRequest(value: unknown): ReadbackRequest {
   };
 }
 
-async function readJsonLines(path: string, schemaVersion?: string): Promise<JsonObject[]> {
-  let content: string;
-  try {
-    content = await readFile(path, "utf8");
-  } catch (error) {
-    if (
-      error !== null &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return [];
-    }
-    throw error;
+async function readRunReceipts(path: string): Promise<readonly JsonObject[]> {
+  const snapshot = await readReceiptLogSnapshot(path);
+  if (snapshot?.firstErrorLine != null) {
+    throw new EffectRuntimeRequestError(
+      `settlement readback line ${snapshot.firstErrorLine} is malformed`,
+      "malformed_settlement_state",
+    );
   }
-  const records: JsonObject[] = [];
-  for (const [index, line] of content.split(/\r?\n/).entries()) {
-    if (!line.trim()) continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      const record = jsonObject(parsed);
-      if (!record) throw new Error("record must be a JSON object");
-      if (schemaVersion !== undefined && record.schema_version !== schemaVersion) {
-        throw new Error(`schema must be ${schemaVersion}`);
-      }
-      records.push(record);
-    } catch {
-      throw new EffectRuntimeRequestError(
-        `settlement readback line ${index + 1} is malformed`,
-        "malformed_settlement_state",
-      );
-    }
-  }
-  return records;
+  return snapshot?.records ?? [];
 }
 
 function turnKey(
@@ -313,7 +288,7 @@ export async function readQuotaSettlementSnapshot(
     rolloutSnapshot === undefined
       ? readGoalRolloutEventSnapshot(runtimeRoot, goalId)
       : Promise.resolve(rolloutSnapshot),
-    readJsonLines(join(goalRoot, "runs", "index.jsonl")),
+    readRunReceipts(join(goalRoot, "runs", "index.jsonl")),
   ]);
   return indexSettlementSnapshot(
     runtimeRoot,
@@ -341,6 +316,27 @@ function indexedRuns(
   return snapshot.runsByTurn.get(
     turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
   ) ?? [];
+}
+
+/** One committed-poll rule for settlement and prior-Turn closeout. */
+export function committedMonitorPollFromSnapshot(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id" | "todo_id">,
+): JsonObject | null {
+  if (snapshot.goalId !== identity.goal_id) {
+    throw new EffectRuntimeRequestError("monitor poll snapshot scope mismatch");
+  }
+  const runs = snapshot.runsByTurn.get(
+    turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
+  ) ?? [];
+  return [...runs].reverse().find((run) =>
+    run.classification === "quota_monitor_poll" &&
+    optionalString(run.goal_id) === identity.goal_id &&
+    optionalString(run.agent_id) === identity.agent_id &&
+    optionalString(run.turn_instance_id) === identity.turn_instance_id &&
+    normalizeTodoId(run.todo_id) === identity.todo_id &&
+    isCommittedMonitorPollEffect(jsonObject(run.quota_monitor_poll_commit)?.effect_id, identity)
+  ) ?? null;
 }
 
 function spendCandidateRuns(
@@ -990,14 +986,7 @@ function readQuotaSettlementFromRequest(
   const withWriteback = settlementBindReduce(identityResult, writeback);
   const settled = blockedNoSpend ? withWriteback : settlementBindReduce(withWriteback, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
-  const monitorPoll = [...runs].reverse().find((run) =>
-    run.classification === "quota_monitor_poll" &&
-    optionalString(run.goal_id) === identity.goal_id &&
-    optionalString(run.agent_id) === identity.agent_id &&
-    optionalString(run.turn_instance_id) === identity.turn_instance_id &&
-    normalizeTodoId(run.todo_id) === identity.todo_id &&
-    isCommittedMonitorPollEffect(jsonObject(run.quota_monitor_poll_commit)?.effect_id, identity)
-  ) ?? null;
+  const monitorPoll = committedMonitorPollFromSnapshot(snapshot, identity);
   const nestedCausality = typeof receiptDetails.delivery_workspace_causality === "object" &&
       receiptDetails.delivery_workspace_causality !== null &&
       !Array.isArray(receiptDetails.delivery_workspace_causality)

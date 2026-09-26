@@ -410,20 +410,9 @@ def set_goal_handoff_mode(
                 state_path=resolved_state_file, write_class="handoff_mode_set", original_text=original)
             write_captured_todo_state(capture, runtime_root=runtime_root, goal_id=goal_id,
                 state_path=resolved_state_file, text=plan["next_frontmatter_text"] + body)
-    previous = str(plan["previous_mode"])
     payload["changed"] = True
-    from ..coordination.local_authority_shadow_observation import observe_local_authority_commit
-
-    evidence = observe_local_authority_commit(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        observation_trigger=f"handoff_mode_set:{previous}:{requested}",
-    )
-    if evidence is not None:
-        payload["authority_shadow"] = evidence
     return settle_todo_runtime_shadow_capture(
         payload, registry_path=registry_path, runtime_root=runtime_root,
-        goal_id=goal_id, write_class="handoff_mode_set", capture=capture,
-        observe_legacy=False, emit_disabled=False,
+        goal_id=goal_id, capture=capture,
+        emit_disabled=False,
     )

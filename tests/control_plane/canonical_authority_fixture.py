@@ -67,3 +67,50 @@ def single_snapshot_page(result: dict, goal_id: str = "goal-a") -> dict:
         ) if key in result},
         "next": None,
     }
+
+
+def promoted_create_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[Path, Path, Path]:
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.coordination.coordination_state_contract import (
+        TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION, TODO_DOMAIN_RECORD_FIELDS,
+    )
+
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    state_file = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        "# Goal\n\n## User Todo / Owner Review Reading Queue\n\n"
+        "## Agent Todo\n\n## Completed Work Archive\n",
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": "goal-a",
+                        "repo": str(project),
+                        "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
+                        "coordination": {"registered_agents": ["agent-a"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=[], handoff_mode="soft_claim"
+    )
+    projection["todo_read_model"] = {
+        **projection["todo_read_model"],
+        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
+    }
+    initialize_canonical_authority(
+        runtime_root, "goal-a", projection, state_path=state_file, provider=provider
+    )
+    return registry_path, runtime_root, state_file

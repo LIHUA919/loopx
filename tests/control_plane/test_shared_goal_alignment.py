@@ -391,7 +391,7 @@ def test_appending_one_event_rotates_the_projection_into_frontier_behind(
             goal_id=GOAL_ID,
             event_type=TODO_ADDED,
             actor_agent_id="agent-b",
-            refs={"todo_id": "todo_lane_a"},
+            refs={"todo_id": "todo_new_peer_work"},
             payload={"text": "Fixture event that moves the state event basis head."},
         )
     )

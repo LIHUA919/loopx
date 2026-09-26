@@ -1,7 +1,7 @@
 """Transaction capture evidence, receipt-proven drain, and operator readback.
 
-The independent compatibility observation path lives in
-local_authority_shadow_observation; this owner only delivers durable entries.
+Historical observations remain readable; this owner only delivers durable
+transaction-bound entries.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from .runtime_shadow import resolve_coordination_runtime_shadow_config, capture_
 from .shadow_management import read_shadow_capture_binding
 
 
-from .local_authority_shadow_observation import local_authority_shadow_summary
+from .runtime_shadow import local_authority_shadow_summary
 
 
 def effective_runtime_root(
@@ -609,7 +609,6 @@ def _drain_prelude(
             resolve_coordination_runtime_shadow_config(
                 find_registry_goal(registry, goal_id)
             ).enabled
-            or local_authority_shadow_summary(find_registry_goal(registry, goal_id) or {})["enabled"] is True
         )
         resolved = (
             runtime_root
@@ -783,7 +782,7 @@ def local_authority_shadow_status(
     runtime_config = resolve_coordination_runtime_shadow_config(goal)
     management = read_shadow_capture_binding(runtime_root, goal_id)
     legacy_observation = (
-        config["enabled"] is True
+        config.get("configured") is True
         and not runtime_config.enabled
         and management["status"] == "missing"
     )
@@ -844,6 +843,8 @@ def local_authority_shadow_status(
             "partitions": None,
             "codec_agreement": None,
         }
+    candidate["store_kind"] = "legacy_observation" if legacy_observation else "runtime_shadow"
+    candidate["historical_only"] = legacy_observation
     try:
         store_bytes = _store_bytes(
             runtime_root, goal_id, legacy_observation=legacy_observation

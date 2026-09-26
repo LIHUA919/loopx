@@ -514,8 +514,8 @@ def validate_todo_archive_completed_options(args: argparse.Namespace) -> None:
 
 
 def validate_shared_todo_options(args: argparse.Namespace) -> None:
-    if getattr(args, "operation_id", None) and args.todo_command != "receipt":
-        raise ValueError("--operation-id is supported only by todo receipt")
+    if getattr(args, "operation_id", None) and args.todo_command not in {"receipt", "add"}:
+        raise ValueError("--operation-id is supported only by todo receipt and canonical todo add")
     if args.result_file and args.todo_command != "complete":
         raise ValueError("--result-file is supported only by todo complete")
     agent_id_allowed_for_user_authoring = (

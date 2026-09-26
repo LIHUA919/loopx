@@ -828,6 +828,7 @@ export function PersonalWorkspacePage({
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
+  initialManagerChatOpen = false,
   managerChannelBinding,
   managerRuntime,
   model,
@@ -840,6 +841,7 @@ export function PersonalWorkspacePage({
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
+  initialManagerChatOpen?: boolean;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   model: WorkspaceModel;
@@ -857,7 +859,7 @@ export function PersonalWorkspacePage({
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
   const [proposals, setProposals] = useState<Record<string, WorkspaceActionPreview>>({});
   const [selectedGoalTab, setSelectedGoalTab] = useState<WorkspaceGoalTab>("chat");
-  const [managerChatOpen, setManagerChatOpen] = useState(false);
+  const [managerChatOpen, setManagerChatOpen] = useState(initialManagerChatOpen);
   const [managerConversationReceiptVisible, setManagerConversationReceiptVisible] = useState(false);
   const [goalConversationReceiptVisible, setGoalConversationReceiptVisible] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
@@ -2060,13 +2062,25 @@ export function PersonalWorkspacePage({
                         run={activeSessionRun}
                       />
                     ) : null}
-                    <ChannelTimeline items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal} />
+                    <ChannelTimeline items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
+                      onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
+                        ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!(selectedGoal.goalId, turnId, text, ingressId)
+                        : undefined}
+                      onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
+                        ? (turnId) => callbacks.onInterruptConversationTurn!(selectedGoal.goalId, turnId)
+                        : undefined} />
                   </>),
                 }} />
             ) : !managerChatOpen ? (
               <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.()} onSelectGoal={selectGoal} systemHealth={model.systemHealth} />
             ) : (
               <ChannelTimeline items={managerChatItems} onSelect={setSelection} selectedGoal={null} showManagerTeamResults
+                onSteerTurn={!readOnly && callbacks.onSteerConversationTurn
+                  ? (turnId, text, ingressId) => callbacks.onSteerConversationTurn!("manager", turnId, text, ingressId)
+                  : undefined}
+                onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn
+                  ? (turnId) => callbacks.onInterruptConversationTurn!("manager", turnId)
+                  : undefined}
                 onOpenGoalEvidence={(goalId) => { selectGoal(goalId); openGoalConversation(); }} />
             )}
           </div>

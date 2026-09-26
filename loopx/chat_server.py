@@ -8,7 +8,7 @@ from collections.abc import Mapping
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 from . import chat_configuration_api as config_api
@@ -29,7 +29,7 @@ from .chat_goal_subagent_api import (
     add_goal_subagent_routes,
 )
 from .chat_status_api import ChatStatusRequestMixin
-from .chat_runtime import ChatRuntimeController, TERMINAL_TURN_STATES
+from .chat_runtime import ChatRuntimeController, STEERING_NOT_DELIVERED_CODES, TERMINAL_TURN_STATES
 from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
     manager_capabilities_projection, manager_workspace,
@@ -458,6 +458,7 @@ class ChatRequestHandler(
         session_invalidated: bool = False,
         turn_replay_safe: bool = False,
         todo_receipt: dict[str, Any] | None = None,
+        delivery_state: Literal["not_delivered", "unresolved"] | None = None,
     ) -> None:
         payload: dict[str, Any] = {"ok": False, "error": _compact_text(message)}
         if error_code:
@@ -470,6 +471,8 @@ class ChatRequestHandler(
             payload["turn_replay_safe"] = True
         if todo_receipt:
             payload["todo_receipt"] = todo_receipt
+        if delivery_state:
+            payload["delivery_state"] = delivery_state
         self._send_json(payload, status=status)
 
     def _read_json(self) -> dict[str, Any]:
@@ -817,6 +820,46 @@ class ChatRequestHandler(
                 time.sleep(0.05)
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def _steer_turn(self, session_id: str, turn_id: str) -> None:
+        try:
+            body = self._read_json()
+            if set(body) - {"message", "client_ingress_id"}:
+                raise ValueError("unknown steering field")
+            message = body.get("message")
+            ingress_id = body.get("client_ingress_id")
+            if not isinstance(message, str) or not message.strip() or len(message) > 12000:
+                raise ValueError("a message of 1–12000 characters is required")
+            if not isinstance(ingress_id, str) or not ingress_id.strip():
+                raise ValueError("client_ingress_id is required")
+            turn, created = self.server.runtime_controller.steer_active_turn(
+                session_id=session_id, expected_turn_id=turn_id,
+                client_ingress_id=ingress_id, message=message,
+            )
+        except KeyError:
+            self._send_error("chat session was not found", status=404)
+            return
+        except ValueError as exc:
+            self._send_error(str(exc), status=400)
+            return
+        except CodexChatAgentError as exc:
+            self._send_error(str(exc), status=424, error_code=exc.error_code, gate=exc.gate)
+            return
+        except RuntimeError as exc:
+            code = str(exc)
+            not_delivered = code in STEERING_NOT_DELIVERED_CODES
+            self._send_error(
+                "本轮追加指令未送达。请检查当前回合与执行器，条件恢复后可重试原文。" if not_delivered
+                else "本轮追加指令未确认接收。请保留草稿并检查当前状态。",
+                status=409, error_code=code,
+                delivery_state="not_delivered" if not_delivered else "unresolved",
+            )
+            return
+        self._send_json({
+            "ok": True, "schema_version": "loopx_chat_turn_steer_v1",
+            "session_id": session_id, "turn_id": turn["turn_id"],
+            "client_ingress_id": ingress_id, "status": "delivered", "created": created,
+        })
 
     def _interrupt_turn(self, session_id: str, turn_id: str) -> None:
         try:
@@ -1361,6 +1404,8 @@ class ChatRequestHandler(
             session_id = path[len(prefix) : -len("/turns")].strip("/")
             return self._session_turn(session_id)
         parts = path.strip("/").split("/")
+        if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "steer":
+            return self._steer_turn(parts[3], parts[5])
         if len(parts) == 7 and parts[:3] == ["api", "chat", "sessions"] and parts[4] == "turns" and parts[6] == "interrupt":
             return self._interrupt_turn(parts[3], parts[5])
         self._send_error("unknown path", status=404)

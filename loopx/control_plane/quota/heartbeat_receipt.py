@@ -552,6 +552,24 @@ def heartbeat_receipt_view(
     return receipt
 
 
+def attach_uncommitted_heartbeat_receipt(
+    payload: dict[str, object],
+    *,
+    turn_instance_id: str,
+) -> None:
+    """Expose an accurate non-durable receipt for an incomplete preflight."""
+
+    payload["heartbeat_receipt"] = {
+        "schema_version": HEARTBEAT_RECEIPT_SCHEMA_VERSION,
+        "turn_instance_id": turn_instance_id,
+        "status": "not_committed",
+        "stall_observation": "not_evaluated",
+        "reason_code": str(
+            payload.get("error_code") or "quota_preflight_incomplete"
+        ),
+    }
+
+
 def fail_heartbeat_receipt(
     payload: dict[str, object],
     *,

@@ -8,10 +8,10 @@ and size/count budgets.
 
 | Surface | Owner | Consumer Action | Cold Path | Size Budget | Nested Budget | Count Budget |
 | --- | --- | --- | --- | --- | --- | --- |
-| `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 4800` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
+| `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
 | `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 14500` | `nested_keys <= 360` | `top_level_keys <= 52` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 19500` | `nested_keys <= 260` | `top_level_keys <= 25` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 22500` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -35,17 +35,25 @@ for the richer generator packet; neither is the recurring Agent hot path.
 
 The heartbeat envelope ceiling covers the unbound and representative agent/scope-bound
 Codex App thin fixtures. It includes generator metadata and repeated bound commands,
-not only the execution prompt. The shared host contract added static safety, repair
-routing, and retry-stable Turn initialization; the scoped fixture now uses about
-4,362 JSON characters. The 4,800-character ceiling leaves roughly 10% headroom for
-that fixture, without relaxing the independent **2,500-character thin task body**,
+not only the execution prompt. On the same scoped fixture, current main uses
+4,791 JSON characters and the language-aware body uses 5,167 while retaining
+static safety, repair routing, work obligation, and settlement instructions.
+The 5,400-character ceiling leaves 233 characters of fixture headroom, without
+relaxing the independent **2,500-character thin task body**,
 4,000-character native Goal body, structural limits, or emitted CLI ceilings.
 It is not a token count, execution quota, or allowance to append more instructions.
 Arbitrary-length caller paths/scopes are not promised to fit this fixed fixture
 envelope; their emitted output is qualified separately by the CLI matrix.
 Do not remove safety or settlement semantics to fit the envelope, and do not copy
-dynamic quota decisions into the static prompt. No prompt text, saved automation,
-scheduler cadence, or spending policy changes with this qualification adjustment.
+dynamic quota decisions into the static prompt. The brief body allowance rises
+from 3,500 to 4,300 characters. Translating its fixed Chinese instructions to
+English grows the Codex App brief body from 3,282 to 3,980 characters (3,494 to
+4,192 with two agent-profile scopes) while its `o200k_base` token count falls
+from 962 to 927 (994 to 959) and UTF-8 bytes grow about 2%. The character
+ceiling therefore moves with the script, not with prompt cost, and keeps about
+8% headroom for the unscoped fixture, close to the previous 7%. Saved
+automation, scheduler cadence, and spending policy do not change with these
+budget adjustments.
 
 The quota budget includes the typed action portfolio, one shared bound CLI
 route, pending-selection qualification, and hard-lane preemption evidence. The
@@ -101,6 +109,19 @@ selectors, TurnEnvelope output, status task-graph detail, the full review
 packet, and the brief/compact/full heartbeat prompt modes. These remain opt-in
 cold paths, but their exact stdout size and semantic anchors are regression
 contracts too.
+
+The user-language prompt transition is one measured exception to ordinary
+base/head growth, scoped to heartbeat rows and only when the base lacks the
+rendered language-policy revision. On the same small CLI fixture, `origin/main`
+to this branch grew by 376 characters for thin, 695 JSON / 690 Markdown
+characters and five Markdown lines for brief, 264 / 262 characters for
+compact, and 258 / 260 for full. Replacing fixed Chinese instructions and
+restoring blocker/next-action continuation gives the worker usable language
+and work guidance; removing those clauses solely to fit the old delta would
+lose that consumer value. The one-time per-mode allowances are 400, 720, 288,
+and 288 characters respectively, plus six lines for brief. The absolute
+surface ceilings, UTF-8 byte limits, quota/status budgets, and normal growth
+limits after this revision becomes the baseline remain unchanged.
 
 `todo list --thin` is an explicit bounded projection, not a new filtering or
 ordering mode. After the normal role, status, Todo-id, and agent filters run,
@@ -220,3 +241,40 @@ RRULE, unchanged-state clear flag, and short identity/profile signatures needed
 to detect reset transitions. Full identity/profile snapshots stay off the hot
 path; use status, history, active state, or a focused regression fixture when
 debugging why a reset token changed.
+
+### Status projection envelope budget decision
+
+The unchanged dashboard fixture measured 19,455 compact JSON characters, 244
+nested keys and 25 top-level keys before the projection envelope; the initial
+envelope measured 21,518 / 332 / 26. The old 19,500 / 260 / 25 ceilings were
+regression budgets, not transport limits. The operator needs source read times,
+read failures and scope coverage to distinguish a cached or partial observation
+from a current, complete view. Per-source rows support diagnosis and replay;
+removing them would lose that contract. The bounded five-source envelope is
+retained rather than shortening names or shrinking the fixture. Ceilings become
+22,500 / 350 / 27, leaving 982 characters, 18 nested keys and one top-level key
+above the measured head for variation. Other hot surfaces retain their budgets.
+This adds a read contract to default status; it grants no execution authority.
+
+同一 dashboard 负载在新增 envelope 前为 19,455 字符／244 个嵌套键／25 个顶层键，
+初始 head 为 21,518／332／26。旧上限属于回归预算而非传输硬限制。操作员需要
+来源读取时间、错误与范围覆盖来识别缓存和部分观察；逐来源数据还支撑诊断和重放，
+不能为过线删除。保留五个有界来源，不缩小负载或改短字段名，将上限同步调整为
+22,500／350／27，较实测 head 保留 982 字符、18 个嵌套键和一个顶层键的余量。
+其他热表面预算保持原值。默认 status 新增读合同，不授予执行权限。
+
+The emitted CLI matrix separately measured +2,801 pretty JSON characters,
++102 lines and +1,910 compact characters on small, crowded and multi-agent
+status fixtures. Markdown added 127 characters before the explicit schema
+marker. The existing schema-transition mechanism grants **only status and its
+explicit task-graph variant**, and only `none -> loopx_projection_envelope_v0`,
+3,000 JSON chars/bytes, 110 lines and 2,048 compact chars; Markdown receives
+192 chars/224 bytes and three lines. The marker makes this transition visible
+and review-required. Unknown schemas, reverse transitions, unrelated surfaces
+and subsequent v0 growth retain ordinary budgets. Absolute ceilings stay intact.
+
+CLI 同负载差分另测得 JSON 增加 2,801 字符、102 行、1,910 个紧凑字符；Markdown
+在显式 schema 标识前增加 127 字符。沿用既有 schema 迁移预算机制，仅 status 及
+其 task-graph 显式变体的 none → v0 获得一次 3,000 JSON 字符／字节、110 行、
+2,048 紧凑字符余量；Markdown 余量为 192 字符／224 字节和三行。该迁移必须评审。
+未知 schema、反向迁移、其他表面和后续 v0 增长使用普通预算，绝对上限保持不变。

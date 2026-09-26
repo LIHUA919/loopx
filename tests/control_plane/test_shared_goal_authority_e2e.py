@@ -12,6 +12,7 @@ import ast
 import json
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -21,19 +22,16 @@ from loopx.control_plane.testing import authority_e2e_ladder as ladder
 
 LIVE_ENVIRONMENT_VARIABLES = (
     ladder.POSTGRES_URL_VARIABLE,
-    ladder.NOKV_LIVE_FLAG,
-    *ladder.NOKV_STACK_VARIABLES,
     ladder.NOKV_AUTHORITY_LIVE_FLAG,
     *ladder.NOKV_AUTHORITY_VARIABLES,
 )
 GATED_ROW_IDS = (
-    "s0.nokv_live_matrix",
     "s2a.nokv_live_qualification",
     "s2b.postgresql_conformance_live",
 )
 PENDING_ONLY_ROW_ID = "s2c2.sustained_parity_soak"
 PENDING_ROW_IDS = (PENDING_ONLY_ROW_ID,)
-CHEAP_DETERMINISTIC_ROW_ID = "s0.file_matrix_twelve_rows"
+LOCAL_FILE_ROW_ID = "s0.native_file_conformance"
 FULL_LADDER_VARIABLE = "LOOPX_LADDER_FULL"
 # Rows whose assertions the in-repo CLI E2E suite already pins through the same
 # product path. The pytest job runs close to its time budget, so the default CI
@@ -44,21 +42,7 @@ FULL_LADDER_VARIABLE = "LOOPX_LADDER_FULL"
 # renamed or deleted so the skip cannot outlive its coverage.
 CLI_E2E_TWIN_FILE = Path(__file__).with_name("test_local_authority_shadow_cli_e2e.py")
 CLI_E2E_COVERAGE = {
-    "s2c1.configure_enable_disable_roundtrip": (
-        "test_product_cli_configure_capture_readback_disable_and_default_off_lifecycle_isolation"
-    ),
-    "s2c1.default_off_isolation": (
-        "test_product_cli_configure_capture_readback_disable_and_default_off_lifecycle_isolation"
-    ),
-    "s2c1.candidate_failure_preserves_primary": (
-        "test_product_cli_candidate_failure_preserves_the_primary_lifecycle_commit"
-    ),
-    "s2c1.crash_gap_loses_observation": (
-        "test_product_cli_loses_capture_between_commit_and_observer_then_refreshes_snapshot"
-    ),
-    "s2c1.dual_runtime_root_consistency": (
-        "test_product_cli_runtime_root_override_keeps_one_candidate_lineage"
-    ),
+    "s2c1.retired_observation_upgrade": "test_retired_setting_cannot_enable_capture_or_satisfy_bootstrap",
 }
 CLI_E2E_COVERED_ROW_IDS = tuple(CLI_E2E_COVERAGE)
 CLI_E2E_COVERAGE_REASON = (
@@ -99,6 +83,11 @@ def _row_parameters() -> Iterator[object]:
             )
         if row.id in CLI_E2E_COVERED_ROW_IDS and not full_ladder:
             marks.append(pytest.mark.skip(reason=CLI_E2E_COVERAGE_REASON))
+        if row.stage == "0" and not full_ladder:
+            marks.append(pytest.mark.skip(reason=(
+                "native provider suites run in npm run test:control-plane; "
+                "run the standalone ladder or set LOOPX_LADDER_FULL=1 for integrated evidence"
+            )))
         if row.stage == "2c2":
             marks.append(pytest.mark.stage2c_e2e)
         yield pytest.param(row, id=row.id, marks=marks)
@@ -172,14 +161,13 @@ def test_main_never_reports_green_while_unverified(
     assert report["summary"] == {
         "pass": 0,
         "fail": 0,
-        "unverified": 3,
+        "unverified": 2,
         "pending": 0,
-        "executed": 3,
+        "executed": 2,
         "privacy_violations": 0,
     }
     assert {row["status"] for row in report["rows"]} == {"unverified"}
     assert {row["reason_code"] for row in report["rows"]} == {
-        "nokv_live_env_missing",
         "nokv_authority_env_missing",
         "postgres_url_missing",
     }
@@ -197,7 +185,7 @@ def test_main_never_reports_green_while_unverified(
 
     assert ladder.main([*argv, "--allow-unverified"]) == 0
     relaxed = json.loads(report_path.read_text(encoding="utf-8"))
-    assert relaxed["summary"]["unverified"] == 3
+    assert relaxed["summary"]["unverified"] == 2
     assert relaxed["exit_policy"]["allow_unverified"] is True
     assert relaxed["exit_policy"]["exit_code"] == 0
     capsys.readouterr()
@@ -318,7 +306,11 @@ def test_pending_rows_never_exit_green_without_allow_pending(
     capsys.readouterr()
 
     # Mixed selection: one executable pass does not excuse a pending obligation.
-    mixed = ["--row", CHEAP_DETERMINISTIC_ROW_ID, "--row", PENDING_ONLY_ROW_ID, "--report-json", str(report_path)]
+    monkeypatch.setattr(ladder, "LADDER_ROWS", tuple(
+        replace(row, run=lambda _context: ladder.passed()) if row.id == LOCAL_FILE_ROW_ID else row
+        for row in ladder.LADDER_ROWS
+    ))
+    mixed = ["--row", LOCAL_FILE_ROW_ID, "--row", PENDING_ONLY_ROW_ID, "--report-json", str(report_path)]
     assert ladder.main(mixed) == 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["summary"] == {"pass": 1, "fail": 0, "unverified": 0, "pending": 1, "executed": 1, "privacy_violations": 0}
@@ -336,7 +328,7 @@ def test_pending_rows_never_exit_green_without_allow_pending(
 
 
 def test_privacy_scan_turns_leaks_into_failures(tmp_path: Path) -> None:
-    row = ladder.row_by_id("s0.file_matrix_twelve_rows")
+    row = ladder.row_by_id(LOCAL_FILE_ROW_ID)
     leaking = ladder.RowResult(
         row=row,
         status="pass",
@@ -433,3 +425,67 @@ def test_list_prints_rows_and_pending_declarations(
     assert [row["id"] for row in stage_listing["rows"]] == list(STAGE_2C2_ROW_IDS)
     assert [row["id"] for row in stage_listing["pending"]] == list(PENDING_ROW_IDS)
     assert {row["stage"] for row in stage_listing["pending"]} == {"2c2"}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("output,returncode,expected", [
+    ("# tests 3\n# pass 3\n# fail 0\n# skipped 0", 0, "pass"),
+    ("# tests 0\n# pass 0\n# fail 0\n# skipped 0", 0, "fail"),
+    ("# tests 3\n# pass 2\n# fail 0\n# skipped 1", 0, "fail"),
+    ("# tests 3\n# pass 2\n# fail 1\n# skipped 0", 0, "fail"),
+    ("# tests 3\n# pass 2\n# fail 0\n# skipped 0", 0, "fail"),
+    ("# tests 3\n# pass 3\n# fail 0\n# skipped 0", 1, "fail"),
+    ("TAP version 13\nok 1 - interrupted before the trailer", 0, "fail"),
+])
+def test_native_local_qualification_rejects_partial_evidence(
+    provider: str, output: str, returncode: int, expected: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.testing.authority_e2e_fixtures import parse_tap_summary
+
+    calls = []
+    monkeypatch.setattr(ladder, "node_executable", lambda: "node")
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return parse_tap_summary(output, returncode=returncode)
+
+    monkeypatch.setattr(ladder, "tap_summary", run)
+    row = ladder.row_by_id(f"s0.native_{provider}_conformance")
+    result = ladder.run_row(row, root=tmp_path, environ={})
+    assert result.status == expected
+    assert calls[0][-1] == ladder.LOCAL_CONFORMANCE_TESTS[provider].as_posix()
+    assert "--test-name-pattern" not in calls[0]
+    if expected == "pass":
+        assert result.evidence["provider"] == provider
+        assert result.evidence["tap_pass"] == 3
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_local_qualification_missing_runtime_or_suite_is_unverified(
+    provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = ladder.row_by_id(f"s0.native_{provider}_conformance")
+    monkeypatch.setattr(ladder, "node_executable", lambda: None)
+    missing_node = ladder.run_row(row, root=tmp_path, environ={})
+    assert (missing_node.status, missing_node.reason_code) == ("unverified", "node_missing")
+    monkeypatch.setattr(ladder, "node_executable", lambda: "node")
+    monkeypatch.setattr(ladder, "REPO_ROOT", tmp_path)
+    missing_suite = ladder.run_row(row, root=tmp_path, environ={})
+    assert (missing_suite.status, missing_suite.reason_code) == ("unverified", "local_conformance_suite_missing")
+
+
+def test_retired_prototype_rows_are_not_relabelled_as_native_evidence(capsys) -> None:
+    for row_id in ("s0.file_matrix_twelve_rows", "s0.nokv_live_matrix"):
+        assert ladder.main(["--row", row_id]) == 2
+        capsys.readouterr()
+
+
+def test_native_ladder_suites_remain_in_the_regular_typescript_test_job() -> None:
+    package = json.loads((ladder.REPO_ROOT / "package.json").read_text())
+    assert "tests/control_plane_ts/*.test.ts" in package["scripts"]["test:control-plane"]
+    regular_suites = set(ladder.REPO_ROOT.glob("tests/control_plane_ts/*.test.ts"))
+    assert {ladder.REPO_ROOT / path for path in ladder.LOCAL_CONFORMANCE_TESTS.values()} <= regular_suites
+    assert {row.id for row in ladder.LADDER_ROWS if row.stage == "0"} == {
+        "s0.native_file_conformance", "s0.native_sqlite_conformance",
+    }

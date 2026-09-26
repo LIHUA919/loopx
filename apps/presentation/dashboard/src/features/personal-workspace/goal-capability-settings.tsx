@@ -195,7 +195,10 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
 function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
   const { locale, t } = useWorkspaceI18n();
   const orderedCapabilities = useMemo(
-    () => orderCapabilitiesForPresentation(catalog.capabilities, locale),
+    () => orderCapabilitiesForPresentation(
+      catalog.capabilities.filter((capability) => capability.available_scopes.includes("goal")),
+      locale,
+    ),
     [catalog.capabilities, locale],
   );
   const [selectedCapabilityId, setSelectedCapabilityId] = useState(
@@ -241,7 +244,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, notification, onApplied
   return (
     <div className="personal-capability-layout">
       <CapabilityCatalogNavigation
-        capabilities={catalog.capabilities}
+        capabilities={orderedCapabilities}
         locale={locale}
         onSelect={setSelectedCapabilityId}
         scope="goal"

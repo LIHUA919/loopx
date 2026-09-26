@@ -56,6 +56,17 @@ from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
+
+# These steering failures occur before the provider receives a message. A
+# fresh ingress identity can safely retry the same draft after recovery.
+STEERING_NOT_DELIVERED_CODES = frozenset({
+    "attached_session_live_steering_unavailable",
+    "live_steering_turn_mismatch",
+    "live_steering_requires_active_turn",
+    "live_steering_session_not_attached",
+    "live_steering_turn_not_started",
+})
+
 class ChatRuntimeAdapter(Protocol):
     @property
     def upstream_thread_id(self) -> str: ...
@@ -294,6 +305,7 @@ class ChatRuntimeController:
         self.session_adapter_locks: dict[str, threading.Lock] = {}
         self.session_queue_workers: set[str] = set()
         self.session_queue_threads: dict[str, threading.Thread] = {}
+        self.session_queue_wakeups: set[str] = set()
         self.closed = threading.Event()
         from .chat_loopx_mode import ChatLoopXMode
         self.loopx_mode = ChatLoopXMode(self)
@@ -904,6 +916,7 @@ class ChatRuntimeController:
         session_id: str,
         client_ingress_id: str,
         message: str,
+        expected_turn_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
 
@@ -915,6 +928,7 @@ class ChatRuntimeController:
             client_ingress_id=client_ingress_id,
             mode="live_steering",
             message=message,
+            expected_turn_id=expected_turn_id,
         )
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             capabilities = session.get("attached_capabilities")
@@ -935,8 +949,16 @@ class ChatRuntimeController:
                 if turn is None:
                     raise RuntimeError("live_steering_turn_missing")
                 return turn, False
+            if receipt.get("status") == "failed" and receipt.get("error_code") in STEERING_NOT_DELIVERED_CODES:
+                raise RuntimeError(str(receipt["error_code"]))
             raise RuntimeError("live_steering_delivery_unresolved")
         active_turn_id = str(session.get("active_turn_id") or "")
+        if expected_turn_id is not None and active_turn_id != expected_turn_id:
+            self.store.update_ingress_receipt(
+                session_id, client_ingress_id, status="failed",
+                error_code="live_steering_turn_mismatch",
+            )
+            raise RuntimeError("live_steering_turn_mismatch")
         if not active_turn_id:
             self.store.update_ingress_receipt(
                 session_id,
@@ -959,6 +981,14 @@ class ChatRuntimeController:
         deadline = time.monotonic() + min(5.0, self.startup_timeout_sec)
         while time.monotonic() < deadline:
             turn = self.store.load_turn(session_id, active_turn_id)
+            current_session = self.store.load_session(session_id) or {}
+            if (current_session.get("active_turn_id") != active_turn_id
+                    or (turn or {}).get("status") not in {"queued", "starting", "running"}):
+                self.store.update_ingress_receipt(
+                    session_id, client_ingress_id, status="failed",
+                    error_code="live_steering_turn_mismatch",
+                )
+                raise RuntimeError("live_steering_turn_mismatch")
             upstream_turn_id = str((turn or {}).get("upstream_turn_id") or "")
             if upstream_turn_id:
                 break
@@ -1044,7 +1074,10 @@ class ChatRuntimeController:
         # Admission must not read session files: callers can hold their own
         # lifecycle fence here. The worker validates the session before effects.
         with self.lock:
-            if self.closed.is_set() or session_id in self.session_queue_workers:
+            if self.closed.is_set():
+                return
+            if session_id in self.session_queue_workers:
+                self.session_queue_wakeups.add(session_id)
                 return
             worker = threading.Thread(
                 target=self._drain_session_queue,
@@ -1104,8 +1137,17 @@ class ChatRuntimeController:
                     work_dir=work_dir,
                     objective=objective,
                 )
+                with self.lock:
+                    self.session_queue_wakeups.discard(session_id)
                 turn = self.store.claim_next_queued_turn(session_id)
                 if turn is None:
+                    with self.lock:
+                        if session_id in self.session_queue_wakeups:
+                            continue
+                        worker = self.session_queue_threads.get(session_id)
+                        if worker is threading.current_thread():
+                            self.session_queue_workers.discard(session_id)
+                            self.session_queue_threads.pop(session_id, None)
                     return
                 turn_id = str(turn["turn_id"])
                 with self.lock:
@@ -1119,8 +1161,11 @@ class ChatRuntimeController:
                 )
         finally:
             with self.lock:
-                self.session_queue_workers.discard(session_id)
-                self.session_queue_threads.pop(session_id, None)
+                worker = self.session_queue_threads.get(session_id)
+                if worker is threading.current_thread():
+                    self.session_queue_workers.discard(session_id)
+                    self.session_queue_threads.pop(session_id, None)
+                    self.session_queue_wakeups.discard(session_id)
 
     def _run_turn(
         self,

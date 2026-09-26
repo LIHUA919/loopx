@@ -435,7 +435,10 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
     for payload in goal_hosts:
         assert "selection_command" in payload["task_body"]
         assert "No learning queue unless asked." in payload["task_body"]
-        assert "完成获准工作并验证后，再按 next_cli_actions 写回和记账" in payload["task_body"]
+        assert (
+            "do/verify authorized work, then follow next_cli_actions for writeback/spend"
+            in payload["task_body"]
+        )
         assert payload["interface_budget"]["budget_char_count"] <= 2_800
         assert payload["interface_budget"]["within_budget"] is True
 

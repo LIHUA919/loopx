@@ -70,7 +70,9 @@ def acceptance_gaps_from_held_goal_binding(
                 f"Inspect {todo_id}, its acceptance binding and the owner's contract scope; "
                 "a local validation contract must not unintentionally hold independent work. "
                 "Prepare a scope/binding correction for the authorized owner when needed; "
-                + ("restore an unintended edit, " if state == "stale" else
+                + ("restore the exact prior text/wait using todo update with --update-operation-id "
+                   "and --update-expected-provider-revision after releasing any active lease; "
+                   "if the prior declaration is unknown or cannot match, request owner rebind, " if state == "stale" else
                    "prepare the missing association for owner review, ") +
                 "or record an evidence-linked path delta and continue via an eligible "
                 "successor, or record a concrete blocker for the required owner confirmation. "

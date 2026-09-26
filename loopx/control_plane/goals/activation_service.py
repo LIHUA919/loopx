@@ -10,7 +10,7 @@ from typing import Any
 
 from ..projects.registry_codec import project_registry_transaction
 from ...configuration_transaction import configuration_payload_revision
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock
 from ...global_registry import sync_project_registry_to_global
 from ...history import load_registry
 from ...registry import registry_goals
@@ -383,7 +383,7 @@ def set_goal_activation_state(
         operation="set_goal_activation_state",
     ) as transaction:
         target_lock = (
-            exclusive_file_lock(
+            exclusive_cross_runtime_file_lock(
                 target_registry,
                 operation="set_goal_activation_state",
             )

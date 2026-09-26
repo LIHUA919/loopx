@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -9,6 +11,7 @@ from loopx.capabilities.manager_context import (
     _write,
     acknowledge,
     authority,
+    configure_delivery_target,
     deliver,
     pending,
     register_ingress,
@@ -224,6 +227,130 @@ def test_external_authority_requires_exact_sender_source_and_recipient(fixture):
     with pytest.raises(ValueError):
         deliver(root, registry, session=session, turn=turn, request=request)
     assert receipt["status"] == "delivered"
+
+
+def test_operator_delivery_target_preview_grant_revoke_and_live_authority(fixture):
+    root, registry, session, turn, request = fixture
+    channel = "manager.external." + "a" * 24
+    session["channel_id"] = channel
+    turn["origin"] = "lark"
+    other = {"goal_id": "other", "agent_id": "peer"}
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {
+        "schema_version": POLICY_SCHEMA,
+        "sources": {channel: {
+            "sender_ids": ["owner"], "targets": [other],
+            "evidence_goal_ids": ["research", "other"],
+            "evidence_ssh_hosts": {"example-host": ["research"]},
+        }},
+    })
+    before = policy_path.read_bytes()
+    preview = configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True
+    )
+    assert preview["would_change"] and not preview["executed"]
+    assert preview["resulting_target_count"] == 2
+    assert policy_path.read_bytes() == before
+
+    register_ingress(
+        root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
+        channel=channel, sender_id="owner", message=turn["message"],
+        source_id="lark:original",
+    )
+    assert authority(root, registry, session, turn)["targets"] == [other]
+    applied = configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True, execute=True
+    )
+    assert applied["changed"] and applied["granted_after"] and applied["readback_verified"]
+    assert authority(root, registry, session, turn)["targets"] == [other, request]
+    assert not configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True, execute=True
+    )["changed"]
+    saved = json.loads(policy_path.read_text())
+    assert saved["sources"][channel]["sender_ids"] == ["owner"]
+    assert saved["sources"][channel]["evidence_ssh_hosts"] == {"example-host": ["research"]}
+
+    revoked = configure_delivery_target(
+        root, registry, channel=channel, **request, grant=False, execute=True
+    )
+    assert revoked["changed"] and not revoked["granted_after"] and revoked["readback_verified"]
+    assert authority(root, registry, session, turn)["targets"] == [other]
+    assert not configure_delivery_target(
+        root, registry, channel=channel, **request, grant=False, execute=True
+    )["changed"]
+
+    # Older policy rows may carry metadata; recipient identity is still the pair.
+    saved = json.loads(policy_path.read_text())
+    saved["sources"][channel]["targets"] = [other, {**request, "note": "legacy"}, request]
+    _write(policy_path, saved)
+    assert not configure_delivery_target(
+        root, registry, channel=channel, **request, grant=True, execute=True
+    )["changed"]
+    assert authority(root, registry, session, turn)["targets"] == [other, request]
+    assert configure_delivery_target(
+        root, registry, channel=channel, **request, grant=False, execute=True
+    )["readback_verified"]
+    assert json.loads(policy_path.read_text())["sources"][channel]["targets"] == [other]
+
+
+def test_operator_target_grant_fails_closed_without_audited_source_or_agent(fixture):
+    root, registry, _, _, request = fixture
+    channel = "manager.external." + "b" * 24
+    with pytest.raises((OSError, ValueError)):
+        configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+
+    policy_path = _root(root) / "policy.json"
+    source = {"sender_ids": ["owner"], "evidence_goal_ids": ["other"], "targets": []}
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
+    with pytest.raises(ValueError, match="outside the channel read scope"):
+        configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+    source["evidence_goal_ids"] = ["research"]
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
+    with pytest.raises(ValueError, match="registered Agent"):
+        configure_delivery_target(root, registry, channel=channel, goal_id="research",
+                                  agent_id="unknown", grant=True, execute=True)
+    source["evidence_goal_ids"] = ["research", "*"]
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
+    with pytest.raises(ValueError, match="outside the channel read scope"):
+        configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+    source["evidence_goal_ids"] = ["research"]
+    _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
+    data = json.loads(registry.read_text())
+    data["goals"][0]["activation_state"] = "stopped"
+    registry.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="active Goal"):
+        configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
+    assert json.loads(policy_path.read_text())["sources"][channel]["targets"] == []
+
+
+def test_manager_inbox_cli_previews_and_applies_one_delivery_target(fixture):
+    root, registry, _, _, request = fixture
+    channel = "manager.external." + "c" * 24
+    policy_path = _root(root) / "policy.json"
+    _write(policy_path, {
+        "schema_version": POLICY_SCHEMA,
+        "sources": {channel: {"sender_ids": ["owner"], "targets": []}},
+    })
+    base = [
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--runtime-root", str(root), "manager-inbox",
+    ]
+    options = ["--channel-id", channel, "--goal-id", request["goal_id"],
+               "--agent-id", request["agent_id"]]
+
+    def call(action, execute=False):
+        completed = subprocess.run(
+            [*base, action, *options, *(["--execute"] if execute else [])],
+            capture_output=True, text=True, check=True,
+        )
+        return json.loads(completed.stdout)
+
+    original = policy_path.read_bytes()
+    assert call("grant-delivery-target")["would_change"]
+    assert policy_path.read_bytes() == original
+    assert call("grant-delivery-target", execute=True)["granted_after"]
+    assert call("revoke-delivery-target", execute=True)["granted_after"] is False
+    assert json.loads(policy_path.read_text())["sources"][channel]["targets"] == []
 
 
 def test_same_goal_recipients_keep_inboxes_and_decisions_separate(fixture):

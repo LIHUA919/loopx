@@ -53,11 +53,16 @@ class ChatTodoActionMixin:
             status=status,
             **({"role": "user", "no_followup": bool(parameters.get("no_followup", True))}
                if operation == "complete" else {}),
-            note=parameters.get("note"),
+            # A reviewed block is a lifecycle transition, not a copy edit.
+            # Its UI/Lark note supplies the public reason; a combined note
+            # patch would cross the hard-lease execution fence.
+            note=(parameters.get("note") if operation != "block" or basis is None else None),
+            reason=(parameters.get("note") if operation == "block" and basis is not None else None),
             claimed_by=(
                 parameters.get("agent_id") if operation == "reassign" else None
             ),
             resume_when=parameters.get("resume_when"),
+            clear_resume_when=operation == "block" and basis is not None,
             successor_todo_ids=parameters.get("successor_todo_ids"),
             agent_id=parameters.get("agent_id"),
             authority_reason="owner-confirmed typed Chat action",

@@ -322,6 +322,24 @@
 .personal-message time { color: var(--pw-faint); font-size: 10px; }
 .personal-message p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.7; font-size: 13.5px; }
 .personal-message-pending { color: var(--pw-muted); font-size: 11px; }
+.personal-message-work { margin-top: 8px; }
+.personal-message-work-current { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.personal-message-work-current .personal-message-pending { font-size: 13px; line-height: 1.5; }
+.personal-message-work button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; font-size: 12px; color: var(--pw-text); background: var(--pw-card); cursor: pointer; }
+.personal-message-work button:disabled { opacity: .6; cursor: not-allowed; }
+.personal-message-work button:focus-visible, .personal-message-steer textarea:focus-visible, .personal-message-activity summary:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 3px; }
+.personal-message-work-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-message-steer { display: grid; gap: 8px; margin: 12px 0; }
+.personal-message-steer label { display: grid; gap: 6px; font-size: 13px; }
+.personal-message-steer textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); resize: vertical; }
+.personal-message-steer span, .personal-message-work .personal-message-steer-receipt { color: var(--pw-muted); font-size: 12px; }
+.personal-message-steer button { justify-self: start; }
+.personal-message-activity { color: var(--pw-muted); font-size: 12px; }
+.personal-message-activity summary { cursor: pointer; padding: 8px 0; width: fit-content; }
+.personal-message-activity summary span { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.personal-message-activity ol { margin: 0; padding: 0 0 4px 20px; list-style: decimal; }
+.personal-message-activity li { display: list-item; margin: 4px 0; overflow-wrap: anywhere; }
+.personal-message-work .personal-message-work-error { color: var(--pw-red); font-size: 12px; }
 .personal-return-delivery { display: inline-block; margin-top: 7px; color: var(--pw-muted); font-size: 11px; font-weight: 600; }
 .personal-return-delivery.is-delivered { color: var(--pw-green); }
 .personal-return-delivery.is-verification_required { color: var(--pw-blue-ink); }
@@ -1259,6 +1277,7 @@
 
 @media (max-width: 720px) {
   .personal-workspace-shell, .personal-workspace-shell.has-drawer { grid-template-columns: 1fr; }
+  .personal-message:not(.is-user) { max-width: 100%; }
   .personal-workspace-shell, .personal-workspace-main, .personal-channel { width: 100%; max-width: 100vw; overflow-x: hidden; }
   .personal-workspace-sidebar { display: none; position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(310px, 86vw); box-shadow: 18px 0 50px rgb(30 28 20 / 16%); }
   .personal-workspace-shell.mobile-sidebar-open .personal-workspace-sidebar { display: block; }

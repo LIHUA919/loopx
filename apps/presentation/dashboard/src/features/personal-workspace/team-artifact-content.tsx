@@ -15,7 +15,7 @@ export function managedReportArtifact(contentType: string, sha256: string, text:
 /** Evidence stays inert: no HTML interpretation, embedded images or remote fetches. */
 export function TeamArtifactContent({artifact, label, raw = false}: {artifact: TeamArtifact; label: string; raw?: boolean}) {
   if (!raw && isMarkdownArtifact(artifact.ref)) return <div className="goal-team-report" aria-label={label} tabIndex={0}>
-    <MarkdownText text={artifact.text} report/>
+    <MarkdownText text={artifact.text}/>
   </div>;
   return <pre tabIndex={0} aria-label={label}>{artifact.text}</pre>;
 }

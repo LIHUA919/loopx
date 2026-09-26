@@ -18,7 +18,7 @@ READ_TOOL = {
     "name": TOOL_NAME,
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
-        "one Goal's current Todos, recorded deliveries, or handoff receipt status. "
+        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. "
         "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
         "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
@@ -32,11 +32,12 @@ READ_TOOL = {
         "properties": {
             "view": {
                 "type": "string",
-                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs"],
+                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents"],
             },
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
             "goal_id": {"type": "string"},
+            "query": {"type": "string", "maxLength": 200, "description": "Agents only: case-insensitive text match on identity and declared responsibility. Omit to browse all permitted registrations."},
             "request_id": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$",
@@ -44,7 +45,7 @@ READ_TOOL = {
             },
             "include_stopped": {
                 "type": "boolean",
-                "description": "Portfolio only: include stopped Goals for an explicit historical question.",
+                "description": "Portfolio/agents: include stopped Goals for an explicit historical question.",
             },
             "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12},
@@ -98,10 +99,15 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
     if "request_id" in arguments and view != "handoffs":
         rejected.append("request_id:only_for_view_handoffs")
     if "include_stopped" in arguments:
-        if view != "portfolio":
-            rejected.append("include_stopped:only_for_view_portfolio")
+        if view not in {"portfolio", "agents"}:
+            rejected.append("include_stopped:only_for_view_portfolio_or_agents")
         elif type(arguments["include_stopped"]) is not bool:
             rejected.append("include_stopped:must_be_a_boolean")
+    if "query" in arguments:
+        if view != "agents":
+            rejected.append("query:only_for_view_agents")
+        elif not isinstance(arguments["query"], str) or len(arguments["query"]) > 200:
+            rejected.append("query:must_be_a_string_at_most_200_characters")
     offset = arguments.get("offset", 0)
     if type(offset) is not int or offset < 0:
         rejected.append("offset:must_be_an_integer_at_least_0")
@@ -157,6 +163,8 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "context_delegation": context.get("context_delegation"),
         "evidence_sources": context.get("evidence_sources", [])[:12],
         "evidence_source_count": len(context.get("evidence_sources", [])),
+        "agent_discovery": {"tool": read_tool, "view": "agents", "scope": "permitted_registry",
+                            "independent_of_delivery_targets": True},
         "read_tool": read_tool,
     }
 
@@ -188,6 +196,8 @@ class ManagerInspection:
         channel_id: str | None = None,
         remote_runner=None,
         ssh_config_path=None,
+        discovery_scope: Callable[[], list[str] | None] | None = None,
+        delegation_authority: Callable[[], dict] | None = None,
     ) -> None:
         self.context = context
         self.registry_path = registry_path
@@ -198,6 +208,8 @@ class ManagerInspection:
         self.channel_id = channel_id
         self.remote_runner = remote_runner
         self.ssh_config_path = ssh_config_path
+        self.discovery_scope = discovery_scope
+        self.delegation_authority = delegation_authority
 
     def sources(self):
         if self.context.get("scope") == "owner_goal":
@@ -239,12 +251,34 @@ class ManagerInspection:
             self.record(result)
             return result
         if source_id != "local":
-            if not source_id.startswith("ssh:") or view == "handoffs" or (view != "portfolio" and not goal_id):
+            if not source_id.startswith("ssh:") or view == "handoffs" or (view not in {"portfolio", "agents"} and not goal_id):
                 return {"ok": False, "error": "invalid_remote_read"}
             from .ssh_evidence import read_remote
             result = read_remote(self.runtime_root, self.channel_id, self.owner_scope, arguments,
                                  self.scope_valid, config_path=self.ssh_config_path,
                                  **({"runner": self.remote_runner} if self.remote_runner else {}))
+            self.record(result)
+            return result
+        if view == "agents":
+            from .discovery import agent_page
+            # The current audience scope is independent of bounded portfolio
+            # collection and the sender's narrower context-delivery grants.
+            ids = (self.discovery_scope() if self.discovery_scope else
+                   None if self.owner_scope and self.context.get("scope") == "owner_global" else
+                   [r["goal_id"] for r in self.context.get("goals", [])])
+            if ids is None and not (self.owner_scope and self.context.get("scope") == "owner_global"):
+                return {"ok": False, "error": "authorization_changed"}
+            if ids is not None and (not isinstance(ids, list) or any(not isinstance(g, str) for g in ids)):
+                return {"ok": False, "error": "authorization_changed"}
+            if goal_id is not None:
+                if ids is not None and goal_id not in ids:
+                    return {"ok": False, "error": "goal_outside_available_scope"}
+                ids = [goal_id]
+            grant = self.delegation_authority() if self.delegation_authority else self.context.get("context_delegation")
+            result = agent_page(self.registry_path, goal_ids=ids, query=arguments.get("query", ""),
+                                include_stopped=include_stopped, offset=offset, limit=limit, delegation=grant)
+            if not self.scope_valid():
+                return {"ok": False, "error": "authorization_changed"}
             self.record(result)
             return result
         goals = {r["goal_id"]: r for r in self.context.get("goals", [])}

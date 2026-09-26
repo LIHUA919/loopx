@@ -1,8 +1,9 @@
 # Default cutover: reconciled implementation frontier
 
-- Baseline: `d64c4d377` on `main`, 2026-09-24; open PR states are a snapshot, not merge promises.
+- Baseline: `41ba6f4d9` on `main`, 2026-09-25; open PR states are a snapshot, not merge promises.
 - Owners: overall roadmap #4574 R5/G2; shared authority L2–L9/D1–D3; TS migration T1–T4.
-- Delivery: complete source transport through existing typed projection and shadow management owners.
+- Delivered #5040: current registration admission, complete saved migration intent and truthful fence recovery.
+- Current increment: File retained-state compaction stacked on #5063; the migration packages below remain open. #5063 has now merged; rebased onto main `eaa0c0fd0`.
 - This checkpoint supersedes numerical remaining-PR estimates in earlier delivery entries.
 
 ## Correct the accounting
@@ -18,30 +19,77 @@ them as though they were interchangeable PRs.
 | --- | --- |
 | #4870 claim-preserving writes; #4888 reviewed cutover; #4920 drain planning | Implemented. Exercise their combined head; do not commission replacements. |
 | #4922 complete canonical snapshot pagination; #4960 qualified SQLite runtime admission; #4961 display refresh recovery; #4964 shared source summaries | Implemented. Consumer and packaged-client acceptance still needs integration evidence; a whole new pagination/recovery implementation is not pending. |
-| #4967 typed complete-source assembly; #4968 native outbox delivery/recovery | Implemented. Large source RPC failure below is a separate demonstrated gap, not absence of capture assembly. |
-| #5003 atomic event-owned completion | Open. Solves batch publication/retry, **not** the event writer's shadow-capture binding. |
-| #4994 explicit leased Agent handoff; #4995 generated Monitor proof; #4991 rejected poll reservation; #4992 deferred receipt-bound Turn | Open. Integrate their exact reviewed heads before deciding what caller work remains; do not recreate them under a new caller-refactor PR. |
+| #4967 typed complete-source assembly; #4968 native outbox delivery/recovery | Implemented. Complete-source transport is also merged in #5013; capture assembly is not missing. |
+| #5003 atomic event-owned completion | Merged. Solves batch publication/retry, **not** the event writer's shadow-capture binding. |
+| #4994 explicit leased Agent handoff; #4995 generated Monitor proof; #4991 rejected poll reservation; #4992 deferred receipt-bound Turn | Merged. Audit the integrated callers before deciding what remains; do not recreate them under a new caller-refactor PR. |
 | #4931 retained SQLite proof encoding, contributor #4224 | Open optimization plus incomplete D2 qualification. A speedup is not capacity/recovery/soak acceptance. |
 | #4915 default `.loopx` filesystem placement | Separate configuration migration; does not select File/SQLite authority. |
 
-There are six relevant open implementation PRs above (#5003, #4994, #4995,
-#4991, #4992, #4931), plus the separately classified #4915 to avoid conflating
-filesystem placement with authority. These are not six unstarted requirements,
-nor a claim that every one is a mandatory storage-default dependency.
+Only #4931 remains open among those implementation PRs; #4915 is separate
+filesystem migration. #5011/#5012/#5013/#5014/#5016 are also merged; reuse their
+transaction, complete-source and source-witness owners. The latest formal #4224
+1 MiB report still fails receipt p95 (269.03 ms versus 50 ms) and scan-100 p95
+(801.81 ms versus 250 ms). #4931 has not supplied a formal exact-head rerun.
+Reaching the planned ten-day soak end date is not a passing report.
 
-## Four concrete next delivery boundaries
+## File history cost: delivered slice, separate acceptance
 
-These are **four proposed new batches including this delivery**, in addition to
-integrating existing work. They are not a guaranteed total remaining PR count.
-The command inventory and exact-profile acceptance can reveal further defects;
-record a new demonstrated gap rather than silently keeping a range unchanged.
+A detached long-history snapshot exposed File's repeated full-projection write
+cost. #5063 bounds RPC waits and retains verified read views; it does not remove
+that physical duplication. This stack reuses the SQLite-owned shared TS state-log
+codec for File checkpoints/deltas, preserving logical revisions, receipts and
+full scan results. See [format, upgrade and limits](../../../../reference/file-authority-state-log.md).
+Normal reads/writes accept only v1. Explicit upgrade automatically backs up and
+verifies File/SQLite before physical migration, and installation invokes it before
+activation. Cross-provider movement reuses logical archive recovery. Older binaries
+cannot read v1. Conversion, cold verification,
+steady writes and warm reads require separate evidence; cache limits are unchanged.
 
-| Batch | Observable result and owning boundary | Exit and remaining dependency |
+Before this slice, the audited implementation plan therefore contains **four
+named packages**: this evidenced File cost repair plus the three below. After
+this slice it contains those **three planned packages**, not a new unchanged
+“5–8 PRs” estimate. #5063, #5054 and #4931 are existing PRs, not three new tasks.
+D1–D3 and an exact total PR count remain unqualified. This storage repair retires
+no Python business owner; bounded Python deletion belongs to actual caller
+migration in the packages below.
+
+## 2026-09-26: early prototype retirement
+
+Reconciled against main `8cfc0dd4c`: #5102 is merged; File history encoding and
+automatic upgrade are delivered, not remaining work. This slice removes the
+Python executor, head, File provider and bootstrap bridge after the production
+caller audit. Native TS commands remain the owners; `authority_core.py` still
+has real adapter callers. Stage 0 now qualifies actual File/SQLite conformance
+instead of the obsolete Python provider. Historical row ids are not reused.
+[Coverage and format boundary](../../../../../examples/shared-goal-authority-e2e/README.md#native-qualification-and-prototype-retirement).
+
+This independently deliverable deletion advances package 3 below; it does not
+close any whole default-cutover package. **After this PR, plan the same three
+named implementation PRs below**, with prototype retirement removed from their
+scope. Counting this early deletion slice makes four named deliveries starting
+with this PR, not a guaranteed total. #5054/#4931 remain existing dependencies;
+#4224 and D1–D3 are evidence gates. The Chinese package-2 row is corrected to the
+accepted retirement direction rather than requesting a new writer for retired
+Todo events. Future accounting must distinguish a completed sub-slice from a
+closed package and record the concrete residual gap.
+
+## Three concrete next code boundaries
+
+This delivery repairs integrated migration admission: stale registry snapshots
+could bootstrap a shadow and saved execution dropped migration policy. It does
+not implement another store or close the whole migration package or D2 gate.
+
+| Proposed PR | Observable result and owner | Exit |
 | --- | --- | --- |
-| A. Complete source pipeline (this delivery) | A source larger than the RPC envelope can pass typed projection, bootstrap, writer capture, inspect, qualify and reviewed promotion without truncation. Python transports bytes; TS retains source admission and authority. | Large real CLI journey; File/SQLite complete reads; source-witness rejection; detached real-source rehearsal. Does not bind the event writer or qualify a provider default. |
-| B. External-effect executor fence | Current execution proof protects the actual external-effect interval, including takeover, timeout, exit and uncertain completion, using the existing lease/effect owners. | Stale executors cannot execute or settle fenced work; exact receipt recovery. #4994/#4995 caller integration is reused; a point-in-time proof check alone is insufficient. |
-| C. Event-writer binding and whole-Goal migration/rollback | Bind the actual event writer lock/publication lifecycle to the existing outbox lineage, then exercise mixed Markdown/event/lease writers, drain, reviewed cutover, canonical consumers and fenced export/rollback as one journey. Retire replaced Python decisions at their TS owner. | Integrate #5003 rather than reimplement atomic completion. Preserve `event_log_writer_not_bound` until the real binding passes. D1 consumers, command inventory and D3 cohort evidence must close; if this requires separate code, name the discovered boundary explicitly. |
-| D. Default/onboarding and final bounded Python retirement | Qualified local profile is selected consistently by new Goal creation, settings, installation and packaged frontend/Lark/CLI; existing Goals follow explicit migration/disable guidance. Delete only business writers whose callers have switched. | B/C and applicable D1–D3 evidence, rollback and entrypoint readback. Keep permanent Python rendering, host IO and legal import/export. |
+| 1. External-effect execution fencing | Lease/effect owners protect the actual execution interval, takeover, timeout, exit and uncertain completion. Reuse merged #4994/#4995. | Stale executors cannot continue or settle; real executor and receipt recovery matrix passes. A point-in-time proof check is insufficient. |
+| 2. Whole-Goal migration/rollback and retained source closure | Reconcile open #5054, which retires the legacy Todo event path and isolates supervisor logging; do not build another capture writer for a retired source. Integrate remaining supported sources, drain, saved cutover, consumers and fenced export/rollback; delete Python decisions replaced by TS. | Prove the supported command/source inventory after #5054, D1 and the D3 cohort; reject retired input explicitly. One Goal without a legacy event overlay does not prove every retained caller or rollback path. |
+| 3. Default entrypoints and bounded Python retirement | New Goals, settings, installation and packaged frontend/Lark/CLI select a qualified profile consistently; existing Goals have explicit migration/disable flows. | 1/2 and applicable D1–D3 pass; user entrypoints work; delete business writers only after their last callers migrate. Retain rendering, host IO and lawful import/export. |
+
+**Plan three named future implementation PRs, plus existing #4931 and outstanding
+evidence; do not promise a total of four PRs.** Newly discovered defects must
+name their own repair and evidence, not reset an unchanged “5–8” estimate.
+Bounded File opt-in, qualified SQLite default and all-existing-Goal migration
+are separate acceptance scopes.
 
 D2 capacity, crash/restore/upgrade/runtime coverage and **at least ten days of
 natural elapsed soak** are evidence gates on an exact SQLite profile, not an
@@ -57,9 +105,42 @@ capacity qualification remain its separate medium-term path. Local default
 does not wait for PostgreSQL deployment; a passing conformance suite does not
 establish production service readiness.
 
-## Complete-source transport and budget decision
+## Long-history closeout: this repair and its remaining boundary
 
-At this baseline `test_canonical_snapshot_integration` fails before provider
+A live long-running lane lost the response to the five-second
+`quota.prior_host_turn_closeout.preflight` query; later read-only inspection and
+same-Turn retry recovered. Per-request indexing already exists. This repair
+removes repeated JSON decoding across reads: always read fresh bytes and hash
+the entire retained newline-terminated prefix before reuse; decode only appended
+lines when it matches. Rewrites, truncation, replacement, malformed rows and
+unfinished tails remain visible, as do conflicts in old Turns. Retain at most
+four logs and prefixes representing 128 MiB of source bytes; oversized histories
+use uncached parsing. This bounds retained source volume, not exact JS heap size.
+The cache is disposable and introduces no durable index, format or authority.
+
+Cold parsing yields between data batches to share the runtime event loop. Full
+byte reads remain necessary: this is not constant-time arbitrary-history support
+or D2 retention/capacity qualification. The five-second budget is unchanged. The
+incident's transient process/host scheduling cause was not reproduced reliably;
+validation establishes reduced duplicate work and concurrency headroom, not the
+absence of every possible environmental timeout.
+
+Monitor closeout now consumes the existing TS settlement rule for an exact
+committed poll. Python no longer scans the run log a second time and adapts only
+current Todo facts. Later uncommitted observations cannot hide earlier exact
+commit evidence; foreign identities and wrong effects cannot settle a Turn.
+A lost read-only preflight response reports `closeout_query_unavailable`, without
+asking for a nonexistent preflight write receipt. Unknown queries remain closed;
+there is no automatic mutation replay or shared-runtime restart.
+
+This is an evidenced R1/R5/S7 liveness repair and bounded Python retirement, not
+completion of implementation package 2. The three named boundaries above and
+separate #4931/D2 evidence gates remain. Existing quota CLI/heartbeat entrypoints
+adopt the change; no new setting or separate frontend/Lark policy is needed.
+
+## Delivered #5013: complete-source transport and budget decision
+
+Before #5013, `test_canonical_snapshot_integration` failed before provider
 admission: complete source projection exceeds the 2 MiB request limit. Paging
 canonical reads already exists, but source capture and management still send
 whole projections. Trimming source records would invalidate digests and parity;
