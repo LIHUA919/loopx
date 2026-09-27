@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from loopx import paths
+from loopx.cli_runtime import resolve_cli_registry
 from loopx.control_plane.projects.registry_codec import (
     ProjectRegistryProtocolError,
     load_project_registry,
@@ -86,6 +88,44 @@ def test_default_route_keeps_one_existing_legacy_registry(monkeypatch: pytest.Mo
     assert paths.default_runtime_route()["status"] == "invalid"
     with pytest.raises(ValueError, match="not a regular file"):
         paths.resolve_runtime_root({})
+
+
+def test_host_global_registry_selector_uses_one_host_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    source, target, _ = _fixture(tmp_path, projects=1)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    args = argparse.Namespace(
+        command="goal-lifecycle", registry="@host-global", runtime_root=None,
+    )
+    argv = ["--registry", "@host-global", "goal-lifecycle"]
+    assert resolve_cli_registry(args, argv) == (source / "registry.global.json", True)
+
+    _write_json(target / "registry.global.json", {"goals": []})
+    with pytest.raises(SystemExit, match="Both default LoopX registries exist"):
+        resolve_cli_registry(args, argv)
+    args.runtime_root = str(source)
+    assert resolve_cli_registry(args, argv) == (source / "registry.global.json", True)
+
+
+def test_doctor_reads_legacy_capture_hosts_from_selected_runtime(
+    tmp_path: Path,
+) -> None:
+    source, _target, _projects = _fixture(tmp_path, projects=1)
+    env = dict(os.environ, HOME=str(source.parents[1]), LOOPX_USAGE_PING="0")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    completed = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "doctor"],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+        encoding="utf-8", timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["local_state_route"]["selected_runtime_root"] == str(source)
+    assert payload["decision_context_capture"]["registry"] == str(
+        source / "decision-context" / "capture-hosts"
+    )
 
 
 def test_existing_project_prompt_keeps_registered_goal_and_runtime_routes(tmp_path: Path) -> None:

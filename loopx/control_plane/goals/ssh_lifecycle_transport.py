@@ -57,6 +57,8 @@ def apply_ssh_goal_lifecycle(
     command = _REMOTE_LOOPX_PREFIX + "exec " + " ".join(
         [
             '"$bin"',
+            "--registry",
+            "@host-global",
             "--format",
             "json",
             "goal-lifecycle",

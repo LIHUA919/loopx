@@ -11,6 +11,9 @@ from . import __version__
 from .paths import default_registry_path, global_registry_path, select_default_runtime_root
 
 
+HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
+
+
 GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
 GLOBAL_OPTIONS_WITH_EQUALS = tuple(
 	f"{option}=" for option in sorted(GLOBAL_OPTIONS_WITH_VALUE)
@@ -126,7 +129,7 @@ def build_cli_parser(
 	parser.add_argument(
 		"--registry",
 		default=str(default_registry_path()),
-		help="Path to a project-local registry.",
+		help="Registry path, or @host-global for this host's selected default global registry.",
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
@@ -147,6 +150,16 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
+	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
+		try:
+			runtime_root = (
+				Path(args.runtime_root).expanduser()
+				if args.runtime_root
+				else select_default_runtime_root()
+			)
+		except ValueError as exc:
+			raise SystemExit(str(exc)) from exc
+		return global_registry_path(runtime_root), True
 	project_register_uses_default_registry = (
 		args.command == "project"
 		and args.project_command == "register"

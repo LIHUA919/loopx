@@ -82,7 +82,7 @@ def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote
     argv, opts = calls[0]
     assert (
         argv[-2] == "research-host"
-        and "--registry" not in argv[-1]
+        and "--registry @host-global" in argv[-1]
     )
     assert "--manager-view todos" in argv[-1] and "--goal-id remote-goal" in argv[-1]
     assert "BatchMode=yes" in argv and opts["timeout"] == 45

@@ -920,7 +920,7 @@ def collect_doctor(
         collect_capture_host_diagnostics,
     )
 
-    decision_context_capture = collect_capture_host_diagnostics(DEFAULT_RUNTIME_ROOT)
+    decision_context_capture = collect_capture_host_diagnostics(selected_runtime_root)
     typescript_control_plane = collect_effect_runtime_readiness(deep=deep)
     typescript_runtime_required = True
     deep_validation = None
