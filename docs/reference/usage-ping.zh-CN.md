@@ -99,7 +99,9 @@ App 不再要求首次点击启用。环境变量覆盖和 `consent_required` �
 
 ## 发送与关闭边界
 
-整机状态在 `~/.codex/loopx/usage-ping.json`，权限 `0600`。它不进入 Goal 状态或
+新安装的整机状态在 `~/.loopx/usage-ping.json`，权限 `0600`。已有默认全局 registry
+位于 `.codex/loopx` 时，统计状态继续沿旧路由，直到显式迁移；两份默认 registry
+并存时拒绝隐式设置写入。整机路径独立于 Goal runtime root。它不进入 Goal 状态或
 authority provider 备份、公共投影。普通命令只读取很小的本地提示；独立 Node 后台
 进程负责计数、锁和网络。首次告知和设置操作可能等待本机 Node，不等待收集服务。
 
