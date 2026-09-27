@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .paths import DEFAULT_RUNTIME_ROOT
+from .paths import select_default_runtime_root
 
 STATE_FILENAME = "usage-ping.json"
 _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
@@ -20,7 +20,8 @@ _ENTRY = Path(__file__).parent / "control_plane/runtime/usage_statistics_cli.ts"
 
 def state_path(runtime_root: Path | None = None) -> Path:
     """Machine-local choice is deliberately independent of a Goal runtime root."""
-    return Path(runtime_root or DEFAULT_RUNTIME_ROOT) / STATE_FILENAME
+    root = Path(runtime_root) if runtime_root is not None else select_default_runtime_root()
+    return root / STATE_FILENAME
 
 
 def install_channel() -> str:

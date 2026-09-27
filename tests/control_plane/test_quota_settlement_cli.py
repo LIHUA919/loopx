@@ -639,16 +639,22 @@ def _strip_heartbeat_workspace_causality(runtime: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("legacy_runtime", [False, True])
 def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, legacy_runtime: bool,
 ) -> None:
     # Production quota CLI -> detached Python discovery -> TS cycle owner.
     # The isolated home also proves telemetry never reads the operator's sessions.
     from loopx import usage_ping
     import time
     home = tmp_path / "isolated-home"
-    machine = home / ".codex" / "loopx"
+    machine = home / (".codex/loopx" if legacy_runtime else ".loopx")
     machine.mkdir(parents=True)
+    if legacy_runtime:
+        (machine / "registry.global.json").write_text(
+            json.dumps({"common_runtime_root": str(machine), "goals": []}),
+            encoding="utf-8",
+        )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
