@@ -131,6 +131,8 @@ backups of authority providers, or public projections. Normal
 CLI invocation reads only a small local hint; a detached Node process owns
 measurement, locks and network I/O. A first-use/settings operation may wait for
 local Node execution, never for a collector connection.
+Offline `migrate-local-state` commands do not schedule these observations,
+because their previews and rollback receipts bind the machine-state bytes.
 
 Each installation attempts at most one heartbeat per UTC day. The detached
 sender persists that daily claim and starts the request under one short lock;

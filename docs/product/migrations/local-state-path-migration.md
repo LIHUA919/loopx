@@ -15,7 +15,14 @@ declared by project registries. Other files under `.codex` remain in place.
 
 Stop LoopX workers, heartbeats, status servers, and other writers on this machine
 before executing. Older versions do not honor a migration-wide writer fence.
-Keep them stopped until status and project readback succeed. Run the preview:
+Keep them stopped until status and project readback succeed.
+
+The migration CLI does not schedule optional machine usage observations:
+their state is part of the runtime being moved, so background writes would
+invalidate the preview or rollback receipt. This applies to preview, execution
+and rollback; other writers still need to remain stopped.
+
+Run the preview:
 
 ```bash
 loopx --format json migrate-local-state
