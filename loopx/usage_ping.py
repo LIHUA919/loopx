@@ -65,7 +65,9 @@ def begin(command: str) -> tuple[str, float] | None:
     # cannot authorize collection; TS still checks every supported switch value.
     if os.environ.get("LOOPX_USAGE_PING") == "0" or os.environ.get("DO_NOT_TRACK") == "1" or os.environ.get("CI") == "true":
         return None
-    if command == "usage-ping":
+    # Whole-runtime migration includes this machine state. Detached observation
+    # would invalidate its preview or rollback receipt even with other hosts stopped.
+    if command in {"usage-ping", "migrate-local-state"}:
         return None
     try:
         path = state_path()

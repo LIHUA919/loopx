@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,50 @@ def test_doctor_reads_legacy_capture_hosts_from_selected_runtime(
     assert payload["decision_context_capture"]["registry"] == str(
         source / "decision-context" / "capture-hosts"
     )
+
+
+def test_real_migration_entrypoint_is_quiescent_with_usage_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx import usage_ping
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    usage_file = source / "usage-ping.json"
+    usage_ping.control("enable", usage_file)
+    before = usage_file.read_bytes()
+    env = dict(os.environ, HOME=str(source.parents[1]), USERPROFILE=str(source.parents[1]))
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        env.pop(key, None)
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    command = [sys.executable, "-c",
+               "from loopx.entrypoint import main; raise SystemExit(main())",
+               "--format", "json", "migrate-local-state"]
+
+    def cli(*args: str) -> dict:
+        result = subprocess.run([*command, *args], cwd=tmp_path, env=env,
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    routes = ["--source-runtime-root", str(source), "--target-runtime-root", str(target)]
+    preview = cli(*routes)
+    time.sleep(1)  # A detached observer would have altered the content-bound plan.
+    assert usage_file.read_bytes() == before
+    receipt = cli(*routes, "--execute", "--expected-plan-id", preview["plan_id"])
+    migrated = target / "usage-ping.json"
+    time.sleep(1)
+    assert migrated.read_bytes() == before
+    assert not source.exists()
+    rollback = ["--rollback-receipt", str(Path(receipt["backup_dir"]) / RECEIPT_NAME)]
+    assert cli(*rollback)["status"] == "rollback_ready"
+    assert cli(*rollback, "--execute")["status"] == "rolled_back"
+    assert usage_file.read_bytes() == before
+    assert not target.exists()
+    assert usage_ping.control("status", usage_file)["consent"] == "enabled"
 
 
 def test_existing_project_prompt_keeps_registered_goal_and_runtime_routes(tmp_path: Path) -> None:
