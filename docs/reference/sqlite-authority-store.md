@@ -1,10 +1,97 @@
 # SQLite authority provider
 
 SQLite is an **opt-in local conformance candidate**, behind the existing
-TypeScript `AuthorityStore` interface. File remains the default. This slice
+TypeScript `AuthorityStore` interface. File remains the canonical-provider
+fallback when no selector is present; this does not make every new Goal
+canonical or migrate an existing legacy Goal. This slice
 does not promote a goal, run a live cutover, enable cross-host writes, or
 qualify ten elapsed days of operation. It does provide the explicit
 version-1 to version-2 database migration described below.
+
+## Short-term default decision and matched experiment
+
+The September 27 decision is to target **SQLite for the next qualified local
+new-Goal default**, rather than first defaulting to File and moving again.
+This is an implementation direction, **not default activation or completed D2
+qualification**. File remains an explicit provider, a conformance reference and
+an export/recovery destination. Existing Goals retain their selected authority;
+a rejected SQLite runtime must never silently open File instead.
+
+The decision uses current File checkpoint/delta storage, not its retired
+full-projection-per-commit layout. On macOS arm64, Node 22.22.3 / SQLite 3.51.3,
+measurement source `e8193ce83` produced the following p95 milliseconds. Arms ran
+sequentially on one host; each uses 20 warm read samples, the final 100 writes,
+and five fresh-process head reads. Cold-process timing includes module loading
+and does not clear the OS page cache. These bounded observations are not a
+population estimate or a formal capacity/soak result.
+
+| Projection / commits | Provider | Write | Warm head | Historical receipt | Scan 100 | Cold process head |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Mixed 20 KiB / 128 | SQLite | 5.12 | 1.65 | 28.63 | 69.39 | 90.82 |
+| Mixed 20 KiB / 128 | File | 25.23 | 6.22 | 4.62 | 32.82 | 140.14 |
+| Mixed 20 KiB / 512 | SQLite | 4.76 | 1.62 | 28.36 | 66.78 | 77.69 |
+| Mixed 20 KiB / 512 | File | 36.05 | 6.88 | 4.84 | 37.32 | 295.88 |
+| Changing 1 MiB / 128 | SQLite | 48.50 | 9.87 | 153.46 | 377.60 | 91.62 |
+| Changing 1 MiB / 128 | File | 262.20 | 34.10 | 53.80 | 137.00 | 763.60 |
+| 464 Todos, 64 leases, 220 KiB / 128 | SQLite | 24.28 | 6.09 | 274.32 | 728.69 | 85.24 |
+| 464 Todos, 64 leases, 220 KiB / 128 | File | 42.10 | 42.49 | 25.27 | 427.99 | 745.60 |
+
+The same runner on main `d23f1c87d` measured SQLite changing-1-MiB receipt/
+scan p95 at 458.25/1056.86 ms, versus 153.46/377.60 ms here. Ordinary mixed
+receipt/scan was 26.00/68.29 ms versus 28.63/69.39 ms; the many-field fixture
+was 270.74/690.99 ms versus 274.32/728.69 ms. The optimization benefits repeated
+large strings; it does not establish a speedup for ordinary record-rich states,
+and their small overhead remains visible. Do not generalize that speedup to
+all Goal shapes.
+
+SQLite wins writes, current-state reads and process restart in these workloads.
+File's verified warm history cache wins historical receipt and page reads.
+The many-field fixture matters: optimizing repeated large strings alone does
+not make a real Todo-rich projection cheap. Its SQLite receipt/scan timings
+still exceed the RFC's 50/250 ms targets; no threshold has been increased.
+These tests change a deterministic observation field in a retained full state;
+they exercise storage, not the complete CLI/Turn workflow. In `changing-1m`,
+padding is resized to retain exactly 1 MiB, so the large string itself can
+change. It must not be reported as a stable-payload cache benchmark.
+
+Reproduce each arm from the same checkout and qualified Node runtime:
+
+```sh
+node --experimental-sqlite --experimental-strip-types \
+  examples/coordination/local-provider-comparison.ts \
+  --provider sqlite --workload mixed --commits 128 --samples 20
+# Repeat with --provider file. Workloads: mixed, full, fixed-64k, changing-1m.
+# Use --commits 512 to cross more checkpoint windows; --output writes JSON.
+```
+
+The runner creates and removes its own temporary store, checks complete
+projections (including Todo metadata), original receipts and reopened state,
+and records the source revision, runtime, runner hash and tracked source diff
+hash. It does not open a selected live Goal. RSS includes fixture/checking
+allocations; File publication bytes are application bytes, not physical disk
+writes. Use the existing SQLite capacity runner for WAL traffic and D2 history
+sizes. Keep performance experiments separate from concurrent test suites.
+
+Before changing release defaults, the existing owners must close these gaps:
+
+1. **L6 / D2:** rerun the unchanged reference capacity profiles after read-path
+   optimization; qualify many-field/changing-state history, crash/restore,
+   consumer lag, supported runtimes/platforms and the >=10-day elapsed soak.
+   PR #4931 contributes read-proof optimization, not a D2 pass.
+2. **L8 / D3:** qualify the integrated Goal command/projection and migration
+   path. Reuse merged reviewed migration/retained audit (#5173), managed-host
+   protection (#5144) and obsolete Todo-source retirement (#5054), rather than
+   count them as new work. A storage benchmark does not certify long-running
+   execution or authorize migration of existing Goals.
+3. **L9:** make new-Goal creation/onboarding choose that qualified profile,
+   including installed runtime admission, settings/readback and packaged entry
+   points. Keep explicit provider selection and reviewed backup/rollback.
+
+Both current local providers require Node >=22.22.3. SQLite uses built-in
+`node:sqlite`: it adds no database service or external SQLite package. Its
+actual embedded SQLite/finalization probe remains required, and a pre-existing
+managed runtime must be restarted on the qualified executable as documented
+below. PostgreSQL deployment is independent of this local default decision.
 
 ## Placement and persistence
 
