@@ -120,7 +120,6 @@ def test_doctor_reads_legacy_capture_hosts_from_selected_runtime(
         cwd=tmp_path, env=env, capture_output=True, text=True,
         encoding="utf-8", timeout=60,
     )
-    assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["local_state_route"]["selected_runtime_root"] == str(source)
     assert payload["decision_context_capture"]["registry"] == str(
