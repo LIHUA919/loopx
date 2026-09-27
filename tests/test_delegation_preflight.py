@@ -1,12 +1,15 @@
 """A binding inspection must use the actual Turn without launching or spending."""
 
 import json
+import asyncio
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from loopx.control_plane.turn_driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import (
@@ -19,6 +22,59 @@ from test_local_delegation import service as delegation_service
 service = delegation_service
 
 
+@pytest.mark.parametrize("health_repair", [False, True])
+def test_actual_workspace_scan_refusal_is_typed_and_effect_free(service, health_repair):
+    root, runner = service
+    if health_repair:
+        registry = json.loads(runner.registry.read_text())
+        registry["goals"][0]["control_plane"] = {"self_repair": {
+            "enabled": True, "allow_health_blocker_repair": True,
+        }}
+        runner.registry.write_text(json.dumps(registry))
+    workspace = Path(json.loads(runner.config.read_text())["bindings"][0]["workspace"])
+    # A synthetic literal exercises the real scanner; never exempt test files.
+    (workspace / "unsafe-fixture.py").write_text("fixture = " + repr("tok" + "en=" + "abcdefghijklmnop1234"))
+    before = runner.registry.read_bytes()
+    status, result = cli(runner, "inspect", "--binding-id", "analysis")
+    assert status == 0, result
+    assert result["state"] == "turn_blocked"
+    assert result["authority_ready"] and result["acceptance_ready"]
+    assert result["turn_eligible"] is False and result["executor"] is None
+    refusal = result["turn_blocker"]
+    assert refusal["requested_todo_id"] == "todo_analyst-initial"
+    assert refusal["state"] == "deferred"
+    assert refusal["reason_code"] == ("control_repair" if health_repair else "delivery_not_allowed")
+    assert refusal["status_health_ok"] is False and refusal["contract_error_count"] >= 1
+    assert not any(result["effects"].values())
+    if health_repair:
+        async def inspect_mcp():
+            params = StdioServerParameters(command=sys.executable, args=[
+                "-m", "loopx.collaboration_mcp", "--registry", str(runner.registry),
+                "--runtime-root", str(runner.root), "--goal-id", runner.goal_id,
+                "--agent-id", runner.agent_id, "--workspace", str(root / "lead"),
+                "--execution-config", str(runner.config),
+            ])
+            async with stdio_client(params) as (reader, writer):
+                async with ClientSession(reader, writer) as session:
+                    await session.initialize()
+                    inspected = await session.call_tool("inspect_execution_binding", {"binding_id": "analysis"})
+                    assert not inspected.isError
+                    return json.loads(inspected.content[0].text)
+        mcp_result = asyncio.run(inspect_mcp())
+        assert mcp_result["turn_blocker"] == refusal
+        assert mcp_result["state"] == "turn_blocked"
+        assert not any(mcp_result["effects"].values())
+    assert runner.registry.read_bytes() == before
+    assert not (root / "host-started").exists()
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+    # Removing this exact synthetic input restores ordinary inspection, rather
+    # than leaving a persisted repair route or choosing a different Todo.
+    (workspace / "unsafe-fixture.py").unlink()
+    status, restored = cli(runner, "inspect", "--binding-id", "analysis")
+    assert status == 0 and restored["turn_eligible"], restored
+    assert not any(restored["effects"].values())
+
+
 def test_real_cli_preflight_preserves_unknown_runtime_and_state(service):
     root, runner = service
     before = runner.registry.read_bytes()
@@ -28,6 +84,34 @@ def test_real_cli_preflight_preserves_unknown_runtime_and_state(service):
     assert result["turn_eligible"] and result["acceptance_ready"]
     assert result["executor"]["host"] == "generic-cli"
     assert result["executor"]["available"] is None
+    assert result["executor"]["runtime_probe"] is None
+    assert result["executor"]["unavailable_remediation"] == []
+    assert not any(result["effects"].values())
+    assert runner.registry.read_bytes() == before
+    assert not (root / "host-started").exists()
+    assert not list(runner.path("inventory").parent.glob("*.json"))
+    assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
+
+
+def test_real_cli_dsh_preflight_preserves_interpreter_probe_without_launch(service):
+    root, runner = service
+    config = json.loads(runner.config.read_text())
+    config["bindings"][0]["host_args"] = ["--host", "dsh"]
+    runner.config.write_text(json.dumps(config))
+    before = runner.registry.read_bytes()
+    status, result = cli(runner, "inspect", "--binding-id", "analysis")
+    assert status == 0, result
+    executor = result["executor"]
+    probe = executor["runtime_probe"]
+    assert probe["schema_version"] == "managed_runtime_probe_v0"
+    assert probe["scope"] == "probing_interpreter"
+    assert probe["module"] == "deepseek_harness"
+    assert isinstance(probe["available"], bool)
+    if not probe["available"]:
+        assert executor["available"] is False
+        assert executor["reason"] == "dsh_runtime_unavailable"
+        assert executor["unavailable_remediation"] == ["configure_dsh_runtime", "select_individual_host"]
+    assert "credential_env" not in executor and "endpoint_env" not in executor
     assert not any(result["effects"].values())
     assert runner.registry.read_bytes() == before
     assert not (root / "host-started").exists()
@@ -88,6 +172,46 @@ def test_preflight_surfaces_actual_turn_rejection_without_launch(service):
     assert not (root / "host-started").exists()
 
 
+def test_real_runtime_decodes_only_string_selection_states():
+    """The live managed runtime rejects a JSON-array refusal enum instead of echoing it."""
+    from loopx.control_plane.effect_runtime import (
+        EffectRuntimeRemoteError,
+        effect_runtime_result,
+    )
+
+    binding = {"id": "review", "agent_id": "reviewer", "todo_id": "todo_review"}
+    effects = {"host_invoked": False, "state_written": False,
+               "quota_spent": False, "scheduler_acknowledged": False}
+
+    def params(state):
+        return {
+            "binding": binding,
+            "authority": {"ready": True, "reason": None},
+            "preview": {
+                "ok": False, "effects_scope": "current_invocation", "effects": effects,
+                "error_code": "turn_todo_selection_deferred",
+                "selection_rejection": {
+                    "schema_version": "loopx_turn_selection_rejection_v0",
+                    "source": "quota.should-run", "requested_todo_id": binding["todo_id"],
+                    "state": state, "reason_code": "control_repair",
+                    "delivery_preemptions": ["control_repair"],
+                    "recovery_action": "reenter_guard_without_selection",
+                    "status_health_ok": False, "contract_error_count": 2,
+                },
+            },
+            "acceptance": None, "validation_files_current": False,
+        }
+
+    accepted = effect_runtime_result("collaboration.delegation.preflight", params("deferred"))
+    assert accepted["state"] == "turn_blocked"
+    assert accepted["turn_blocker"]["state"] == "deferred"
+    assert accepted["turn_eligible"] is False and accepted["executor"] is None
+    assert not any(accepted["effects"].values())
+    for raw in (["deferred"], ["rejected"], ["unavailable"]):
+        with pytest.raises(EffectRuntimeRemoteError):
+            effect_runtime_result("collaboration.delegation.preflight", params(raw))
+
+
 def test_preflight_projects_unavailable_authority_without_turn_or_provider(
     service, monkeypatch
 ):
@@ -102,7 +226,7 @@ def test_preflight_projects_unavailable_authority_without_turn_or_provider(
             "activation never promotes a provider"
         )
 
-    monkeypatch.setattr(delegation, "inspect_goal_acceptance", unavailable)
+    monkeypatch.setattr(delegation.delegation_validation, "inspect_goal_acceptance", unavailable)
     monkeypatch.setattr(runner, "_cli", lambda *args, **kwargs: calls.append(args))
     result = runner.inspect("analysis")
     assert result["state"] == "authority_unavailable"
@@ -348,6 +472,8 @@ def test_selected_codex_managed_agent_profile_is_projected_exactly(service):
         "available": None,
         "reason": None,
         "profile": "gpt-5.6-sol@xhigh",
+        "runtime_probe": None,
+        "unavailable_remediation": [],
     }
     assert result["state"] == "runtime_unverified"
     assert not any(result["effects"].values())
@@ -427,7 +553,8 @@ def test_preflight_does_not_call_an_invalidated_acceptance_ready(service):
     assert result["state"] in {"turn_blocked", "acceptance_unavailable"}
 
 
-def test_http_team_readback_uses_original_scope_without_a_new_turn(service):
+@pytest.mark.parametrize("validation_basis", ["goal_acceptance", "independent"])
+def test_http_team_readback_uses_original_scope_without_a_new_turn(service, validation_basis):
     import http.client
     import threading
     from loopx.chat_runtime import ChatRuntimeController
@@ -435,6 +562,10 @@ def test_http_team_readback_uses_original_scope_without_a_new_turn(service):
     from loopx.chat_store import ChatSessionStore
 
     root, runner = service
+    if validation_basis == "independent":
+        from test_independent_delegation_validation import independent_binding
+
+        independent_binding(service)
     from loopx.agent_registry import load_goal_from_registry
     from pathlib import Path
 

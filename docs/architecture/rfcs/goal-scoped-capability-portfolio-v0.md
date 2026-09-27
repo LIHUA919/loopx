@@ -1,6 +1,7 @@
 # RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Proposal; existing catalog, hooks and external-evidence slices are partial prerequisites
 - **Authors / owners:** LoopX capability and control-plane maintainers
 - **Created:** 2026-09-21
@@ -532,6 +533,17 @@ correct version, apply it and return evidence to the original request. Test both
 an engineering and a research question; no host-session-file copying. The
 current continuation and Decision Context contracts own the work; missing
 provenance/update fields belong to their owners, not a new continuity store.
+
+The optional [query-ready Reward Memory caller](../../reference/reward-memory-decision-consumption.md)
+provides a bounded prerequisite: TS admission/completion, existing Python
+provider/applier adaptation, context delivery distinct from semantic assessment,
+and exact caller-retained replay. It does not complete the fresh-session journey,
+automatically compose capabilities, or establish memory utility; those remain
+subject to real caller and held-out outcome qualification.
+
+可选的 query-ready Reward Memory 调用方提供有界前置切片：TS 准入/完成、原
+Python provider/applier 适配、上下文交付与语义判断分开、调用方保留的精确复用。
+它不宣称已完成跨会话纠正、自动组合或记忆效果；真实调用和留出结果仍须验收。
 
 ## 6. Alternatives and design choices
 
