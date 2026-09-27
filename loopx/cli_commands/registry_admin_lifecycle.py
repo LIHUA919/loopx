@@ -11,7 +11,7 @@ from ..global_registry import (
     sync_project_registry_to_global,
 )
 from ..history import load_registry
-from ..local_state_migration import (
+from ..control_plane.runtime.local_state_migration import (
     migrate_local_state,
     render_local_state_migration_markdown,
     rollback_local_state_migration,

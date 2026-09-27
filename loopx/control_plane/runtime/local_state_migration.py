@@ -16,15 +16,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .control_plane.projects.registry_codec import load_registry, project_registry_transaction
-from .paths import (
+from ..projects.registry_codec import load_registry, project_registry_transaction
+from ...paths import (
     DEFAULT_PROJECT_GOALS,
     DEFAULT_RUNTIME_ROOT,
     LEGACY_PROJECT_GOALS,
     LEGACY_RUNTIME_ROOT,
     GLOBAL_REGISTRY_FILENAME,
 )
-from .runtime import validate_goal_id_path_segment
+from ...runtime import validate_goal_id_path_segment
 
 
 LOCAL_STATE_MIGRATION_SCHEMA = "loopx_local_state_migration_v1"

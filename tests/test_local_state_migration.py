@@ -17,7 +17,7 @@ from loopx.control_plane.projects.registry_codec import (
     ProjectRegistryProtocolError,
     load_project_registry,
 )
-from loopx.local_state_migration import (
+from loopx.control_plane.runtime.local_state_migration import (
     RECEIPT_NAME,
     migrate_local_state,
     rollback_local_state_migration,
@@ -390,7 +390,7 @@ def test_stale_plan_and_target_conflict_leave_source_unchanged(tmp_path: Path) -
 
 
 def test_failed_write_restores_original_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
@@ -433,7 +433,7 @@ def test_symlink_and_changed_target_block_unsafe_migration_or_rollback(tmp_path:
 def test_symlinked_goal_destination_ancestor_never_writes_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_parent = projects[0] / ".loopx" / "goals"
@@ -480,7 +480,7 @@ def test_symlinked_goal_destination_ancestor_never_writes_outside_project(
 def test_goal_destination_uses_shared_redirect_classifier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_parent = projects[0] / ".loopx" / "goals"
@@ -504,7 +504,7 @@ def test_goal_destination_uses_shared_redirect_classifier(
 def test_goal_source_uses_shared_redirect_classifier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_root = projects[0] / ".codex" / "goals"
@@ -528,7 +528,7 @@ def test_goal_source_uses_shared_redirect_classifier(
 def test_goal_source_is_rechecked_immediately_before_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     project = projects[0]
@@ -564,7 +564,7 @@ def test_goal_source_is_rechecked_immediately_before_rename(
 def test_goal_source_is_rechecked_before_backup_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_root = projects[0] / ".codex" / "goals"
@@ -600,7 +600,7 @@ def test_goal_source_is_rechecked_before_backup_copy(
 def test_runtime_root_rejects_redirected_ancestors_before_preview(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redirected_route: str,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, default_target, _projects = _fixture(tmp_path, projects=1)
     target = default_target if redirected_route == "source_parent" else tmp_path / "target-home" / ".loopx"
@@ -622,7 +622,7 @@ def test_runtime_root_rejects_redirected_ancestors_before_preview(
 def test_runtime_digest_rejects_redirected_descendant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, _projects = _fixture(tmp_path, projects=1)
     redirected = source / "goals" / "goal-0" / "runs"
@@ -641,7 +641,7 @@ def test_runtime_digest_rejects_redirected_descendant(
 def test_rollback_preview_rejects_redirected_routes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redirected_route: str,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     preview = migration.migrate_local_state(source_runtime_root=source, target_runtime_root=target)
@@ -669,7 +669,7 @@ def test_rollback_preview_rejects_redirected_routes(
 def test_windows_junction_goal_source_never_reads_or_moves_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_root = projects[0] / ".codex" / "goals"
@@ -761,7 +761,7 @@ def test_windows_junction_rollback_destination_never_writes_outside_project(
 def test_windows_junction_goal_destination_never_writes_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, projects = _fixture(tmp_path, projects=1)
     goal_parent = projects[0] / ".loopx" / "goals"
@@ -848,7 +848,7 @@ def test_symlinked_backup_parent_is_rejected_before_preview_or_copy(
 def test_backup_parent_redirected_after_plan_cannot_write_outside(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, _projects = _fixture(tmp_path, projects=1)
     outside = tmp_path / "outside"
@@ -878,7 +878,7 @@ def test_backup_parent_redirected_after_plan_cannot_write_outside(
 def test_backup_snapshot_parent_changed_before_copy_cannot_write_outside(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, _projects = _fixture(tmp_path, projects=1)
     outside = tmp_path / "outside"
@@ -951,7 +951,7 @@ def test_custom_state_keeps_its_declared_file_through_migration_and_rollback(
 def test_custom_state_cannot_bypass_project_registry_ancestor_fence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, project, _custom = _custom_state_fixture(tmp_path)
     local_registry = project / ".loopx" / "registry.json"
@@ -998,7 +998,7 @@ def test_custom_state_cannot_bypass_project_registry_ancestor_fence(
 def test_project_registry_redirect_after_backup_cannot_write_outside(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx import local_state_migration as migration
+    from loopx.control_plane.runtime import local_state_migration as migration
 
     source, target, project, _custom = _custom_state_fixture(tmp_path)
     local_registry = project / ".loopx" / "registry.json"
