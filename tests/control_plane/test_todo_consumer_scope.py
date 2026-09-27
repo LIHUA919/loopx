@@ -97,16 +97,20 @@ def test_filter_composes_with_existing_lane_call_and_rejects_downgraded_response
     original = effect_runtime.effect_runtime_result
     requests = []
     def track(method, request, **kwargs):
-        if method == "todo.summary_lanes.project":
+        if method == "todo.summary.project":
             requests.append(request)
         return original(method, request, **kwargs)
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     assert filtered_todo_summary(source, role="user", agent_id="agent-a")["total_count"] == 1
     assert len(requests) == 1
-    assert requests[0]["schema_version"] == "todo_summary_lanes_request_v1"
+    assert requests[0]["schema_version"] == "todo_summary_projection_request_v1"
+    # One whole-source batch stays columnar, so adding fields cannot silently
+    # push a long-history request past the runtime request budget.
+    assert requests[0]["columns"][:3] == ["status", "done", "task_class"]
+    assert all(len(cells) == len(requests[0]["columns"]) for cells in requests[0]["rows"])
     def downgrade(method, request, **kwargs):
         result = original(method, request, **kwargs)
-        if method == "todo.summary_lanes.project":
+        if method == "todo.summary.project":
             result.pop("source_indices", None)
         return result
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", downgrade)
@@ -127,8 +131,8 @@ def test_typed_lane_response_cannot_alias_or_escape_selected_source(monkeypatch,
     original = effect_runtime.effect_runtime_result
     def corrupt(method, request, **kwargs):
         result = original(method, request, **kwargs)
-        if method == "todo.summary_lanes.project":
-            result["lanes"]["open_items"] = {"duplicate": [0, 0], "boolean": [False], "outside_selection": [outside]}[corruption]
+        if method == "todo.summary.project":
+            result["lanes"]["first_open_items"]["indices"] = {"duplicate": [0, 0], "boolean": [False], "outside_selection": [outside]}[corruption]
         return result
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", corrupt)
     with pytest.raises(ValueError, match="source ordinal|escaped the selected source"):

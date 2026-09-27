@@ -115,6 +115,23 @@ stays on the original Turn, and in-flight continuation remains unchanged.
 JSON 写作契约复用 vision 校验器，不新增 ACK 仪式，也不改变既有 successor、blocker、
 terminal 出口。语义接受、checkpoint 满足、Turn 结算与 Goal 完成仍须分别验证。
 
+An exact runnable-successor transition can settle the original Turn's selected
+replan without completing its still-open validation Todo. The shared frontier
+keeps the history-obligation receipt separate from a newly derived frontier
+duty; the TypeScript semantic gate recovers only the receipt matching the
+durable Turn guard. It reuses current canonical runnable/ownership checks, not
+Todo prose or an old creation response. Refresh and spend retain the original
+Goal/Agent/Todo/Turn identity and their existing replay behavior. Other Vision
+acceptance gaps remain visible; an unrelated Turn without that selected duty
+still requires the Todo's declared completion validation.
+
+精确绑定且仍可执行的 successor 可以结算原 Turn 选定的重规划义务，但不把原先
+未完成的验证 Todo 标为完成。共享 frontier 分别保留历史义务的成功凭证和新派生
+的义务，由 TS 语义门禁仅恢复与持久 Turn guard 匹配的凭证；资格仍来自当前
+canonical Todo 的可执行性与归属校验，不来自描述或旧创建响应。写回和扣额保持
+原 Goal/Agent/Todo/Turn 身份及既有幂等行为。其他 Vision 验收缺口仍可见；未选定
+该义务的另一 Turn 不能复用这次成功来跳过 Todo 的完成验证。
+
 Long-chain review also accepts `fresh_vision_path_outcome` and now projects this
 JSON route. An acceptance summary plus an evidence-linked `continue`, `no_change`
 or `replan` path can retain existing runnable work; no extra planning Todo or
@@ -130,6 +147,35 @@ Inline vision writes require `--agent-id`. JSON packets must also resolve to
 the same `agent_id` as the refresh run. This keeps `research-executor`,
 `evaluator-promoter`, and other roles from overwriting or satisfying each
 other's active vision.
+
+### Replan planning guidance
+
+The shared `replan_action_packet.planning_guidance` carries two short Agent
+instructions through full/compact quota and the host Turn envelope:
+
+- Preserve the requested end state under current user direction. A bounded
+  slice retains outstanding requirements; easier tests cannot redefine
+  acceptance. User-authorized scope changes, permissions, budgets and stop
+  conditions remain authoritative.
+- Before claiming Goal achievement, check every current requirement and
+  deliverable against authoritative evidence of the actual current state.
+  Missing, stale or indirect evidence leaves completion unproven. An empty Todo
+  list, a passing subset or a settled replan is insufficient; blocked, exhausted
+  and superseded outcomes remain distinct from achievement.
+
+This guidance is included by default whenever a replan action packet is
+projected. It is Agent judgment guidance, not a new machine-enforced acceptance
+gate or a permission grant. Typed semantic outcomes, lifecycle transitions and
+non-replan turns are unchanged. The existing TypeScript replan owner supplies
+the text; CLI and host projections preserve it without a new setting or editor.
+Transport tests prove delivery and unchanged gates, not improved model behavior.
+
+共享 replan action packet 默认携带两条简短指引，并在完整/精简 quota 与
+Turn envelope 中保留：不能为了容易通过测试而悄悄缩小目标；宣布 Goal 达成前，
+须逐项核对当前要求与实际状态的权威证据。阶段成果保留剩余要求，证据缺失、
+过期或间接时保留未证实的缺口；阻塞、探索耗尽及被替代不等于达成。
+用户授权的范围调整、权限、预算和停止条件仍有效。这是 Agent 判断指引，
+不新增机器验收门禁或配置，不改变已有语义写回规则；投影测试不代表模型效果提升。
 
 ### Path Delta
 
@@ -265,10 +311,105 @@ Valid checkpoint decisions are:
 A material closeout should carry its own vision patch or evidence-backed unchanged
 reason. If omitted, `refresh-state` still records the outcome and returns the
 checkpoint repair action. Follow that action in the same turn with the original
-settlement identity, removing already executed state mutations. The supplement
+settlement identity: first read `checkpoint-context`, then echo its
+`read_context_id` as `--checkpoint-read-context` with a newly judged vision
+decision, removing already executed state mutations. The supplement
 must satisfy the checkpoint before terminal closeout; it neither re-authors the
 outcome nor spends a second time. Never invent an unchanged reason to clear a gap.
 Typed in-flight continuations keep their existing exemption.
+
+### Read basis for checkpoint-only recovery
+
+Missing-checkpoint supplementation now requires an explicit read receipt. This is
+a default admission change for both legacy and newly committed Turn writebacks;
+normal first writebacks and non-Turn vision authoring retain their existing rules.
+From the original working directory and with the original registry/runtime/project/
+state-file options, read the basis for the exact settlement:
+
+```sh
+loopx checkpoint-context --goal-id example --agent-id agent-a \
+  --todo-id todo_page --turn-instance-id turn-1 --format json
+```
+
+Use `--replan-obligation-id` instead of `--todo-id` for an obligation-bound Turn.
+Declared Todo dependencies are included; repeat `--dependency-todo-id` for any
+additional upstream Todo results actually used in the judgment. Inspect the
+returned `basis`, judge the direction again, and add
+`--checkpoint-read-context <read_context_id>` to the checkpoint-only refresh.
+The agent echoes this opaque receipt; LoopX retains the version manifest.
+
+MCP hosts use the same protocol through `review_task_vision`: call with only
+`todo_id` and `agent_id` to read, then submit the returned `read_context_id`
+with one newly judged `agent_vision` or `vision_unchanged_reason`. Reading never
+automatically submits a decision. Missing receipts fail closed; stale receipts
+require another read and judgment, while lost replies use the exact original
+receipt and decision. The Python `checkpoint_context_io` adapter gathers and
+locks local sources. TypeScript derives canonical Todos and the complete owner
+acceptance document from one authority head; `checkpoint_read_context` compares
+the basis and `checkpoint_commit` owns the final append.
+
+The basis covers the selected Todo, its dependency closure and recorded results,
+shared Goal prose and User Todos, the owner acceptance document/revision when
+configured, the current agent vision, and the local source binding. A replan
+obligation covers the full Todo frontier. Archived dependencies remain inputs.
+Large local bases use digest-checked private files across the Python/TypeScript
+runtime boundary, including the response; the CLI still returns the complete
+basis. The 2 MiB default RPC guard remains for other effects. File size is
+bounded and an unverifiable response after a possible commit is ambiguous,
+so the caller reads the exact receipt before retrying any mutation. Neither
+transport nor a future paged presentation may silently omit a basis component.
+Todo display positions, source headings, and the Goal's global `updated_at` are
+excluded; an unrelated Agent Todo or run-history append does not invalidate an
+otherwise unchanged Todo-bound basis. Shared prose is deliberately conservative:
+editing it requires another judgment even if the edit was only editorial.
+
+The File/SQLite path retains the Goal index and local source protection, then
+enters the real provider's writer fence: File uses the same mutation lock as
+`commitAuthority`; SQLite uses one connection's `BEGIN IMMEDIATE`. Final head
+read, version comparison and checkpoint append complete before release. SQLite
+performs this short section synchronously, with no `await` while holding the
+transaction. Model reasoning and projection sync remain outside it. The provider
+revision is returned for diagnostics, but only relevant component changes or a
+different store identity invalidate the basis. Old v0 receipts require a new read.
+
+The ordinary local Todo command wrapper already takes the maintenance lock
+before committing. The provider fence additionally covers transactions through
+the exported provider boundary that do not take that outer lock; these are
+distinct concurrency tests. Provider failures stay closed. This adds no
+PostgreSQL or cross-Goal transaction support and does not move checkpoint
+authority into the Todo provider. SQLite cannot roll back the external run files.
+
+Index lock order is kernel then mutation marker for Python writers; existing
+quota adapters retain their kernel lock around the native marker owner. Native
+writers never wait for the kernel lock. Source writers retain marker then kernel,
+in maintenance/Todo/state order. History append/repair, refresh, feedback,
+operator-gate, project-map and runtime projection use this shared index boundary;
+feedback takes the index before state. The checkpoint effect claims the caller's
+index/source markers and owns their release through the durable append. Caller
+exit or timeout does not release an in-flight effect's claims. Runtime death
+allows the existing conservative PID/token reclaim; a live stalled owner times
+out contenders rather than losing its lock. No model or Agent holds a store lock.
+
+Receipts are bound to the exact Goal/Agent/Todo or obligation/Turn. A new read for
+that Turn replaces its previous receipt, so its confirmation operations must be
+serial; other work may remain parallel. A missing, replaced, or stale receipt
+rejects the supplement without appending delivery or spending quota. Rerun
+`checkpoint-context`, reread, and rejudge. Never attach a new receipt to an old
+judgment. The committed decision includes the receipt identity in its replay
+digest: an exact retry returns the original result even if state changed after
+commit. Acquiring a receipt for an already satisfied checkpoint is rejected.
+Replay also verifies the committed artifact references. A malformed/torn index,
+conflicting checkpoint rows, or inconsistent artifacts returns an explicit
+unknown/error; prepared JSON/Markdown alone never authorizes a blind append.
+
+Versions are content revisions of the declared decision inputs, including native
+revision fields where present. They cannot detect an unobserved change-and-revert
+in legacy Markdown, raw writes bypassing the writer locks, or changed bytes behind
+an unversioned external link. Upstream deliveries must be represented by their
+recorded Todo results/references. The receipt verifies the declared basis, not
+whether the model actually understood or used it. It grants no new permissions,
+task-completion authority, or evidence of acceptance. Older binaries do not enforce
+this admission rule; rolling back loses its freshness protection.
 
 `missing_required` is not a chat reminder. Status keeps it in compact run
 history, quota filters it by current `agent_id`, and goal-frontier projection
@@ -512,8 +653,7 @@ or agent-scope wait decisions:
 - normalized progress shows no remaining advancement frontier;
 - monitor-only lanes have no material transition and acceptance remains open;
 - a cleared handoff has no successor or no-follow-up rationale;
-- the current agent lane owns at least 15 open advancement Todos, or 20 claimed
-  open Todos with claimed advancement work still present;
+- the current agent lane owns at least 15 open advancement Todos;
 - a periodic autonomous replan obligation is due;
 - the user objective or acceptance contract changed;
 - an approved dreaming proposal requires a delivery route.
@@ -522,19 +662,23 @@ The replan decision must not be disturbed by monitor quiet skip, scoped gate
 waiting, or a single agent having no runnable todo. Those may explain local
 lane state, but they cannot erase a required goal-level replan.
 
-Long-chain scope correction (#4667): Agent-scoped counts now exclude shared
-unclaimed candidates. They remain selectable, but do not create a replan duty
-for a lane that has not claimed them. Unscoped Goal observations retain the
-selectable-pool thresholds. Numeric thresholds and other replan sources are
-unchanged. The typed frontier owner supplies `obligation_identity_revision`
-from the owned material identity, keeping an open obligation stable across
+Long-chain scope corrections (#4667, #5001): Agent-scoped counts exclude shared
+unclaimed candidates and continuous monitors. Shared candidates remain selectable,
+but a new long-chain duty requires at least 15 claimed advancement Todos. The former
+20-claimed-open threshold no longer triggers an Agent lane. Unscoped Goal
+observations retain the selectable-pool thresholds; monitor due selection and
+no-change replan rules are unchanged. The typed frontier owner supplies
+`obligation_identity_revision` from the owned material identity, keeping an open obligation stable across
 peer/shared-pool churn; `frontier_revision` retains the full selectable-source
 checkpoint for diagnostics and historical ACK matching. Owned material changes
 still rearm. Timestamp/evidence bookkeeping does not. Existing accepted ACKs
-remain readable; an outstanding pre-upgrade Turn should refresh its guard.
+remain readable, including predecessor recovery for historical open-count
+obligations; an outstanding pre-upgrade Turn should refresh its guard.
 
-长链触发范围修正：Agent lane 只统计自己已认领的任务；共享未认领任务仍可选取，
-但不计入本 lane 的长链阈值。无 Agent 的 Goal 总览保留原可选池口径。
+长链触发范围修正：Agent lane 只在自己已认领的开放推进任务达到 15 项时触发；
+持续监控和共享未认领任务不计入该阈值，移除原 20 项已认领开放任务的触发分支。
+共享任务仍可选取；无 Agent 的 Goal 总览保留原可选池口径，监控到期和无变化重规划
+规则不变。历史开放任务计数 checkpoint 的读取与前置义务恢复保持兼容。
 义务身份使用 typed owner 给出的 owned 实质 revision，同伴修改共享池不会让正在
 处理的义务换 ID；自己任务的实质修改仍重新触发。证据补充或更新时间不重新触发。
 

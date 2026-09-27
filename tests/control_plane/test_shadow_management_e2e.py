@@ -174,7 +174,7 @@ def test_late_real_commit_cannot_cross_rollback_and_rebootstrap(tmp_path: Path, 
     child, release, barrier = _paused_writer(tmp_path, registry, runtime, timing)
     try:
         request = barrier["request"]
-        assert request["entry"]["capture_lineage_id"] == first["capture_lineage_id"]
+        assert request["capture_lineage_id"] == first["capture_lineage_id"]
         revision = first["provider_revision"] if timing == "before" else barrier["result"]["provider_revision"]
         rollback = _cli(registry, runtime, "coordination-shadow", "rollback", "--goal-id", "goal-a",
                         "--provider-revision", revision, "--execute")["rollback"]

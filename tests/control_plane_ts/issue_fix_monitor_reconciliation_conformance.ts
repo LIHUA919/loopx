@@ -60,7 +60,7 @@ export function registerIssueFixMonitorReconciliationConformance(provider: strin
       assert.equal(stop.operation, "complete");
       const terminal = {goal_id: "grouped-monitor", todo_id: f.target, expected_role: "agent" as const,
         command: "complete" as const, actor_agent_id: f.actor, registered_agents: f.registered_agents,
-        lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_id: "group-stop",
+        lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_identity: {kind: "explicit" as const, operation_id: "group-stop"},
         lease_idempotency_key: String(proof.idempotency_key), lease_expected_version: Number(proof.version),
         allow_user_gate_auto_acquire: false, requested_no_followup: true, requested_completion_turn_key: null,
         requested_completion_identity_source: null, linked_successor_todo_ids: [], successor_intents: [],

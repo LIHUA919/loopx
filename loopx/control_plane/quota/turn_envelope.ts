@@ -257,6 +257,9 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
     "required_outcome", "allowed_terminal", "bounded_frontier",
   ]);
+  // The typed replan owner supplies bounded instructions; do not truncate their
+  // authority/stop qualifiers through generic diagnostic compaction.
+  if (Array.isArray(source.planning_guidance)) compact.planning_guidance = source.planning_guidance;
   const writeback = object(source.writeback_contract);
   if (writeback.vision_authoring) compact.writeback_contract = writeback;
   return Object.keys(compact).length > 0 ? compact : null;
@@ -602,11 +605,14 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   const recommendedAction = replanPacket
     ? "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
+  // The signed host action is executable authority, not a display summary.
+  // Budget diagnostics may warn on long commands but must not cut them.
+  const primaryAction = scalarString(agentChannel.primary_action, "agent_channel.primary_action").trim();
   const action: JsonObject = {
     recommended_action: recommendedAction,
     primary_action: replanPacket
       ? "produce one required semantic outcome"
-      : text(agentChannel.primary_action, 480),
+      : primaryAction || null,
     must_attempt: Boolean(agentChannel.must_attempt),
     delivery_allowed: Boolean(agentChannel.delivery_allowed),
     quiet_noop_allowed: Boolean(agentChannel.quiet_noop_allowed),

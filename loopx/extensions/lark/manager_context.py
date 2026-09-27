@@ -46,10 +46,13 @@ def manager_failure_reply(error: Exception) -> tuple[str, str]:
         "hard_timeout": "处理超过时间限制",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
-        # The executor's own gate refused the call, which is what an exhausted
-        # credential or a revoked login looks like from the channel. Naming the
-        # executor keeps the owner from reading it as a manager defect.
-        "host_gate": "上游执行器拒绝本次调用（额度或授权），请在管家执行器一侧检查",
+        # host_gate is a generic host failure. It does not establish whether
+        # quota, authentication, configuration, or another host condition failed.
+        "host_gate": "执行器未能完成本次调用，请检查管家执行器的具体错误",
+        "upstream_invalid_request": "上游拒绝了请求参数，请检查所选模型与 Codex CLI、账户的兼容性",
+        "server_restarted": "管家服务在处理过程中重启",
+        "runtime_unavailable": "本地运行环境初始化失败，请检查 LoopX 安装与运行配置，修复后重试",
+        "resume_failed": "原 Agent 会话恢复失败，请检查执行器状态，修复后重试",
         "manager_channel_executor_rebind_required": (
             "管家的执行器已由本机设置更改，需要重新应用一次管家连接"
         ),

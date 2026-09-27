@@ -103,6 +103,29 @@ def _approval_gate(summary: str) -> dict[str, str]:
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    # Some app-server versions wrap an HTTP error as JSON in `message` while
+    # reporting codexErrorInfo=other. Only the structured HTTP status/type is
+    # used here; the nested message may contain private request details.
+    if info == "other" and isinstance(error.get("message"), str):
+        try:
+            upstream = json.loads(error["message"])
+        except (TypeError, ValueError):
+            upstream = None
+        if (
+            isinstance(upstream, dict)
+            and upstream.get("status") == 400
+            and isinstance(upstream.get("error"), dict)
+            and upstream["error"].get("type") == "invalid_request_error"
+        ):
+            summary = "Codex 上游拒绝了本轮请求参数。"
+            return CodexChatAgentError(
+                summary,
+                error_code="upstream_invalid_request",
+                gate=_host_tool_gate(
+                    summary,
+                    "检查管家选择的模型、Codex CLI 与当前账户是否兼容，再重试。",
+                ),
+            )
     # App-server v2 exposes camel-case discriminators. Unknown/new variants
     # retain the generic failure; message/additionalDetails are not evidence
     # of a policy decision and may contain private upstream content.
@@ -286,7 +309,7 @@ def _turn_prompt(
 ) -> str:
     envelope = {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": "Short answer for the operator.",
+        "message": "Complete answer for the operator, at the depth this task needs.",
         "proposals": [
             {
                 "kind": "todo",
@@ -346,8 +369,9 @@ def _turn_prompt(
         "If you encounter an identity, approval, or host-tool gate, stop and describe it in gate. "
         "Reply in Chinese unless the operator asks for another language. Keep proposals bounded and reviewable. "
         "Do not expose chain-of-thought, tool narration, intended steps, or scratch work. "
-        "First write the complete operator-facing answer as ordinary text. Start with the conclusion, "
-        "use short sentences or lines so the answer can stream, and include at most five actionable items. "
+        "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "
+        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate, raw ID inventories and more than five actionable items. "
+        "Do not emit executable HTML. The complete answer must stay in this conversation, even when a separate report artifact also exists. "
         "Then append exactly one machine-readable envelope whose message field repeats that complete answer. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '

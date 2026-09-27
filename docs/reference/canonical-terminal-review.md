@@ -44,16 +44,30 @@ proposals retain their existing protocol.
 
 ## Wire and migration boundary
 
-The current Python terminal adapter sends
-`loopx_local_coordination_todo_terminal_lifecycle_request_v2`. The existing
-terminal method accepts these bounded additions:
+The packaged Python adapter and TypeScript runtime use one request schema,
+`loopx_local_coordination_todo_terminal_lifecycle_request_v3`, for complete and
+supersede. `operation_identity` explicitly selects the operation's meaning:
+
+- `{kind: "explicit", operation_id: "..."}` executes or recovers that named
+  operation, including historical receipts created by earlier runtimes.
+- `{kind: "current_monitor_cycle"}` completes a `continuous_monitor` without an
+  explicit completion turn key. The TypeScript owner derives the operation id
+  from Goal id, Todo id and authoritative `material_change_generation`.
+
+Reopening the Monitor advances its generation, so earlier-cycle receipts cannot
+complete the current open cycle. If an explicit operation already completed the
+current cycle, the core records a generation-scoped no-change receipt. It never
+infers cycle membership from an old unscoped receipt. Both identity modes share
+one terminal transaction; ordinary completion and supersede use explicit identity.
+
+The terminal method also accepts these bounded additions:
 
 - `review_basis`, when present, contains exactly `provider_revision` and
   `registry_sha256`. It binds reviewed intent and is part of receipt identity.
 - `validation_source_provider_revision` is null before an issued effect and is
   the returned revision on continuation. It is a freshness constraint, not new
   operation identity. Both caller validation and Goal acceptance validation
-  require it in v2.
+  require it in the current protocol.
 - `validation_declaration_sha256` carries the canonical public commitment.
   Historical recovery precedes private declaration resolution. Fresh execution
   still requires the matching declaration and current authorization.
@@ -66,16 +80,20 @@ completion and historical recovery remain one terminal request. This bounded
 extra crossing makes receipt recovery independent of host-local argv; it can
 disappear when the native host owns declaration resolution and effect execution.
 
-v0/v1 retain their old request fingerprints and validation contract. They reject
-the new fields rather than silently discarding obligations. A v2 request without
-review preserves the existing CLI terminal fingerprint. Existing receipts are
-not rewritten. The public completion facade rejects a reviewed canonical request
+The old v0/v1/v2 request decoders are retired. These are internal, co-packaged
+adapter/runtime requests, not stored operations: upgrade the pair together and
+regenerate requests with the current runtime. Mismatched versions and the old
+top-level `operation_id` shape fail before provider access. Persisted receipt
+schemas, operation ids and request fingerprints are unchanged; receipt recovery
+does not require keeping an old request decoder.
+The public completion facade rejects a reviewed canonical request
 if authority has reverted to an unpromoted legacy path.
 
 No provider default, promotion, permission, retention or storage format changes.
 Rollback restores compatible code while retaining provider data, receipts and
-writer fences. Older code cannot execute v2; regenerate a preview with compatible
-code instead of stripping its review fields. Markdown stays a permanent display.
+writer fences. Code that does not recognize the request version cannot execute
+it; regenerate a preview with compatible code instead of stripping its review
+fields or changing the operation identity. Markdown stays a permanent display.
 These changes close the terminal review/recovery family, not all leased metadata
 updates, executor-held external-effect fencing, D1–D3 or whole-Goal cutover.
 

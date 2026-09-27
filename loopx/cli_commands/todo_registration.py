@@ -31,6 +31,8 @@ def register_todo_command(
         choices=[
             "add",
             "list",
+            "receipt",
+            "result-read",
             "claim",
             "update",
             "complete",
@@ -53,6 +55,10 @@ def register_todo_command(
     todo_parser.add_argument("--priority", choices=["P0", "P1", "P2", "P3", "P4"], help="For add/update, declare Todo priority independently of text; omission retains the current value.")
     todo_parser.add_argument("--clear-priority", action="store_true", help="For update, explicitly remove priority; cannot be combined with --priority.")
     todo_parser.add_argument("--todo-id", help="Structured todo id from status/quota, such as todo_ab12cd34ef56.")
+    todo_parser.add_argument(
+        "--operation-id",
+        help="For canonical todo add, reuse this identity with unchanged intent after an ambiguous response. For todo receipt, read the exact historical operation; a receipt grants no lease.",
+    )
     todo_parser.add_argument(
         "--update-operation-id",
         help=("For promoted text/note, planning, validator revision or User completion update, reuse this operation id after a lost response; "
@@ -99,6 +105,7 @@ def register_todo_command(
     todo_parser.add_argument("--status", choices=["open", "done", "blocked", "deferred"], help="For todo add/update, set the lifecycle status.")
     todo_parser.add_argument("--note", help="Public-safe note to attach to a lifecycle transition.")
     todo_parser.add_argument("--evidence", help="Public-safe evidence pointer or short result for complete/update.")
+    todo_parser.add_argument("--result-file", help="For todo complete, bind a bounded local .json, .md or .txt result to the independently accepted completion.")
     todo_parser.add_argument(
         "--validation-command",
         help=(

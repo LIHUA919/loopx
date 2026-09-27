@@ -909,6 +909,28 @@ def test_protocol_packet_derivation_retains_unverified_summary() -> None:
     assert packet["summary"] == "legacy opaque packet"
 
 
+@pytest.mark.parametrize("path_segments", [170, 1_500])
+def test_signed_host_action_preserves_a_long_complete_command(
+    path_segments: int,
+) -> None:
+    source = _compat_decision("absent")
+    command = (
+        "loopx quota should-run --registry /"
+        + "project/" * path_segments
+        + " --codex-app"
+    )
+    assert len(command) > 1_200
+    source["interaction_contract"]["agent_channel"]["primary_action"] = command
+
+    envelope = build_turn_envelope(source)
+
+    assert envelope["action_signature"]["matches"] is True
+    assert envelope["action"]["primary_action"] == command
+    assert extract_turn_authority({"turn_envelope": envelope})["primary_action"] == command
+    if path_segments == 1_500:
+        assert envelope["compaction"]["within_budget"] is False
+
+
 @pytest.mark.parametrize("packet_format", ["absent", "historical_v0", "opaque", "residue"])
 def test_protocol_packet_compatibility_through_real_readers(packet_format: str) -> None:
     """The summary is an observation; the typed decision owns execution."""
@@ -1025,7 +1047,8 @@ def test_protocol_packet_compatibility_does_not_bypass_host_signature_check(
 
 @pytest.mark.parametrize("has_packet", [False, True])
 def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool) -> None:
-    from loopx.cli_commands.quota import _render_turn_envelope_payload
+    from loopx.cli_commands.quota import _project_quota_cli_payload
+    from argparse import Namespace
 
     failure: dict[str, Any] = {
         "ok": False, "decision": "skip", "should_run": False,
@@ -1036,7 +1059,7 @@ def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_pa
             "schema_version": "protocol_action_packet_v0", "summary": HISTORICAL_V0_SUMMARY,
         }
     before = deepcopy(failure)
-    rendered = _render_turn_envelope_payload(failure, None)
+    rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
     assert "interaction_contract must be an object" in rendered.pop("turn_envelope_skipped")
     assert rendered == before
     assert failure == before

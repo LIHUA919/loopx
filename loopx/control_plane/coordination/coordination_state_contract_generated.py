@@ -76,6 +76,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                  'reason',
                                  'completed_at',
                                  'completion_turn_key',
+                                 'completion_result',
                                  'updated_at',
                                  'superseded_by',
                                  'completion_validation_required',
@@ -112,6 +113,8 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                               'todo_read_result_schema': 'loopx_local_coordination_todo_read_result_v0',
                               'todo_list_request_schema': 'loopx_local_coordination_todo_list_request_v0',
                               'todo_list_result_schema': 'loopx_local_coordination_todo_list_result_v0',
+                              'todo_snapshot_page_request_schema': 'loopx_canonical_snapshot_page_request_v0',
+                              'todo_snapshot_page_result_schema': 'loopx_canonical_snapshot_page_result_v0',
                               'promotion_request_schema': 'loopx_local_coordination_promotion_request_v0',
                               'promotion_result_schema': 'loopx_local_coordination_promotion_result_v0',
                               'promotion_receipt_schema': 'loopx_local_coordination_promotion_receipt_v0',
@@ -140,7 +143,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                      'outbox_commit_schema': 'loopx_local_authority_shadow_outbox_commit_v1',
                                      'drain_cursor_schema': 'loopx_local_authority_shadow_drain_cursor_v0',
                                      'transaction_projection_schema': 'loopx_coordination_runtime_shadow_projection_v0',
-                                     'commit_entry_request_schema': 'loopx_coordination_runtime_shadow_commit_entry_request_v1',
+                                     'commit_entry_request_schema': 'loopx_shadow_entry_delivery_request_v0',
                                      'commit_entry_result_schema': 'loopx_coordination_runtime_shadow_commit_entry_result_v0',
                                      'read_request_schema': 'loopx_coordination_runtime_shadow_outbox_read_v0',
                                      'read_result_schema': 'loopx_coordination_runtime_shadow_outbox_read_result_v0',
@@ -199,11 +202,19 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                 'lifecycle_reentry_result_schema': 'todo_lifecycle_settlement_reentry_v0'},
  'compatibility': {'unknown_field_policy': 'reject',
                    'field_removal_policy': 'maintainer_approval_required',
-                   'markdown_role': 'human_workbench_and_compatibility_projection'}})
+                   'markdown_role': 'human_workbench_and_compatibility_projection'},
+ 'source_transfer_protocol': {'request_schema': 'loopx_coordination_source_transfer_v0',
+                              'result_schema': 'loopx_coordination_source_transfer_result_v0'},
+ 'source_transfer_limits': {'max_bytes': 16777216}})
+COORDINATION_SOURCE_TRANSFER_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_source_transfer_v0'
+COORDINATION_SOURCE_TRANSFER_RESULT_SCHEMA: Final[str] = 'loopx_coordination_source_transfer_result_v0'
+
 LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA: Final[str] = 'loopx_local_coordination_todo_read_request_v0'
 LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA: Final[str] = 'loopx_local_coordination_todo_read_result_v0'
 LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA: Final[str] = 'loopx_local_coordination_todo_list_request_v0'
 LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA: Final[str] = 'loopx_local_coordination_todo_list_result_v0'
+LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA: Final[str] = 'loopx_canonical_snapshot_page_request_v0'
+LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_RESULT_SCHEMA: Final[str] = 'loopx_canonical_snapshot_page_result_v0'
 LOCAL_COORDINATION_PROMOTION_REQUEST_SCHEMA: Final[str] = 'loopx_local_coordination_promotion_request_v0'
 LOCAL_COORDINATION_PROMOTION_RESULT_SCHEMA: Final[str] = 'loopx_local_coordination_promotion_result_v0'
 LOCAL_COORDINATION_PROMOTION_RECEIPT_SCHEMA: Final[str] = 'loopx_local_coordination_promotion_receipt_v0'
@@ -234,7 +245,7 @@ LOCAL_AUTHORITY_SHADOW_OUTBOX_ENTRY_SCHEMA: Final[str] = 'loopx_local_authority_
 LOCAL_AUTHORITY_SHADOW_OUTBOX_COMMIT_SCHEMA: Final[str] = 'loopx_local_authority_shadow_outbox_commit_v1'
 LOCAL_AUTHORITY_SHADOW_DRAIN_CURSOR_SCHEMA: Final[str] = 'loopx_local_authority_shadow_drain_cursor_v0'
 LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_projection_v0'
-LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_commit_entry_request_v1'
+LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_REQUEST_SCHEMA: Final[str] = 'loopx_shadow_entry_delivery_request_v0'
 LOCAL_AUTHORITY_SHADOW_COMMIT_ENTRY_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_commit_entry_result_v0'
 LOCAL_AUTHORITY_SHADOW_READ_REQUEST_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_outbox_read_v0'
 LOCAL_AUTHORITY_SHADOW_READ_RESULT_SCHEMA: Final[str] = 'loopx_coordination_runtime_shadow_outbox_read_result_v0'

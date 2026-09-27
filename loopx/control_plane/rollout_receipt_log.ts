@@ -7,12 +7,12 @@
  * receipts lives here so a reader cannot invent a second path rule or a
  * different tolerance for malformed lines.
  */
-import { readFile } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
+import { requireNonEmptyString } from "./runtime_decode.ts";
+import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
@@ -79,31 +79,13 @@ export async function readGoalRolloutEventSnapshot(
   runtimeRoot: string,
   goalId: string,
 ): Promise<GoalRolloutEventSnapshot | null> {
-  let text: string;
-  try {
-    text = await readFile(goalRolloutEventLogPath(runtimeRoot, goalId), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  const events: JsonObject[] = [];
-  let firstStrictErrorLine: number | null = null;
-  for (const [index, line] of text.split(/\r?\n/).entries()) {
-    if (!line.trim()) continue;
-    try {
-      const event = jsonObject(JSON.parse(line));
-      if (
-        event === null ||
-        event.schema_version !== ROLLOUT_EVENT_SCHEMA_VERSION
-      ) {
-        throw new Error("rollout event has an unsupported schema");
-      }
-      events.push(event);
-    } catch {
-      firstStrictErrorLine ??= index + 1;
-    }
-  }
-  return {runtimeRoot, goalId, events, firstStrictErrorLine};
+  const snapshot = await readReceiptLogSnapshot(
+    goalRolloutEventLogPath(runtimeRoot, goalId), ROLLOUT_EVENT_SCHEMA_VERSION,
+  );
+  return snapshot === null ? null : {
+    runtimeRoot, goalId, events: snapshot.records,
+    firstStrictErrorLine: snapshot.firstErrorLine,
+  };
 }
 
 /** Return strict settlement input, or fail on the first malformed line. */

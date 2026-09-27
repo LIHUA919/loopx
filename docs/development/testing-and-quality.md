@@ -371,6 +371,23 @@ Confirm the interpreter and imported checkout when diagnosing a mismatch:
 uv run python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
 ```
 
+Node-based TypeScript tests and browser smokes that launch Python use
+`scripts/test-python.mjs`. It honors an explicit `LOOPX_TEST_PYTHON` (then the
+existing `LOOPX_PYTHON_BIN`/`LOOPX_PYTHON` overrides), otherwise reuses the
+source launcher's selection on POSIX or discovers a compatible interpreter on
+Windows. It prefers the worktree environment, checks Python `>=3.11`, and
+fails with a setup hint instead of falling back to an incompatible system
+`python3`. A source-level regression test rejects new bare-`python3`
+subprocess/fallback patterns in test and browser-smoke entry points. After
+`uv sync --extra test`, `npm run test:control-plane` needs no manual Python
+environment variable; `LOOPX_TEST_PYTHON=/path/to/python` is an explicit
+override when a separate compatible environment is intentional.
+
+会启动 Python 的 Node/TypeScript 测试和浏览器 smoke 统一使用
+`scripts/test-python.mjs`：显式覆盖优先，否则优先当前 worktree 环境，校验
+Python `>=3.11`；不会静默退回不兼容的系统 `python3`。回归测试会拦截测试入口
+重新引入裸 `python3` 子进程或默认值。
+
 Canary executes Python checks with the interpreter that launched LoopX
 (`sys.executable`). Its displayed `python3` command is not a second interpreter
 selection. Keep subprocesses on `sys.executable`; use `uv run` at the developer
@@ -543,6 +560,64 @@ agent what to do and how to request the omitted detail.
 完整诊断包保留为显式 drill-down。只有默认路径仍能告诉 agent 下一步做什么、以及
 如何请求被省略细节时，字段才能移出默认热路径。
 
+### Roadmap-Aligned Optimization
+
+For recurring command, recovery or retrieval costs, use the existing
+[overall roadmap](../architecture/rfcs/loopx-overall-roadmap-v0.md) and owning
+RFC acceptance to select the repair. Typed semantics and bridge costs belong
+to the [TS migration RFC](../architecture/rfcs/typescript-control-plane-migration-v0.md);
+backend capacity, retention and cutover qualification belong to the
+[shared-authority RFC](../architecture/rfcs/shared-goal-authority-state-provider-v0.md).
+Use the existing task/PR evidence and update its owning checkpoint when warranted;
+this adds no approval, receipt or requirement to complete unrelated milestones.
+
+- **Locate the cost before selecting an abstraction.** Separate caller repeats,
+  output/context expansion, process/bridge/serialization cost, shared semantic
+  work, and backend IO/verification/contention. A display filter does not reduce
+  upstream work; a short response or fast isolated query does not establish a
+  faster recovery loop. Name the real consumer and measure its useful outcome.
+- **Share contracts, qualify implementations.** Put common selection, bounded
+  reads and observation reuse at the existing consumer/typed owner boundary.
+  Preserve completeness, current authority, receipt replay and lease/CAS checks.
+  File, SQLite and PostgreSQL need not share cache invalidation, indexing or
+  history layout. Keep backend-specific algorithms in their providers; do not
+  duplicate authority in Python or invent a common cache to conceal those costs.
+  Run the applicable real-backend validation above for every affected backend.
+- **Treat migration as a hypothesis, not a cause.** Compare the same operation,
+  revision, data/history size, runtime configuration and concurrency where
+  possible. Separate cold/warm reads, alternating stores, writes and recovery
+  when those paths are affected. Without a controlled before/after comparison,
+  report measured costs and uncertainty. Successful ownership transfer does not
+  establish long-running latency, capacity or recovery equivalence.
+- **Qualify the intended outcome.** Retrieval relevance needs independently
+  labeled queries, ambiguous/no-match cases and disclosed language/corpus limits;
+  a small development set is not production accuracy or task-success evidence.
+  Runtime optimization needs the original failing workload plus semantic and
+  scale checks. Follow the budget decisions below rather than hiding regressions
+  with a larger timeout, smaller fixture or truncated decision evidence.
+- **Keep the delivered boundary honest.** State whether the change removes the
+  owning bottleneck or only mitigates its consumer impact. Reuse an existing
+  successor for an evidenced remaining gap and identify its acceptance. Do not
+  count a prompt reduction as backend qualification, or repeated repair PRs as
+  default-provider readiness; do not create follow-ups for hypothetical work.
+
+对反复出现的命令、恢复或检索开销，先对应总 roadmap 和所属 RFC 的验收，再选择修复：
+TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量、保留与切换验证。
+沿用现有任务、PR 证据和验收记录，不增加审批、回执或无关里程碑前置条件。
+
+- **先定位成本。** 区分重复调用、输出与上下文展开、进程与序列化、公共语义计算、
+  后端 IO／校验／竞争。输出过滤不减少上游计算；单次查询变快不等于恢复闭环变快。
+- **共用合同，分别验证实现。** 选择、有界读取和观测复用归现有调用方或 typed owner；
+  保留完整性、当前权限、回执重放及 lease/CAS。缓存失效、索引和历史布局可以因后端
+  而异，不能在 Python 复制权威，也不强造统一缓存。受影响后端遵循上文真实路径验证。
+- **迁移是待验证的原因。** 尽量控制操作、版本、数据与历史规模、配置、并发；按影响
+  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；晋升成功
+  不证明长程延迟、容量和恢复等价。
+- **验证实际目标。** 检索用独立标注、歧义／无命中和语言边界验证；开发小样本不代表
+  生产精度或任务成功率。运行时优化保留原失败负载和语义／规模检查，预算按下节处理。
+- **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
+  已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
+
 ### Budget Failure Decisions
 
 Classify the limit by its owning contract before deciding how to repair a
@@ -607,6 +682,20 @@ override or merge bypass.
 仍能采集它；否则门禁会在观察修复候选之前形成死锁。仅 base 的 probe 可跳过绝对尺寸
 断言，但必须保留解析、必需字段、锚点和语义差异检查；candidate 始终执行当前绝对
 预算。measurement-only 不能用于 candidate，也不是合并旁路。
+
+The real-CLI differential runner and pytest use the same fixed-width fixture
+alias **per default scenario**. Alias the scenario root, not just its parent:
+otherwise scenario-name suffixes change repeated absolute command paths and
+can create a size failure unrelated to output growth. Measure unmodified
+stdout, keep fixture populations and budgets unchanged, and retain the separate
+real-long-path command-integrity check. This aligns measurement layouts; it does
+not shorten production commands or qualify long-path output under short-path caps.
+
+独立 real-CLI 对照和 pytest 对每个默认场景使用相同的固定宽度 fixture 别名。
+别名应指向场景根目录，而非仅指向父目录；否则场景名会改变多处绝对命令路径，
+产生与输出增长无关的尺寸失败。仍测量未经改写的 stdout，保留原负载、预算及
+独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
+长路径输出冒充短路径预算已通过。
 
 The PR-review packet's `semantic_alignment` rule consumes this evidence through
 the existing `validation_matrix` and `observable_semantics` rows. It does not
@@ -813,7 +902,7 @@ and qualification scope; a successful ordinary `typed_progress_repeat` refresh
 cannot qualify this journey. The narrow semantic-action gate remains useful
 but does not prove full closeout. Run this focused journey with
 `uv run --extra test python scripts/qualify-doubao-replan-semantic-action-live.py --required-vision --qualification-id <public-safe-run-id>`.
-The complete required-vision journey has a 32-call bound; the narrow
+The complete required-vision journey has a 40-call bound; the narrow
 single-semantic-action qualifier retains seven. The increased budget covers
 evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
 including multiple field-validation corrections before a final spend;
@@ -877,14 +966,14 @@ projection; every repeat must pass and hard actor errors are not retried. The
 remaining live turn actor cases consume the default CLI hot-path
 `quota should-run` projection used by Codex App automation and return
 runtime-facing decisions rather than echoing a global testing-only semantic
-contract. The suite has 38 bounded scenario attempts. Five scenarios
+contract. The suite has 42 bounded scenario attempts. Five scenarios
 exercise real tool loops; their per-scenario provider-call ceilings are owned by
 the corresponding typed behavior harnesses instead of being duplicated here.
 Exact scheduler, vision, writeback, and warning fields stay in deterministic
 action-signature coverage; pair mode keeps TurnEnvelope semantic extraction for
 explicit packet differentials or outcome claims.
 
-常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：19 个 one-arm
+常规 live suite 是 `actual_default_model_behavior_portfolio_v0`：21 个 one-arm
 场景，每个重复 2 次。9 个 core-contract 场景覆盖正常接入、agent 身份与
 goal 选择、selected todo、peer 身份路由、same-agent 续接、最终 human gate、
 健康继续和 projection repair；1 个 effect-settlement 场景覆盖 terminal closeout；
@@ -907,6 +996,7 @@ actor 硬错误不自动重试。selected-Todo 场景从正式 thin heartbeat �
 缺失 vision 的 hermetic 状态，执行真实 quota，并要求模型读取 host 投影的 frontier 与
 工作源，再通过真实写路径提交 typed semantic action；其他 turn 场景仍直接读取 Codex App
 automation 使用的默认 CLI hot-path `quota should-run` projection 并返回运行时决策，
+完整 required-vision 闭环最多允许 40 次工具调用，窄范围单动作验收仍是 7 次；耗尽预算但未完成最终结算仍判失败。
 scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：真实 quota 必须
 同时投影非阻塞 user notice 和 ready deferred successor，模型随后既要呈现提醒，也要
 实际执行被选中的 successor；capability re-entry 场景则要求模型先执行原 blocked Todo
@@ -915,7 +1005,7 @@ scoped-gate successor 场景也从 hermetic Goal 与正式 heartbeat 开始：�
 其他 turn 场景仍属于
 packet interpretation。scheduler、vision、writeback 与
 warning 的精确字段继续由 action-signature 确定性覆盖；pair 中的 TurnEnvelope 只用于
-明确的 packet 差分或结果提升声明。全套是 38 个有界 scenario attempt；5 个真实工具
+明确的 packet 差分或结果提升声明。全套是 42 个有界 scenario attempt；5 个真实工具
 场景的 provider 调用上限由各自 typed behavior harness 持有，本文不再复制易漂移的总数。
 
 For onboarding packets, the suite uses the shipped guided packet builder and
@@ -992,10 +1082,13 @@ For focused thin/brief prompt-decision regression, use
 explicit release qualification. It defaults to no calls; missing credentials
 report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
 Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait and required-vision-replan cases in each mode. Expected decisions
-remain outside model input. All attempts must pass; no answer correction or
-retry-until-pass is used. Ordinary pytest only checks the probe and negative
-oracles with scripted responses, without provider calls.
+quiet-wait, required-vision-replan and typed external-wait fallback cases in
+each mode. The fallback case uses the real compact quota projection: its wait
+transition already exists, so the host must advance the selected independent
+successor and notify rather than authoring another transition. Expected
+decisions remain outside model input. All attempts must pass; no answer
+correction or retry-until-pass is used. Ordinary pytest only checks the probe
+and negative oracles with scripted responses, without provider calls.
 
 This is a synthetic decision-level probe using current generated prompts,
 not proof of tool execution, host scheduling, upgrade delivery or full-Goal
@@ -1097,7 +1190,11 @@ the same completion intent and a corrected uncommitted vision. Checkpoint-only
 recovery is not a substitute for unfinished settlement.
 
 If a previously completed MCP Todo omitted its decision, call
-`review_task_vision(todo_id, agent_id, agent_vision=...)` with that same Todo.
+`review_task_vision(todo_id, agent_id)` with that same Todo to read its current
+decision basis. Judge the returned basis, then submit `agent_vision=...` or
+`vision_unchanged_reason=...` together with `read_context_id=...`. A stale or
+replaced receipt requires another read and a new judgment; a lost response
+requires the exact same receipt and decision, without reading again.
 It uses the original host Turn and the same writeback command constructor,
 delegating to the existing typed checkpoint recovery. It neither repeats Todo
 completion nor spends again. Exact replay is idempotent; a conflicting committed
@@ -1115,7 +1212,9 @@ not a substitute for evidence; remaining acceptance gaps or gates still prevent
 terminal quota. Kernel validation does not independently prove arbitrary prose
 true, so behavior qualification must also inspect the delivered artifacts.
 
-MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏。
+MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在原 Turn 补齐遗漏：
+先只传 Todo 和 Agent 读取依据，重新判断后携带 `read_context_id` 与判断提交。
+凭据过期或被替换时重读重判；响应丢失时原样重试凭据和判断，不重新读取。
 复用 TS 的既有恢复规则，不新增结算引擎、不重扣额度；已提交的判断不能偷偷改写。
 格式和预算预检在 Todo 完成前拒绝非法输入；若旧宿主已部分完成，则修正未提交的
 vision 并重试原 `complete_task`，不能用仅补 checkpoint 的操作替代未完成结算。

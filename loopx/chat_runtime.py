@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -56,6 +57,17 @@ from .chat_providers import ClaudeCodeAdapter, direct_model_from_environment
 
 
 EventSink = Callable[[str, dict[str, Any]], None]
+
+# These steering failures occur before the provider receives a message. A
+# fresh ingress identity can safely retry the same draft after recovery.
+STEERING_NOT_DELIVERED_CODES = frozenset({
+    "attached_session_live_steering_unavailable",
+    "live_steering_turn_mismatch",
+    "live_steering_requires_active_turn",
+    "live_steering_session_not_attached",
+    "live_steering_turn_not_started",
+})
+
 class ChatRuntimeAdapter(Protocol):
     @property
     def upstream_thread_id(self) -> str: ...
@@ -294,6 +306,7 @@ class ChatRuntimeController:
         self.session_adapter_locks: dict[str, threading.Lock] = {}
         self.session_queue_workers: set[str] = set()
         self.session_queue_threads: dict[str, threading.Thread] = {}
+        self.session_queue_wakeups: set[str] = set()
         self.closed = threading.Event()
         from .chat_loopx_mode import ChatLoopXMode
         self.loopx_mode = ChatLoopXMode(self)
@@ -904,6 +917,7 @@ class ChatRuntimeController:
         session_id: str,
         client_ingress_id: str,
         message: str,
+        expected_turn_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
 
@@ -915,6 +929,7 @@ class ChatRuntimeController:
             client_ingress_id=client_ingress_id,
             mode="live_steering",
             message=message,
+            expected_turn_id=expected_turn_id,
         )
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             capabilities = session.get("attached_capabilities")
@@ -935,8 +950,16 @@ class ChatRuntimeController:
                 if turn is None:
                     raise RuntimeError("live_steering_turn_missing")
                 return turn, False
+            if receipt.get("status") == "failed" and receipt.get("error_code") in STEERING_NOT_DELIVERED_CODES:
+                raise RuntimeError(str(receipt["error_code"]))
             raise RuntimeError("live_steering_delivery_unresolved")
         active_turn_id = str(session.get("active_turn_id") or "")
+        if expected_turn_id is not None and active_turn_id != expected_turn_id:
+            self.store.update_ingress_receipt(
+                session_id, client_ingress_id, status="failed",
+                error_code="live_steering_turn_mismatch",
+            )
+            raise RuntimeError("live_steering_turn_mismatch")
         if not active_turn_id:
             self.store.update_ingress_receipt(
                 session_id,
@@ -959,6 +982,14 @@ class ChatRuntimeController:
         deadline = time.monotonic() + min(5.0, self.startup_timeout_sec)
         while time.monotonic() < deadline:
             turn = self.store.load_turn(session_id, active_turn_id)
+            current_session = self.store.load_session(session_id) or {}
+            if (current_session.get("active_turn_id") != active_turn_id
+                    or (turn or {}).get("status") not in {"queued", "starting", "running"}):
+                self.store.update_ingress_receipt(
+                    session_id, client_ingress_id, status="failed",
+                    error_code="live_steering_turn_mismatch",
+                )
+                raise RuntimeError("live_steering_turn_mismatch")
             upstream_turn_id = str((turn or {}).get("upstream_turn_id") or "")
             if upstream_turn_id:
                 break
@@ -1044,7 +1075,10 @@ class ChatRuntimeController:
         # Admission must not read session files: callers can hold their own
         # lifecycle fence here. The worker validates the session before effects.
         with self.lock:
-            if self.closed.is_set() or session_id in self.session_queue_workers:
+            if self.closed.is_set():
+                return
+            if session_id in self.session_queue_workers:
+                self.session_queue_wakeups.add(session_id)
                 return
             worker = threading.Thread(
                 target=self._drain_session_queue,
@@ -1081,12 +1115,16 @@ class ChatRuntimeController:
                     with self.lock:
                         attached = self.adapters.get(session_id)
                     if attached is None or not attached.healthcheck():
-                        self._ensure_adapter(
-                            session,
-                            work_dir=work_dir,
-                            objective=objective,
-                        )
-                        continue
+                        try:
+                            self._ensure_adapter(
+                                session,
+                                work_dir=work_dir,
+                                objective=objective,
+                            )
+                        except Exception as exc:
+                            self._fail_queue_preparation(session_id, active_turn_id, exc)
+                        else:
+                            continue
                     active = self.store.load_turn(session_id, active_turn_id)
                     if active and active.get("status") not in TERMINAL_TURN_STATES:
                         self.closed.wait(0.05)
@@ -1099,15 +1137,33 @@ class ChatRuntimeController:
                 refreshed = self.store.load_session(session_id)
                 if refreshed is None:
                     return
-                adapter = self._ensure_adapter(
-                    refreshed,
-                    work_dir=work_dir,
-                    objective=objective,
-                )
+                preparation_error = None
+                try:
+                    adapter = self._ensure_adapter(
+                        refreshed,
+                        work_dir=work_dir,
+                        objective=objective,
+                    )
+                except Exception as exc:
+                    # An accepted queued request still owns an outcome when
+                    # workspace preparation or adapter restoration fails.
+                    preparation_error = exc
+                with self.lock:
+                    self.session_queue_wakeups.discard(session_id)
                 turn = self.store.claim_next_queued_turn(session_id)
                 if turn is None:
+                    with self.lock:
+                        if session_id in self.session_queue_wakeups:
+                            continue
+                        worker = self.session_queue_threads.get(session_id)
+                        if worker is threading.current_thread():
+                            self.session_queue_workers.discard(session_id)
+                            self.session_queue_threads.pop(session_id, None)
                     return
                 turn_id = str(turn["turn_id"])
+                if preparation_error is not None:
+                    self._fail_queue_preparation(session_id, turn_id, preparation_error)
+                    continue
                 with self.lock:
                     self.turn_done_events[(session_id, turn_id)] = threading.Event()
                 self._run_turn(
@@ -1119,8 +1175,30 @@ class ChatRuntimeController:
                 )
         finally:
             with self.lock:
-                self.session_queue_workers.discard(session_id)
-                self.session_queue_threads.pop(session_id, None)
+                worker = self.session_queue_threads.get(session_id)
+                if worker is threading.current_thread():
+                    self.session_queue_workers.discard(session_id)
+                    self.session_queue_threads.pop(session_id, None)
+                    self.session_queue_wakeups.discard(session_id)
+
+    def _fail_queue_preparation(
+        self, session_id: str, turn_id: str, error: Exception,
+    ) -> None:
+        logging.getLogger(__name__).error(
+            "Chat queue runtime preparation failed",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        self._fail_turn(
+            session_id, turn_id,
+            error.error_code if isinstance(error, CodexChatAgentError) else "runtime_unavailable",
+            str(error) if isinstance(error, CodexChatAgentError) else (
+                "The Agent runtime could not be prepared. Check the runtime installation "
+                "and configuration, then retry."
+            ),
+            status="failed",
+            gate=error.gate if isinstance(error, CodexChatAgentError) else None,
+            expected_statuses={"queued", "starting", "running"},
+        )
 
     def _run_turn(
         self,
@@ -1229,12 +1307,18 @@ class ChatRuntimeController:
                     if execution_lock is not None:
                         execution_lock.__exit__(None, None, None)
                     adapter.goal_driver = None
-            elif attachments:
-                if not isinstance(adapter, CodexAppServerAdapter):
-                    raise ValueError("image attachments currently require the Codex Agent endpoint")
-                response = adapter.start_turn_with_attachments(message, event_sink, attachments)
             else:
-                response = adapter.start_turn(message, event_sink)
+                from .usage_goal import observe_goal_execution
+                # Manager/native/external conversations have different execution
+                # and waiting boundaries. Do not invent Goal timing for them.
+                observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
+                with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
+                    if attachments:
+                        if not isinstance(adapter, CodexAppServerAdapter):
+                            raise ValueError("image attachments currently require the Codex Agent endpoint")
+                        response = adapter.start_turn_with_attachments(message, event_sink, attachments)
+                    else:
+                        response = adapter.start_turn(message, event_sink)
             if consume_interrupted():
                 event_buffer.close()
                 return
@@ -1339,12 +1423,13 @@ class ChatRuntimeController:
         *,
         status: str,
         gate: dict[str, Any] | None = None,
+        expected_statuses: set[str] | None = None,
     ) -> None:
         completed = utc_now()
         failed = self.store.update_turn(
             session_id,
             turn_id,
-            expected_statuses={"starting", "running"},
+            expected_statuses=expected_statuses if expected_statuses is not None else {"starting", "running"},
             status=status,
             error_code=error_code,
             error=message,

@@ -456,6 +456,13 @@ def handle_registry_admin_command(
                 clear_change_quality_configuration=bool(
                     args.clear_change_quality_configuration
                 ),
+                progress_review_mode=args.progress_review_mode,
+                progress_review_signal=args.progress_review_signal,
+                progress_review_drift_threshold=args.progress_review_drift_threshold,
+                progress_review_contract_revision=args.progress_review_contract_revision,
+                clear_progress_review_configuration=bool(
+                    args.clear_progress_review_configuration
+                ),
                 multi_subagent_feature=args.multi_subagent_feature,
                 orchestration_mode=args.orchestration_mode,
                 spawn_allowed=args.spawn_allowed,

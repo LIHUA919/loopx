@@ -85,6 +85,7 @@ check and task ID with the actual artifact checks and existing advancement task:
 
 ```json
 {
+  "scope": {"kind": "selected_work", "todo_ids": ["todo_deliver"]},
   "objective": "Deliver a checked artifact",
   "non_goals": ["Publish the artifact"],
   "criteria": [{
@@ -96,6 +97,42 @@ check and task ID with the actual artifact checks and existing advancement task:
   "bindings": [{"todo_id": "todo_deliver", "criterion_ids": ["artifact-present"]}]
 }
 ```
+
+Every new configuration or reconfiguration must explicitly declare coverage:
+`selected_work` requires a nonempty list of existing Agent advancement Todo IDs;
+`all_advancement` explicitly covers all current and future advancement work.
+Prefer selected work for a bounded experiment or delegated artifact. Selection
+and binding are separate: selected work with no confirmed binding remains held.
+Bindings outside the selected set are rejected. Agents cannot change coverage;
+owner configuration still uses preview, provider CAS and exact operation replay.
+
+Legacy persisted documents without `scope` retain their Goal-wide behavior and
+original digest. Reading or upgrading does not narrow them. A fresh configuration
+without scope is rejected with an actionable error; original committed retries
+still recover their receipts. An older runtime that does not understand selected
+coverage rejects it rather than silently ignoring it; update readers before an
+owner-approved scope change.
+
+Unselected work retains its ordinary validation, claims, leases, permissions and
+continuation checks. Selected work cannot edit role/class/status to escape its
+contract. Changes to unrelated work do not stale a selected-work verification;
+changes to selected work do. The dashboard's existing read-only acceptance detail,
+Markdown export and CLI expose coverage without granting new configuration power.
+No Lark configuration operation is introduced.
+
+**恢复与范围 / Recovery and coverage.** Missing/stale associations trigger scoped
+replanning, but a concrete blocker receipt is a wait checkpoint, not a repair or
+handoff. Inspect contract coverage before requesting per-task rebinding. If a
+bounded experiment accidentally gates independent work, prepare a correction for
+the authorized owner, retain all task-level validation and read back runnable work
+after applying it. Do not rebind every new task, disable checks, or create another
+unbound repair Todo. Contract revision changes invalidate old hold checkpoints.
+
+所有新配置与重新配置都必须明确选择覆盖范围：`selected_work` 只管明确列出的既有推进任务，
+`all_advancement` 明确覆盖当前和未来全部推进任务。局部实验应选择前者；选中但未绑定的任务
+仍然受阻。旧合同省略范围时保持原来的全局语义和摘要，升级不会偷偷放松。
+范围仅由原 owner 配置路径修改；范围外任务继续接受自身的校验、租约和权限检查。
+记录阻塞只能暂停重复重规划，不能冒充修复已完成或已交接；应诊断范围、提交具体修正并验证恢复。
 
 Keep executable declarations in the owner's local file; public readback omits
 command arguments and output. The configured checks run as bounded argv commands
@@ -136,12 +173,50 @@ and retains the existing claim, lease/fence, permission and continuation gates.
 A prior verification receipt or a confirmed association cannot complete a task.
 Use `loopx todo claim --help` and `loopx todo complete --help` for the existing
 task arguments; this contract adds no bypass flags.
+When a fresh completion criterion fails, `todo complete` keeps the Todo open
+and returns `goal_acceptance_validation_failure_v0` with the criterion ID,
+privacy-safe validation status, exit code when available, and a bounded next
+action. A dirty or mismatched delivery worktree is diagnosed as a workspace
+failure, not as a stale owner association. Commands, output, local paths and
+arbitrary runner summaries are not projected. Retry under the same Turn and
+current lease after repairing the indicated execution context.
 
 Terminal observations, including `no_followup`, do not change the work digest:
 finishing a task must not stale the binding that just admitted its completion.
-Text, validation requirements and unknown future work fields still invalidate
-the association. Existing enabled contracts configured with a persisted
-`no_followup` field under the earlier digest rule require owner inspection and
+The v0 binding matcher also accepts a prior digest when the only intervening
+changes are a valid append-only completion-validator revision history or added
+successor links, or when a previously absent `resume_when` scheduling condition
+is added. It checks reconstructible prior states rather than rewriting
+owner bindings, so existing ready contracts retain their stored digests.
+Revised validators still undergo their own fresh completion check; Goal
+acceptance criteria remain separately configured and checked. Text, whether
+completion validation is required, repository/write-scope declarations, and
+unknown future work fields still invalidate the association. Replacing an
+existing `resume_when` is not reconstructible from the latest Todo and remains
+`stale`. When no advancement Todo is selectable, both missing (`unbound`)
+and stale associations enter the existing agent-scoped recovery lane. Recovery
+preserves the original Turn/Todo identity and does not authorize execution of
+held work. Inspect a missing association and prepare it for owner confirmation;
+for a stale association, inspect the work delta and use the
+[exact text/wait restoration](#restore-an-unintended-textwait-edit-after-lease-release)
+when possible, or propose the changed association for owner review. An already eligible successor remains a
+separate execution identity. Do not create another unbound repair Todo and
+mistake its existence for a runnable successor.
+
+Acceptance holds precede general vision gaps in the bounded trigger packet, so
+the Agent can read the exact checkpoints that recovery requires. Only an
+accepted, evidence-linked runnable successor or concrete blocker receipt covering
+the exact hold generation can quiet it. Unrelated progress, a vision rewrite,
+or an acknowledgement for another association cannot discharge the hold.
+Reconfirming the contract or changing the work rearms recovery. Disabled/absent
+acceptance retains its existing behavior. When quota selects replan, candidate
+monitors remain inventory; `selected_todo` and `agent_lane_next_action` do not
+advertise them as this decision's execution target. Original receipt identities
+remain in their settlement contracts. A genuinely Todo-bound replan still
+projects its selected Todo; this only removes the unrelated inventory fallback.
+
+Existing enabled contracts configured
+with a persisted `no_followup` field under the earlier digest rule require owner inspection and
 reconfiguration; no historical receipt is rewritten or automatically accepted.
 Disabled/absent acceptance retains its existing behavior.
 
@@ -279,6 +354,29 @@ status 同时在独立的 `run_history.goals[].artifact_lifecycle` 和 Markdown 
 所有者通过重新配置确认当前关联；完成任务必须执行当前绑定的产物检查，并继续满足原有
 claim、lease/fence、权限和后续工作要求。既有验证回执或已确认的关联不能代替本次任务完成验证。
 任务参数沿用 `loopx todo claim --help`、`loopx todo complete --help`，没有绕过门禁的新参数。
+本次完成验收失败时，`todo complete` 保持 Todo 未完成，返回
+`goal_acceptance_validation_failure_v0`：验收项 ID、脱敏的验证状态、可得的退出码和有界
+下一步动作。工作区不干净或不匹配会明确归类为工作区失败，而非所有者关联过期；命令、输出、
+本地路径和执行器任意摘要不会投影。修复执行环境后沿原 Turn 和当前 lease 重试。
+
+终态观察不会让刚完成的任务关联过期。对既有 v0 绑定，若差异仅来自可校验的完成验证命令
+修订历史追加、后继任务链接追加，或此前不存在的 `resume_when` 调度条件新增，读出会比对
+可重建的旧状态并自动保留 `ready`，无需所有者
+重复确认，也不改写已保存的绑定摘要。修订后的命令仍须在完成时重新验证，Goal 验收条件
+也仍独立执行。任务文本、是否要求完成验证、仓库与写入范围等实质工作声明变化仍使关联
+过期；未知的新工作字段默认按实质变化处理。已有 `resume_when` 被替换时，当前 Todo
+无法证明旧值，仍保持 `stale`。无可选推进任务时，缺失关联（`unbound`）与过期关联
+（`stale`）统一进入现有 Agent 范围的恢复路径。缺失关联需要准备关联方案供所有者确认；
+过期关联需要核查工作变化、恢复误改或提交变更后的关联。恢复保留原 Turn/Todo 身份，
+不授权执行或完成受阻任务，也不自动重绑。不要再新建一个同样 unbound 的修复 Todo，
+然后将其当作可运行后继。
+
+有界触发项优先保留验收阻塞及其精确检查点，再展示通用 vision 缺口。只有覆盖该阻塞
+代次、被接纳的有据可运行后继或具体阻塞回执，才会消解重复唤醒。无关进展、改写 vision、
+其他关联的确认均不能代替；重新确认合同或改变工作会重新触发恢复。未启用时保持原行为。
+配额选择重规划时，候选观察任务仍可见于清单，但不再同时成为 `selected_todo` 或
+`agent_lane_next_action`；原回执身份仍由结算合同保留。真正绑定 Todo 的重规划仍展示原 Todo，
+本次仅移除从无关观察清单补出的选择。
 
 `loopx goal-acceptance verify --goal-id example-goal` 仅预览；加 `--execute` 执行全部配置条件，
 再运行 inspect 读回。进入 **概览 → 交付与依据**，刷新并展开交付链下方的 **Goal 验收合同**。
@@ -299,3 +397,46 @@ Lark 呈现、远端合同编辑、语义意图保持证明与通用共享 amend
 不宣称任一 RFC 已完成。合同浏览器检查用 `npm run smoke:goal-acceptance-contract-browser`；
 前端集成打包后，`npm run smoke:goal-acceptance-contract-packaged` 对已发布资源跑同一项检查。
 Python renderer 测试和 API/export smoke 覆盖缺失、停用、过期、失败及通过的区别。
+
+
+## Restore an unintended text/wait edit after lease release
+
+A hard-lease Todo may become stale after its claimed Agent accidentally changes
+its text or clears an existing `resume_when`, then releases the execution lease.
+The same claimed Agent can use a reviewed update to restore the **exact original
+work declaration**, without first acquiring a lease over stale work:
+
+```sh
+loopx goal-acceptance inspect --goal-id example
+loopx todo update --goal-id example --todo-id todo_artifact --agent-id agent-a \
+  --resume-when 'resume_at:2026-01-01T00:00:00Z' \
+  --update-operation-id restore-original-wait \
+  --update-expected-provider-revision '<revision from inspect>'
+```
+
+Supply the actual original wait/text, not the example value. TS compares the
+entire candidate work digest with the existing owner-confirmed binding. It
+rejects a different scope, wrong revision, foreign/excluded actor, active lease,
+stale execution proof, or a bundled lifecycle/validator/ownership edit. The
+restoration writes neither an owner rebind nor an execution grant. Acquire a
+fresh lease through the usual command before executing work; an exact update
+retry reads the old operation receipt and cannot alter the new lease generation.
+It does not complete a Todo or settle/spend a Turn.
+
+This is not a general history rollback. If the previous declaration is unknown,
+other work fields changed, or compatible subsequent revisions prevent an exact
+match, prepare the current intent for owner review and explicit rebind. The CLI
+and managed replan guidance name that route instead of prescribing a lease /
+restore loop. Existing ready, unbound and acceptance-disabled work keeps its
+ordinary admission rules. Frontend and Lark consume the resulting canonical
+state; this introduces no separate editor or authority owner.
+
+硬租约 Todo 因误改文本或原有等待条件而 stale、且租约已释放时，同一 claimed Agent
+可带当前 provider revision 和稳定 operation id，通过原来的 `todo update` 精确还原。
+TS 校验整个候选工作声明的摘要必须等于 owner 当初确认的摘要；不会把任意修改当成
+无害变化，也不修改验收标准、owner 绑定或租约。恢复后仍须正常获取新租约才能执行。
+重复请求仅恢复旧回执，不会重复结算 Turn 或改变新一代租约。
+
+必须提供真实的原文本/等待条件。若不知道原声明、改动涉及其他字段，或后续兼容修订
+使完整摘要无法精确匹配，应请 owner 审核并显式重新绑定。不能猜测旧值、伪造完成，
+也不能先取得 stale 工作的租约来绕过这条边界。

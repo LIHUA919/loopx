@@ -452,14 +452,8 @@ def _full_review_body(
             if verdict == "APPROVE"
             else "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
         ) + "\n\n"
-    return (
-        f"{fallback}## 动机\n完整动机。\n\n"
-        "## 改动思路\n完整思路。\n\n"
-        "## 具体改动\n完整改动。\n\n"
-        "## 对主干的风险\n完整风险。\n\n"
-        "## 我的整体评价\n整体通过。\n\n"
-        f"**English verdict:** {verdict} at exact head {head}."
-    )
+    return fallback + (Path(__file__).parents[1] / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", head).replace("VERDICT", verdict)
+
 
 
 def _merge_ready_pr(
@@ -566,12 +560,20 @@ def _capture_payload(out: list[dict[str, object]]):
     return capture
 
 
+@pytest.mark.parametrize("heading_only_review", [False, True])
 def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
     tmp_path: Path,
+    heading_only_review: bool,
 ) -> None:
     fixture_path = tmp_path / "pull-request.json"
     pull_request = _merge_ready_pr()
     pull_request["review_thread_summary"] = _complete_review_threads()
+    if heading_only_review:
+        pull_request["reviews"][0]["body"] = (
+            "\n".join(f"## {label}\n已验证。" for label in
+                      ("动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"))
+            + f"\nEnglish verdict: APPROVE - {HEAD_1}"
+        )
     fixture_path.write_text(
         json.dumps(
             {
@@ -591,8 +593,11 @@ def test_merge_readiness_cli_qualifies_one_fixture_exact_head(
         print_payload=_capture_payload(out),
     )
 
-    assert result == 0
-    assert out[0]["ready"] is True
+    assert result == (1 if heading_only_review else 0)
+    assert out[0]["ready"] is not heading_only_review
+    if heading_only_review:
+        assert any("review_body:section_too_short:具体改动" in reason for reason in
+                   out[0]["review_conclusion"]["invalid_reasons"])
     assert out[0]["source"] == "fixture"
     assert out[0]["expected_exact_head"] == f"4110@{HEAD_1}"
 
@@ -1411,6 +1416,19 @@ def test_review_conclusion_requires_format_exact_head_and_formal_state(
     assert valid["review_conclusion"]["status"] == "valid"
     assert valid["review_action_kind"] == "qualify_pull_request_merge_readiness"
 
+    row["reviews"][0]["body"] = "<!--\n" + _full_review_body(head) + "\n-->"
+    hidden = pr_review_module.build_pr_review_packet(
+        pull_requests=[row],
+        repository="owner/repo",
+        limit=10,
+        source="fixture",
+        state_filter="open",
+        reviewer_login="maintainer",
+    )["pull_requests"][0]
+    assert hidden["review_conclusion"]["status"] == "invalid"
+    assert hidden["review_action_kind"] == "review_pull_request_exact_head"
+
+    row["reviews"][0]["body"] = _full_review_body(head)
     row["reviews"][0]["author"] = {"login": "peer-reviewer"}
     peer_valid = pr_review_module.build_pr_review_packet(
         pull_requests=[row],

@@ -88,6 +88,11 @@ def build_goal_configuration_catalog(
         if isinstance(feature_summary.get("change_quality_qualification"), Mapping)
         else {}
     )
+    progress_review = (
+        feature_summary.get("progress_review")
+        if isinstance(feature_summary.get("progress_review"), Mapping)
+        else {}
+    )
     inspect_command = _configure_command(goal_id)
     multi_enable_args = (
         "--multi-subagent-feature",
@@ -179,43 +184,20 @@ def build_goal_configuration_catalog(
             },
             {
                 "feature_id": "local_authority_shadow",
-                "display_name": "Local post-commit authority observation",
-                "availability": "experimental_opt_in",
+                "display_name": "Retired post-commit authority observation",
+                "availability": "retired",
                 "default": {"enabled": False},
                 "current": {
                     "enabled": local_authority_shadow.get("enabled") is True,
                     "mode": local_authority_shadow.get("mode"),
                     "status": local_authority_shadow.get("status", "disabled"),
                 },
-                "consider_when": (
-                    "A Goal needs to exercise the first Stage 2C observation "
-                    "plumbing while legacy local writers remain authoritative."
-                ),
-                "effect": (
-                    "Captures a best-effort post-commit snapshot of Todo and "
-                    "task-lease state through the FileAuthorityStore contract."
-                ),
-                "does_not": [
-                    "read the candidate for lifecycle decisions",
-                    "write candidate state back into Markdown or task-lease files",
-                    "promote shared authority or fence legacy writers",
-                    "bind the snapshot to the exact primary transaction",
-                    "guarantee delivery through a durable outbox",
-                    "compare source and candidate or issue a parity verdict",
-                ],
+                "consider_when": "Clear retained observation configuration before an explicit runtime-shadow bootstrap.",
+                "effect": "No new observations are written. Retained data stays read-only and cannot qualify promotion.",
+                "does_not": ["enable or bootstrap runtime shadow", "delete retained observations", "grant promotion evidence"],
                 "commands": {
-                    "preview_enable": _configure_command(
-                        goal_id, "--local-authority-shadow-file"
-                    ),
-                    "apply_enable": _configure_command(
-                        goal_id, "--local-authority-shadow-file", execute=True
-                    ),
-                    "preview_disable": _configure_command(
-                        goal_id, "--clear-local-authority-shadow"
-                    ),
-                    "apply_disable": _configure_command(
-                        goal_id, "--clear-local-authority-shadow", execute=True
-                    ),
+                    "preview_disable": _configure_command(goal_id, "--clear-local-authority-shadow"),
+                    "apply_disable": _configure_command(goal_id, "--clear-local-authority-shadow", execute=True),
                     "verify": [inspect_command],
                 },
                 "documentation": {
@@ -398,6 +380,81 @@ def build_goal_configuration_catalog(
                         "https://github.com/loopx-project/loopx/blob/main/"
                         "docs/integrations/codex-subagent-orchestration.md"
                     ),
+                },
+            },
+            {
+                "feature_id": "progress_review",
+                "display_name": "Progress-review sentinel",
+                "availability": "supported_opt_in",
+                "default": {
+                    "mode": "off",
+                    "signal": "noul",
+                    "drift_threshold": 2,
+                    "contract_revision": None,
+                },
+                "current": {
+                    "mode": str(progress_review.get("mode") or "off"),
+                    "signal": str(progress_review.get("signal") or "noul"),
+                    "drift_threshold": int(progress_review.get("drift_threshold") or 2),
+                    "contract_revision": progress_review.get("contract_revision") or None,
+                },
+                "consider_when": (
+                    "Long-running work keeps declaring advancement while the typed "
+                    "repeat fuse stays quiet, and an external bounded reviewer of "
+                    "scoped file deltas is installed for the goal."
+                ),
+                "effect": (
+                    "shadow records typed drift receipts per refresh; assist lets "
+                    "consecutive completed drift receipts bound to the pinned goal "
+                    "contract revision raise the existing autonomous replan "
+                    "obligation, which the Agent must acknowledge."
+                ),
+                "does_not": [
+                    "call a model from the control plane or read raw file deltas",
+                    "replace the Agent's typed progress_observation",
+                    "pause turns, open user gates, or settle Goal acceptance",
+                    "count unknown, abstained, failed or missing receipts as drift",
+                ],
+                "commands": {
+                    "preview_enable": _configure_command(
+                        goal_id, "--progress-review-mode", "shadow"
+                    ),
+                    "apply_enable": _configure_command(
+                        goal_id, "--progress-review-mode", "shadow", execute=True
+                    ),
+                    "preview_assist": _configure_command(
+                        goal_id,
+                        "--progress-review-mode",
+                        "assist",
+                        "--progress-review-drift-threshold",
+                        "2",
+                    ),
+                    "apply_assist": _configure_command(
+                        goal_id,
+                        "--progress-review-mode",
+                        "assist",
+                        "--progress-review-drift-threshold",
+                        "2",
+                        execute=True,
+                    ),
+                    "preview_pin": _configure_command(
+                        goal_id,
+                        "--progress-review-contract-revision",
+                        "<basis-sha256>",
+                    ),
+                    "preview_disable": _configure_command(
+                        goal_id, "--clear-progress-review-configuration"
+                    ),
+                    "apply_disable": _configure_command(
+                        goal_id, "--clear-progress-review-configuration", execute=True
+                    ),
+                    "verify": [
+                        inspect_command,
+                        "loopx capability show progress-review-sentinel --format json",
+                    ],
+                },
+                "documentation": {
+                    "path": "loopx/capabilities/progress_review/README.md",
                 },
             },
             {

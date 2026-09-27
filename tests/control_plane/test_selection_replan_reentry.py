@@ -152,6 +152,20 @@ def test_deferred_selection_recovers_same_turn_and_settles_once(tmp_path, bindin
     assert settled["heartbeat_receipt"]["settlement_identity"] == identity
     rc, conflict = _run_cli(registry, runtime, *guard, "--todo-id", "todo_another_selection")
     assert rc == 1 and conflict["ok"] is False
+    if binding == "autonomous_replan":
+        facts = conflict["action_selection_conflict"]
+        assert facts["receipt_replan_obligation_id"] == identity[
+            "replan_obligation_id"
+        ]
+        if selection_deferred:
+            assert facts["retained_selection"] is True
+            assert facts["retained_selection_todo_id"] == selected_id
+        else:
+            assert "retained_selection" not in facts
+            assert "retained_selection_todo_id" not in facts
+            assert facts["qualification_state"] is None
+            assert "no pending Todo selection" in conflict["reason"]
+            assert "selection the Turn retains" not in conflict["recommended_action"]
     assert _heartbeat_receipt_count(runtime, turn) == expected_after_resume
     assert _spend_run_count(runtime) == 1
 
@@ -201,3 +215,11 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
         "--replan-obligation-id" in action and "--todo-id" not in action
         for action in resumed["interaction_contract"]["cli_channel"]["next_cli_actions"]
     )
+    rc, conflict = _run_cli(
+        registry, runtime, *guard, "--todo-id", SELECTED_REPLAN_TODO_ID
+    )
+    assert rc == 1, conflict
+    facts = conflict["action_selection_conflict"]
+    assert facts["retained_selection"] is True
+    assert facts["retained_selection_todo_id"] == retained_todo_id
+    assert facts["receipt_replan_obligation_id"] == identity["replan_obligation_id"]

@@ -63,11 +63,12 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...event_sourced_state import now_utc_iso
+from ..runtime.time import now_utc_iso
 from ...file_lock import exclusive_file_lock
 from ...history import load_index, load_registry
 from ...runtime import validate_goal_id_path_segment
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..runtime.time import chronology_key
 from ..status.autonomous_replan_projection import (
     autonomous_replan_obligation_from_runs,
 )
@@ -315,7 +316,7 @@ def _derive_open_replan_obligation_inventory(
         for _, run in sorted(
             enumerate(runs),
             key=lambda item: (
-                str(item[1].get("generated_at") or ""),
+                *chronology_key(item[1].get("generated_at")),
                 item[0],
             ),
             reverse=True,

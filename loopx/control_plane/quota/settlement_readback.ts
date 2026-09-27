@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import { isAbsolute, join } from "node:path";
 
 import {
@@ -30,7 +30,9 @@ import {
   type DeliveryWorkspaceCausality,
 } from "./settlement_workspace_causality.ts";
 import {
+  isBoundedBlockedRetry,
   isCommittedMonitorPollEffect,
+  isAcceptedInFlightWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
 } from "./settlement_phase.ts";
@@ -113,6 +115,7 @@ function settlementProgress(
   identity: SettlementResult, writeback: SettlementResult, spend: SettlementResult,
   writebackRun: JsonObject | null, spendRun: JsonObject | null,
   spendSource: unknown = "heartbeat",
+  blockedNoSpend = false,
 ): JsonObject {
   const source = spendSource ?? "heartbeat";
   if (source !== "heartbeat" && source !== "visible-goal") {
@@ -120,13 +123,17 @@ function settlementProgress(
   }
   const state: SettlementProgressState = identity.failure ? "identity_required"
     : writeback.failure ? (writebackRun ? "writeback_receipt_required" : "writeback_required")
+    : blockedNoSpend ? "settled"
     : spend.failure ? (spendRun ? "spend_receipt_required" : "spend_required")
     : "settled";
   return {
     schema_version: "quota_settlement_progress_v0", state,
     next_step: identity.failure ? "validation" : writeback.failure ? "durable_writeback"
-      : spend.failure ? "quota_spend" : null,
+      : blockedNoSpend ? null : spend.failure ? "quota_spend" : null,
     quota_spend_source: source,
+    ...(blockedNoSpend ? {
+      closeout_kind: "typed_blocked_writeback_no_spend",
+    } : {}),
   };
 }
 
@@ -179,40 +186,15 @@ function decodeRequest(value: unknown): ReadbackRequest {
   };
 }
 
-async function readJsonLines(path: string, schemaVersion?: string): Promise<JsonObject[]> {
-  let content: string;
-  try {
-    content = await readFile(path, "utf8");
-  } catch (error) {
-    if (
-      error !== null &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return [];
-    }
-    throw error;
+async function readRunReceipts(path: string): Promise<readonly JsonObject[]> {
+  const snapshot = await readReceiptLogSnapshot(path);
+  if (snapshot?.firstErrorLine != null) {
+    throw new EffectRuntimeRequestError(
+      `settlement readback line ${snapshot.firstErrorLine} is malformed`,
+      "malformed_settlement_state",
+    );
   }
-  const records: JsonObject[] = [];
-  for (const [index, line] of content.split(/\r?\n/).entries()) {
-    if (!line.trim()) continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      const record = jsonObject(parsed);
-      if (!record) throw new Error("record must be a JSON object");
-      if (schemaVersion !== undefined && record.schema_version !== schemaVersion) {
-        throw new Error(`schema must be ${schemaVersion}`);
-      }
-      records.push(record);
-    } catch {
-      throw new EffectRuntimeRequestError(
-        `settlement readback line ${index + 1} is malformed`,
-        "malformed_settlement_state",
-      );
-    }
-  }
-  return records;
+  return snapshot?.records ?? [];
 }
 
 function turnKey(
@@ -307,7 +289,7 @@ export async function readQuotaSettlementSnapshot(
     rolloutSnapshot === undefined
       ? readGoalRolloutEventSnapshot(runtimeRoot, goalId)
       : Promise.resolve(rolloutSnapshot),
-    readJsonLines(join(goalRoot, "runs", "index.jsonl")),
+    readRunReceipts(join(goalRoot, "runs", "index.jsonl")),
   ]);
   return indexSettlementSnapshot(
     runtimeRoot,
@@ -335,6 +317,27 @@ function indexedRuns(
   return snapshot.runsByTurn.get(
     turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
   ) ?? [];
+}
+
+/** One committed-poll rule for settlement and prior-Turn closeout. */
+export function committedMonitorPollFromSnapshot(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id" | "todo_id">,
+): JsonObject | null {
+  if (snapshot.goalId !== identity.goal_id) {
+    throw new EffectRuntimeRequestError("monitor poll snapshot scope mismatch");
+  }
+  const runs = snapshot.runsByTurn.get(
+    turnKey(identity.goal_id, identity.agent_id, identity.turn_instance_id)!,
+  ) ?? [];
+  return [...runs].reverse().find((run) =>
+    run.classification === "quota_monitor_poll" &&
+    optionalString(run.goal_id) === identity.goal_id &&
+    optionalString(run.agent_id) === identity.agent_id &&
+    optionalString(run.turn_instance_id) === identity.turn_instance_id &&
+    normalizeTodoId(run.todo_id) === identity.todo_id &&
+    isCommittedMonitorPollEffect(jsonObject(run.quota_monitor_poll_commit)?.effect_id, identity)
+  ) ?? null;
 }
 
 function spendCandidateRuns(
@@ -966,18 +969,25 @@ function readQuotaSettlementFromRequest(
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
+  // The exact Turn-bound blocked writeback is itself a durable no-spend
+  // closeout. It cannot certify Todo completion or become delivery progress.
+  // A spend already committed for this identity remains an ordinary spend
+  // settlement, so readback never erases a historical debit.
+  const blockedNoSpend = writeback.failure === null &&
+    spendRun === null && spendEvent === null &&
+    identity.binding_kind === "todo" &&
+    writebackRun !== null && writebackRun.delivery_outcome === "outcome_gap" &&
+    isBoundedBlockedRetry(writebackRun.blocked_retry, identity.todo_id) &&
+    isTurnScopedSettlementOutcome(
+      writebackRun.delivery_outcome,
+      writebackRun.progress_observation,
+      identity.todo_id,
+    );
   const terminalCloseout = terminalResult(identity, completionEvent);
   const withWriteback = settlementBindReduce(identityResult, writeback);
-  const settled = settlementBindReduce(withWriteback, spend);
+  const settled = blockedNoSpend ? withWriteback : settlementBindReduce(withWriteback, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
-  const monitorPoll = [...runs].reverse().find((run) =>
-    run.classification === "quota_monitor_poll" &&
-    optionalString(run.goal_id) === identity.goal_id &&
-    optionalString(run.agent_id) === identity.agent_id &&
-    optionalString(run.turn_instance_id) === identity.turn_instance_id &&
-    normalizeTodoId(run.todo_id) === identity.todo_id &&
-    isCommittedMonitorPollEffect(jsonObject(run.quota_monitor_poll_commit)?.effect_id, identity)
-  ) ?? null;
+  const monitorPoll = committedMonitorPollFromSnapshot(snapshot, identity);
   const nestedCausality = typeof receiptDetails.delivery_workspace_causality === "object" &&
       receiptDetails.delivery_workspace_causality !== null &&
       !Array.isArray(receiptDetails.delivery_workspace_causality)
@@ -997,6 +1007,8 @@ function readQuotaSettlementFromRequest(
   const todoBoundReplan = identity.binding_kind === "todo" &&
     semanticReplanGuard.scope === "turn_guard" &&
     semanticReplanGuard.selected_obligation_id !== null;
+  const inFlightWriteback = writeback.failure === null &&
+    isAcceptedInFlightWriteback(writebackRun, identity);
 
   const recovery = request.refresh_retry === null ? null : refreshRecovery(
     request.refresh_retry, writebackRun, writeback.failure === null,
@@ -1020,7 +1032,7 @@ function readQuotaSettlementFromRequest(
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
     progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source),
+      receiptDetails.quota_spend_source ?? spendRun?.source, blockedNoSpend),
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: writebackRun,
@@ -1042,10 +1054,11 @@ function readQuotaSettlementFromRequest(
     }),
     replay_phase: receiptBoundReplayPhase({
       binding_kind: identity.binding_kind,
-      writeback_completes_binding: todoBoundReplan,
+      writeback_completes_binding: todoBoundReplan || blockedNoSpend || inFlightWriteback,
       completion_receipt_present: completionEvent !== null,
       durable_writeback_present: writeback.failure === null,
       quota_spend_present: spend.failure === null,
+      no_spend_closeout_present: blockedNoSpend,
     }),
   };
 }

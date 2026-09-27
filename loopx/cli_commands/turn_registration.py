@@ -177,6 +177,14 @@ def register_turn_commands(
     )
     run_once.add_argument("--project", required=True)
     run_once.add_argument(
+        "--automation-id",
+        help="Stable automation identity for an automation-scoped execution interval.",
+    )
+    run_once.add_argument(
+        "--manual-interval-bypass-reason",
+        help="Explicit manual intent; bypass only the interval and record this start.",
+    )
+    run_once.add_argument(
         "--host-command-json",
         "--host-adapter-command-json",
         dest="host_command_json",

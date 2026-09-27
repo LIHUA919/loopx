@@ -27,6 +27,8 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 def _assert_checkpoint_instructions(rendered: str) -> None:
+    assert "checkpoint-context" in rendered
+    assert "--checkpoint-read-context" in rendered
     assert "same Goal, Agent, Todo/obligation, Turn, and delivery fields" in rendered
     assert "Remove previously executed state-mutation options" in rendered
     for option in (
@@ -129,7 +131,7 @@ def test_recovery_markdown_preserves_routing_and_error_precedence(decision):
 
 
 @pytest.mark.parametrize("decision", ["unchanged", "patch"])
-def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision: str):
+def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_path: Path, decision: str):
     project, runtime, registry = _write_fixture(tmp_path)
     rc, initial = _run_cli(
         registry,
@@ -232,6 +234,9 @@ def test_same_turn_checkpoint_supplement_is_idempotent(tmp_path: Path, decision:
         assert Path(first["json_path"]).read_bytes() == original_bytes
         assert state_path.read_bytes() == original_state
         assert _spend_run_count(runtime) == 0
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, context
+    supplement += ("--checkpoint-read-context", context["read_context_id"])
     rc, preview = _run_cli(
         registry, runtime, *args, *supplement, "--dry-run", cwd=tmp_path
     )
@@ -404,7 +409,10 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     assert rc == 1, wrong_identity
     assert "settlement binding does not match" in wrong_identity["error"]
 
-    rc, repaired = _run_cli(registry, runtime, *delivery, *vision, cwd=project)
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID, *binding, cwd=project)
+    assert rc == 0, context
+    rc, repaired = _run_cli(registry, runtime, *delivery, *vision,
+        "--checkpoint-read-context", context["read_context_id"], cwd=project)
     assert rc == 0, repaired
     assert repaired["appended"] is True
     assert repaired["refresh_recovery"]["decision"] == "supplement_checkpoint"

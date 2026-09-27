@@ -116,6 +116,12 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
     observeLocalCoordinationOwnership: [{...input, schema_version: "loopx_local_ownership_observation_request_v0"}],
     listLocalCoordinationTodos: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA}],
     readLocalCoordinationTodo: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA}],
+    readLocalCoordinationOperationReceipt: [{
+      runtime_root: directory,
+      goal_id: "goal-a",
+      schema_version: "loopx_local_coordination_operation_receipt_request_v0",
+      operation_id: "open-failure",
+    }],
     createLocalCoordinationTodo: [
       {...input, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, todo: {}},
       {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA, todo: {}}],
@@ -127,8 +133,11 @@ function providerCalls(directory: string, revision: string, dryRun: boolean) {
       {...updateInput, schema_version: "loopx_local_coordination_todo_update_request_v1", planning_intent: {status: "blocked"}},
       {...witnessed, schema_version: "loopx_local_coordination_todo_update_request_v2"}],
     terminalLifecycleLocalCoordinationTodo: [
-      {...input, schema_version: runtime.LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA},
-      {...witnessed, schema_version: runtime.LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_WITNESSED_REQUEST_SCHEMA}],
+      (() => {
+        const {operation_id, ...terminal} = witnessed;
+        return {...terminal, schema_version: runtime.LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
+          command: "complete", operation_identity: {kind: "explicit", operation_id}};
+      })()],
     archiveLocalCoordinationTodos: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA, max_active_done: 0}],
     acknowledgeLocalCoordinationTodoArchive: [{...input, schema_version: runtime.LOCAL_COORDINATION_TODO_ARCHIVE_ACK_REQUEST_SCHEMA}],
     executeReviewedCoordinationPromotion: [{

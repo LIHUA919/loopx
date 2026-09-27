@@ -1,6 +1,7 @@
 # RFC：智能化审阅与动态展示面 v0
 
-- 状态：Draft，等待 Maintainer 审阅
+- 状态：已接受
+- 替代 / 关闭：无
 - 提案人：LoopX Maintainers
 - 日期：2026-09-01
 - 范围：定义一个 provider-neutral 的 typed interaction projection，用于筛选、展示、审阅和反馈控制面的重要变化，并为卡片、对比、图、报告、Dashboard 与持续演进的文档提供有界 presentation plan；不新增 source store、authority grant、provider effect、通知调度器、万能 renderer，也不要求必须依赖模型
@@ -556,9 +557,22 @@ Adaptive policy 必须 inspectable、resettable，其输出携带 reason codes�
 [团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) 描述 S5/R2 投研旅程：
 指挥台与空间工作室同列表、语义缩放和历史回放共用 typed 事实。有目的的动态
 是产品目标；注册、执行、返回、独立验收与请求方采用保持分离。保留来源 / 版本
-谱系和不确定性，不能由装饰动态推断活动或由共识人数推断置信度。这是 Draft
-展示切片，不是已交付的团队流，也不新增调度权限。其 L1–L3 计划与 V1–V7 验收
+谱系和不确定性，不能由装饰动态推断活动或由共识人数推断置信度。这是已接受的设计展示切片，不是已交付的团队流，也不新增调度权限。其 L1–L3 计划与 V1–V7 验收
 展开本 RFC Stage 3 的展示旅程，不关闭本文跨渠道或受治理 settlement 验收。
+
+### 8.8 可复用的对话工作界面
+
+管家 Chat、Goal Chat、直接 Agent 对话及其前端/飞书投影，共用一种交互方式。简单事实问题直接回答并给来源；复杂调查给出先行结论、可读 Markdown 报告、证据链接、判断和有界的不确定性。回答结构适应任务，不强制四段模板。保存完整答复；现有工件 owner 支持时提供可独立打开的报告引用。仅以受控安全子集渲染模型 Markdown，不把答复中的 HTML 当可执行内容。渠道长度限制可以调整密度，不能无声删掉结论或证据入口。只有附件不能结清答复义务。
+
+把宿主真实事件投影成紧凑的当前阶段和可展开历史：已接受、排队、开始、工具/公开进度、等待、中断、失败、完成。最终答复优先；完成的日常过程收起，拒绝、无结果、接收方失联保持可见。分别保留来源消息、已准入 Turn、当前续接 owner、事件游标和最终结果身份。重连及重放不能启动第二次模型 Turn、重复事件或丢失最终结果；adapter 未发出的工具活动不能臆造。
+
+停止和修正绑定当前 session 与 Turn，旧控件不能影响后来的 Turn。停止读回区分真实中断、已经结束、不支持或拒绝。忙时修正要么作为本轮原生 steering 接收，要么带可恢复入口回执明确排入后续回合；完成竞态与丢失 ACK 不能使它无声消失。停止对话 Turn 不隐式影响被委派 worker 的 Todo/lease 或待回传义务。前端与飞书以各自展示密度验收同一身份、中断、重放及受众隔离用例。此共用合同复用 Chat/session、工件和展示 owner，不新增第二套对话存储或调度器。
+
+**以注意力为中心回传。** 原对话区分用户请求的成果、日常进展、需要主人决定的事项：成果正常返回，未变化的进展合并进摘要，重要决定给出具体对象、建议、证据和不处理的影响。保留深入证据及负责人对话的直接入口；在负责人处形成的纠偏，通过同一请求关系将相关决定/工作变化带回管家，不复制整段私人对话。来源覆盖和未完成工作保持可见；空目录或已保存但投递失败的答案都不算成功交付。
+
+创建与首次发送同样属于共用界面：切换页面或刷新后保留消息及 pending/failed 状态，提供安全重试/读回，区分 Goal 已创建、Agent 已接入、工作已开始。乐观清空输入框不等于请求已接收。[Golden-query 集](../../product/use-cases/steward/golden-queries.md)在打包前端及每个对外承诺的渠道检查这些入口和完整对话；中间过程展示不为报告特化。
+
+Botmux 是交互参考：[实时卡片](https://github.com/deepcoldy/botmux/blob/982e2c9f16e4f45ae2581967bc1a35a286e7bfa2/docs-site/docs/zh/cards.md)优先保留最终答复、折叠真实过程；[会话模型](https://github.com/deepcoldy/botmux/blob/982e2c9f16e4f45ae2581967bc1a35a286e7bfa2/docs-site/docs/zh/session-model.md)区分对话权与操作权；[Codex 纠偏研究](https://github.com/deepcoldy/botmux/blob/982e2c9f16e4f45ae2581967bc1a35a286e7bfa2/docs/design/2026-05-28-codex-type-ahead-steer-design.md)记录忙时消息会合并或分开回复。停止能力因后端而异。这些公开来源指导竞态和展示验收，不能替代 LoopX adapter 的真实资格，也不要求把 Botmux 装到已有飞书 token 上。
 
 ## 9. 覆盖长程工作的完整生命周期
 
@@ -814,6 +828,8 @@ Attention cost 与 outcome quality 必须同时度量：
 - Agent throughput、acceptance quality 与 safety outcomes；
 - model-advice override、hallucination、over-escalation 与 dangerous suppression rate。
 
+[Golden-query evaluation](../../product/use-cases/steward/golden-queries.md)用成对基线/候选任务及逐入口结果落实这些指标。计量可避免的找人、补背景、重复、催办、搬运；必要授权、主动改目标和自愿学习分开报告。保留失败/放弃样本及未知成本/覆盖，不能靠沉默、短回答或少消息刷高分。真实案例在取得独立证据前均未验收。
+
 减少点击但降低 accepted outcome quality 是回归，不是成功。
 
 ## 15. Failure 与 Fallback Rules
@@ -853,7 +869,7 @@ Attention cost 与 outcome quality 必须同时度量：
 
 ## 18. RFC 验收条件
 
-当 Maintainers 对以下内容达成一致时，本 RFC 才可离开 Draft：
+RFC 合入即接受设计依据。实现资格仍覆盖以下内容：
 
 1. projection-only authority boundary；
 2. 封闭的 interaction modes 与优先级；

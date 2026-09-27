@@ -103,6 +103,7 @@ def _confirmed_payload(payload, request):
         "provider_revision": witness["provider_revision"],
         "observed_provider_revision": payload["provider_revision"],
         "status": "delivered" if witness["changed"] else "current",
+        "next_action": "finish",
     }}
 
 

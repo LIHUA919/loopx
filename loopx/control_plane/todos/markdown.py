@@ -5,6 +5,20 @@ from typing import Any
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
 
+def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
+    """Render the typed rejection's guidance without deciding lease eligibility."""
+    recovery = payload.get("recovery")
+    if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
+        return []
+    lines = [f"- handoff_mode: `{payload['handoff_mode']}`", f"- recovery: {recovery['reason']}"]
+    for step in ("inspect", "acquire", "retry", "release"):
+        instruction = recovery.get(step)
+        if isinstance(instruction, dict) and instruction.get("command"):
+            lines.append(f"- {step}: `{instruction['command']}`")
+    lines.append("- Use `--format json` for the recovery arguments and current-version requirements.")
+    return lines
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("command") == "project-markdown":
         return "\n".join(
@@ -119,18 +133,6 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"- returned_todo_count: `{payload.get('returned_todo_count')}`"
             )
-        state_event_projection = payload.get("state_event_projection")
-        if isinstance(state_event_projection, dict):
-            lines.extend(
-                [
-                    f"- event_log: `{state_event_projection.get('event_log')}`",
-                    (
-                        "- source_event_count: `"
-                        f"{state_event_projection.get('source_event_count')}`"
-                    ),
-                    f"- last_event_id: `{state_event_projection.get('last_event_id')}`",
-                ]
-            )
         for key, heading in (
             ("user_todos", "User Todo"),
             ("agent_todos", "Agent Todo"),
@@ -231,6 +233,7 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        lines.extend(_render_lease_recovery(payload))
         if payload.get("operator_action"):
             action = payload["operator_action"]
             lines.append(f"- error_code: `{payload.get('error_code')}`")

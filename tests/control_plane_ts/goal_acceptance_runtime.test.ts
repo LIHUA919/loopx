@@ -11,6 +11,7 @@ import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_au
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {acceptanceWorkGuard, goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
   projectGoalAcceptanceWorkGuards} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
@@ -44,7 +45,7 @@ const acquire = {goal_id: "goal-a", todo_id: "todo_work", owner: "agent-a", idem
   expected_version: null, ttl_seconds: 60, write_scopes: [], registered_agents: ["agent-a"], now};
 const terminal: CoordinationTodoTerminalLifecycleInput = {goal_id: "goal-a", todo_id: "todo_work", expected_role: "agent",
   command: "complete", actor_agent_id: "agent-a", registered_agents: ["agent-a"], lifecycle_grants: [],
-  authority_reason: null, decision_outcome: null, operation_id: "complete", lease_idempotency_key: null,
+  authority_reason: null, decision_outcome: null, operation_identity: {kind: "explicit" as const, operation_id: "complete"}, lease_idempotency_key: null,
   lease_expected_version: null, allow_user_gate_auto_acquire: false, requested_no_followup: true,
   requested_completion_turn_key: null, requested_completion_identity_source: null, linked_successor_todo_ids: [],
   successor_intents: [], note: null, evidence: null, reason: null, clear_claim: false,
@@ -86,6 +87,26 @@ async function seeded(t: TestContext, provider: string, state: "bound" | "unboun
 }
 
 for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["postgresql"] : [])]) {
+  test(`${provider}: scoped probe permits an independent claim/lease but preserves ordinary completion validation`, async t => {
+    const {store, head} = await seeded(t, provider, "unbound");
+    const declaration = {validation_command: null, validation_command_argv: ["true"],
+      validation_label: "ordinary-check", validation_timeout_seconds: 5};
+    const records = [todo({completion_validation_required: true,
+      completion_validation_sha256: canonicalAuthoritySha256(declaration)}), todo({todo_id: "todo_probe"})];
+    await replace(store, projection(records, head.goal_acceptance as JsonObject), "add-probe");
+    const basis = await loaded(store);
+    const doc = {...(head.goal_acceptance as JsonObject).document as JsonObject,
+      scope: {kind: "selected_work", todo_ids: ["todo_probe"]}};
+    assert.equal((await configureGoalAcceptance(store, {goal_id: "goal-a", operation_id: "scope-correction",
+      actor_agent_id: null, expected_provider_revision: basis.provider_revision, document: doc})).status, "applied");
+    assert.equal((await executeCoordinationTodoClaim(store, claim)).status, "applied");
+    const plan = await executeCoordinationTodoTerminalLifecycle(store, {...terminal, validation_declaration: declaration});
+    assert.equal(plan.status, "execute_validation");
+    assert.equal((plan.validation_effect as JsonObject).validation_label, "ordinary-check");
+    assert.deepEqual(plan.goal_acceptance_validation_effects ?? [], []);
+    assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
+    assert.equal(acceptanceWorkGuard((await loaded(store)).head, "goal-a", "todo_probe")?.allowed, false);
+  });
   test(`${provider}: absent acceptance preserves ordinary completion, receipts, and unrelated fields`, async t => {
     const {store, head} = await seeded(t, provider, "off");
     const result = await executeCoordinationTodoTerminalLifecycle(store, terminal);
@@ -123,6 +144,25 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).reason_code, "goal_acceptance_stale");
   });
 
+  test(`${provider}: a real validator revision leaves the bound Todo claimable`, async t => {
+    const previous = {validation_command: null, validation_command_argv: ["node", "old-check.mjs"],
+      validation_label: "focused check", validation_timeout_seconds: 10};
+    const replacement = {...previous, validation_command_argv: ["node", "new-check.mjs"]};
+    const {store} = await seeded(t, provider, "bound", {completion_validation_required: true,
+      completion_validation_sha256: canonicalAuthoritySha256(previous),
+      completion_validation_revision: 0, completion_validation_revision_history: []});
+    const before = await loaded(store);
+    const changed = await executeCoordinationTodoUpdate(store, {goal_id: "goal-a", todo_id: "todo_work",
+      expected_role: "agent", actor_agent_id: "agent-a", registered_agents: ["agent-a"],
+      operation_id: "revise-validator", patch: {}, clear_fields: [], dry_run: false, now,
+      expected_provider_revision: before.provider_revision,
+      completion_validation_revision: {schema_version: "loopx_todo_completion_validation_revision_v0",
+        expected_declaration_sha256: canonicalAuthoritySha256(previous), declaration: replacement}});
+    assert.equal(changed.status, "applied");
+    assert.equal(acceptanceWorkGuard((await loaded(store)).head, "goal-a", "todo_work")?.state, "ready");
+    assert.equal((await executeCoordinationTodoClaim(store, claim)).status, "applied");
+  });
+
   test(`${provider}: acquisition replay checks current acceptance after current lease proof`, async t => {
     const {store} = await seeded(t, provider, "bound");
     assert.equal((await executeCanonicalTaskLeaseAcquire(store, acquire)).status, "applied");
@@ -150,6 +190,19 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
       assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
         goal_acceptance_validation_receipts: receipts})).reason_code, "goal_acceptance_validation_rejected");
     }
+    const dirty = await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
+      goal_acceptance_validation_receipts: [{criterion_id: "criterion-a", receipt: {
+        ...runnerReceipt("criterion-a", false), exit_code: null, status: "workspace_dirty",
+        summary: "private path /private/sensitive/worktree must never be projected",
+      }}]});
+    assert.equal(dirty.reason_code, "goal_acceptance_validation_rejected");
+    assert.deepEqual(dirty.goal_acceptance_validation_failure, {
+      schema_version: "goal_acceptance_validation_failure_v0", criterion_id: "criterion-a",
+      validation_status: "workspace_dirty", exit_code: null,
+      next_action: "Preserve unrelated Git-visible files in ignored private storage or outside the worktree, then retry completion from that clean worktree with the same Turn identity.",
+    });
+    assert.match(String(dirty.reason), /workspace_dirty.*clean worktree/);
+    assert.doesNotMatch(JSON.stringify(dirty), /private\/sensitive|validation_argv/);
     const good = {...attempt, goal_acceptance_validation_receipts: [{criterion_id: "criterion-a", receipt: runnerReceipt()}]};
     for (const field of ["provider_revision", "contract_digest", "todo_semantic_digest", "operation_id"]) {
       assert.equal((await executeCoordinationTodoTerminalLifecycle(store, {...good,
@@ -165,6 +218,47 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     assert.match(JSON.stringify(retained), /goal_acceptance_completion/);
     assert.doesNotMatch(JSON.stringify(retained), /validation_argv/);
     assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).status, "replayed");
+  });
+
+  test(`${provider}: accepted result binds to the same Todo transaction and producer`, async t => {
+    const descriptor = {provider: "local_runtime_v0", sha256: "a".repeat(64),
+      size_bytes: 5, content_type: "text/plain"};
+    const withoutAcceptance = await seeded(t, provider, "off", {claimed_by: "agent-a"});
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(withoutAcceptance.store, {...terminal,
+      completion_result: descriptor})).reason_code, "completion_result_rejected");
+    assert.equal(((await loaded(withoutAcceptance.store)).head.todos as JsonObject[])[0]!.done, false);
+    const unclaimed = await seeded(t, provider, "bound");
+    const unclaimedPlan = await executeCoordinationTodoTerminalLifecycle(unclaimed.store, {...terminal,
+      completion_result: descriptor});
+    assert.equal(unclaimedPlan.status, "execute_validation");
+    const receipts = [{criterion_id: "criterion-a", receipt: runnerReceipt()}];
+    const unclaimedAttempt = await executeCoordinationTodoTerminalLifecycle(unclaimed.store, {...terminal,
+      completion_result: descriptor,
+      goal_acceptance_source_binding: unclaimedPlan.goal_acceptance_source_binding as JsonObject,
+      goal_acceptance_validation_receipts: receipts});
+    assert.equal(unclaimedAttempt.reason_code, "completion_result_rejected");
+    assert.equal(((await loaded(unclaimed.store)).head.todos as JsonObject[])[0]!.done, false);
+
+    const {store} = await seeded(t, provider, "bound", {claimed_by: "agent-a"});
+    const plan = await executeCoordinationTodoTerminalLifecycle(store, {...terminal, completion_result: descriptor});
+    assert.equal(plan.status, "execute_validation");
+    const attempt = {...terminal, completion_result: descriptor,
+      goal_acceptance_source_binding: plan.goal_acceptance_source_binding as JsonObject,
+      goal_acceptance_validation_receipts: receipts};
+    const malformed = await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
+      completion_result: {...descriptor, sha256: "not-a-digest"}});
+    assert.equal(malformed.reason_code, "completion_result_rejected");
+    const committed = await executeCoordinationTodoTerminalLifecycle(store, attempt);
+    assert.equal(committed.status, "applied");
+    const stored = ((await loaded(store)).head.todos as JsonObject[])[0]!.completion_result as JsonObject;
+    assert.equal(stored.sha256, descriptor.sha256);
+    assert.equal(stored.producer_agent_id, "agent-a");
+    assert.equal(stored.todo_id, "todo_work");
+    assert.equal(stored.acceptance_contract_digest, (await loaded(store)).head.goal_acceptance?.digest);
+    assert.equal(acceptanceWorkGuard((await loaded(store)).head, "goal-a", "todo_work")?.state, "ready");
+    assert.equal((await executeCoordinationTodoTerminalLifecycle(store, attempt)).status, "replayed");
+    assert.notEqual((await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
+      completion_result: {...descriptor, sha256: "b".repeat(64)}})).status, "replayed");
   });
 
   test(`${provider}: intervening head changes require fresh validation, not an old success`, async t => {

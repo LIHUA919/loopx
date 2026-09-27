@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -29,14 +29,28 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MINIMUM_NODE_VERSION = (22, 18, 0)
+MINIMUM_NODE_VERSION = (22, 22, 3)
 MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
+LOCAL_SNAPSHOT_METHODS = frozenset({
+    "goal.checkpoint_read_context.source",
+    "goal.checkpoint_read_context.evaluate",
+    "goal.checkpoint_read_context.commit",
+    "goal.checkpoint_read_context.inspect_replay",
+})
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
+# Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
+# another 5 seconds for the provider lock. Keep the client connected through
+# that declared critical section and a bounded readback; a shorter RPC budget
+# turns an in-flight write into an avoidable ambiguous response.
+CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
+CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _NODE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
@@ -195,6 +209,18 @@ class EffectRuntimeStartupError(RuntimeError):
     def __init__(self, message: str, *, diagnostic_code: str) -> None:
         super().__init__(message)
         self.diagnostic_code = diagnostic_code
+
+
+class EffectRuntimeResponseAmbiguous(EffectRuntimeStartupError):
+    """The request may have executed even though its response was lost."""
+
+    def __init__(self, method: str, *, timeout: float) -> None:
+        super().__init__(
+            f"TypeScript Effect runtime returned no verifiable response for {method} "
+            f"(request budget {timeout:g}s); the operation may have committed. Read its exact "
+            "durable receipt before any retry",
+            diagnostic_code="runtime_response_ambiguous",
+        )
 
 
 def _control_plane_root() -> Path:
@@ -359,6 +385,25 @@ def _pid_is_alive(value: object) -> bool:
     return process_is_alive(value)
 
 
+def _reap_exited_runtime_child(info: Mapping[str, Any] | None) -> None:
+    """Let a dead directly spawned child fail the next non-signaling probe.
+
+    A stopped child can remain a zombie until its Python parent reaps it;
+    ``kill(pid, 0)`` still reports that zombie as present. This helper does
+    nothing for a live child or a runtime owned by another process.
+    """
+
+    if os.name == "nt" or not isinstance(info, Mapping):
+        return
+    pid = info.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
+
+
 def _start_lock_holder_pid(path: Path) -> int | None:
     try:
         value = int(path.read_text(encoding="utf-8").strip())
@@ -480,7 +525,12 @@ def restart_effect_runtime(*, timeout: float = 5.0) -> dict[str, Any]:
             params={},
             timeout=timeout,
         )
-    except (EffectRuntimeRejected, EffectRuntimeRemoteError, OSError):
+    except (
+        EffectRuntimeRejected,
+        EffectRuntimeRemoteError,
+        EffectRuntimeResponseAmbiguous,
+        OSError,
+    ):
         # A runtime that is already closing must still be reported as pending
         # rather than as a failed restart.
         pass
@@ -511,6 +561,7 @@ def _request_with_info(
     method: str,
     params: Mapping[str, Any],
     timeout: float,
+    large_local_snapshot: bool = False,
 ) -> dict[str, Any]:
     request = {
         "schema_version": EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
@@ -519,44 +570,116 @@ def _request_with_info(
         "method": method,
         "params": dict(params),
     }
-    encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
-    if len(encoded) > MAX_REQUEST_BYTES:
-        raise EffectRuntimeRejected(
-            "TypeScript Effect runtime request is oversized",
-            diagnostic_code="request_too_large",
-        )
-    chunks: list[bytes] = []
-    size = 0
-    with socket.create_connection(
-        (str(info["host"]), int(info["port"])), timeout=timeout
-    ) as connection:
-        connection.settimeout(timeout)
-        connection.sendall(encoded)
-        while True:
-            chunk = connection.recv(64 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            size += len(chunk)
-            if size > MAX_RESPONSE_BYTES:
-                raise RuntimeError("TypeScript Effect runtime response is oversized")
-            if b"\n" in chunk:
-                break
-    try:
-        response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
-    except (json.JSONDecodeError, IndexError):
-        raise RuntimeError(
-            "TypeScript Effect runtime returned malformed JSON"
-        ) from None
+    with ExitStack() as stack:
+        response_sink: Path | None = None
+        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        if large_local_snapshot:
+            if method not in LOCAL_SNAPSHOT_METHODS:
+                raise EffectRuntimeRejected(
+                    "local snapshot transport is unavailable for this method",
+                    diagnostic_code="invalid_request",
+                )
+            directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-")))
+            response_sink = directory / "response.json"
+            descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+            request["response_sink"] = str(response_sink)
+            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+            if len(encoded) > MAX_REQUEST_BYTES:
+                params_bytes = json.dumps(dict(params), separators=(",", ":")).encode()
+                if len(params_bytes) > MAX_LOCAL_SNAPSHOT_BYTES:
+                    raise EffectRuntimeRejected(
+                        "TypeScript Effect runtime local snapshot is oversized",
+                        diagnostic_code="request_too_large",
+                    )
+                params_path = directory / "params.json"
+                descriptor = os.open(params_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(descriptor, "wb") as file:
+                    file.write(params_bytes)
+                request.pop("params")
+                request["params_ref"] = {
+                    "schema_version": "loopx_effect_runtime_snapshot_v0",
+                    "path": str(params_path), "byte_count": len(params_bytes),
+                    "sha256": hashlib.sha256(params_bytes).hexdigest(),
+                }
+                encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        if len(encoded) > MAX_REQUEST_BYTES:
+            raise EffectRuntimeRejected(
+                "TypeScript Effect runtime request is oversized",
+                diagnostic_code="request_too_large",
+            )
+        chunks: list[bytes] = []
+        size = 0
+        with socket.create_connection(
+            (str(info["host"]), int(info["port"])), timeout=timeout
+        ) as connection:
+            try:
+                connection.settimeout(timeout)
+                # sendall may have delivered a prefix before it raises. From this
+                # point onward the caller cannot prove that no effect ran.
+                connection.sendall(encoded)
+                while True:
+                    chunk = connection.recv(64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > MAX_RESPONSE_BYTES:
+                        raise RuntimeError("TypeScript Effect runtime response is oversized")
+                    if b"\n" in chunk:
+                        break
+            except (OSError, RuntimeError) as exc:
+                raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
+        try:
+            response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
+        except (json.JSONDecodeError, IndexError):
+            raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from None
+        if isinstance(response, dict) and "result_ref" in response:
+            response = _read_local_snapshot_response(
+                response, response_sink, method=method, request_id=request_id, timeout=timeout,
+            )
     if (
         not isinstance(response, dict)
         or response.get("schema_version") != EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION
         or response.get("request_id") != request_id
     ):
-        raise RuntimeError("TypeScript Effect runtime response shape mismatch")
+        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout)
     if response.get("ok") is not True:
         raise _remote_runtime_error(response.get("error"))
     return response
+
+
+def _read_local_snapshot_response(
+    envelope: dict[str, Any], sink: Path | None, *, method: str, request_id: str, timeout: float,
+) -> dict[str, Any]:
+    """Read an exact private response; unverifiable post-dispatch bytes are ambiguous."""
+    try:
+        ref = envelope["result_ref"]
+        if (sink is None or envelope.get("schema_version") != EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION
+                or envelope.get("request_id") != request_id or envelope.get("ok") is not True
+                or not isinstance(ref, dict)):
+            raise ValueError("invalid local snapshot envelope")
+        size, digest = ref.get("byte_count"), ref.get("sha256")
+        if (not isinstance(size, int) or isinstance(size, bool) or size <= 0
+                or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
+                or re.fullmatch(r"[a-f0-9]{64}", digest) is None):
+            raise ValueError("invalid local snapshot reference")
+        descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (not os.path.isfile(sink) or metadata.st_size != size
+                    or (hasattr(os, "getuid") and
+                        (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077))):
+                raise ValueError("invalid local snapshot file")
+            data = file.read(MAX_LOCAL_SNAPSHOT_BYTES + 1)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("local snapshot digest mismatch")
+        result = json.loads(data)
+        if not isinstance(result, dict):
+            raise ValueError("invalid local snapshot response")
+        return result
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
 
 
 def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
@@ -622,7 +745,9 @@ def _startup_diagnostic(raw: bytes) -> tuple[str, str] | None:
 
     if not raw:
         return None
-    for line in reversed(raw.decode("utf-8", errors="replace").splitlines()):
+    # Not splitlines(): it also breaks on U+0085/U+2028/U+2029, which a rejected
+    # setting can echo back unescaped inside the envelope and tear the record.
+    for line in reversed(raw.decode("utf-8", errors="replace").split("\n")):
         candidate = line.strip()
         if not candidate.startswith("{"):
             continue
@@ -763,8 +888,9 @@ def effect_runtime_request(
     method: str,
     params: Mapping[str, Any],
     *,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
+    large_local_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Call the managed TS runtime, retrying only idempotent typed effects."""
 
@@ -773,6 +899,7 @@ def effect_runtime_request(
     request_id = str(uuid.uuid4())
     last_error: OSError | RuntimeError | None = None
     for attempt in range(2 if retry_safe else 1):
+        info: dict[str, Any] | None = None
         try:
             info = _read_info(info_path, fingerprint=fingerprint)
             if info is None:
@@ -783,19 +910,34 @@ def effect_runtime_request(
                 method=method,
                 params=params,
                 timeout=timeout,
+                large_local_snapshot=large_local_snapshot,
             )
-        except EffectRuntimeRemoteError:
+        except (EffectRuntimeRemoteError, EffectRuntimeResponseAmbiguous):
             raise
         except EffectRuntimeStartupError as exc:
             last_error = exc
             if attempt == 0 and retry_safe:
-                info_path.unlink(missing_ok=True)
                 continue
             raise
+        except TimeoutError as exc:
+            # A connect timeout is not evidence that an existing runtime died.
+            # In particular it must not replace a live server which may still
+            # be completing an earlier mutation under the per-Goal lock.
+            raise EffectRuntimeStartupError(
+                f"TypeScript Effect runtime did not connect for {method} "
+                f"within {timeout:g}s",
+                diagnostic_code="runtime_request_timeout",
+            ) from exc
         except (OSError, RuntimeError) as exc:
             last_error = exc
             if attempt == 0 and retry_safe:
-                info_path.unlink(missing_ok=True)
+                # Only pre-send connection failures reach this branch. Re-read
+                # the locator on retry: reap our own exited child first so a
+                # zombie is rejected by _read_info, while a live server may
+                # simply be draining.
+                # Even a token check followed by unlink would race with a
+                # replacement server publishing its own locator.
+                _reap_exited_runtime_child(info)
                 continue
             break
     if isinstance(last_error, TimeoutError):
@@ -816,14 +958,16 @@ def effect_runtime_result(
     method: str,
     params: Mapping[str, Any],
     *,
-    timeout: float = 5.0,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     retry_safe: bool = True,
+    large_local_snapshot: bool = False,
 ) -> Any:
     return effect_runtime_request(
         method,
         params,
         timeout=timeout,
         retry_safe=retry_safe,
+        large_local_snapshot=large_local_snapshot,
     ).get("result")
 
 

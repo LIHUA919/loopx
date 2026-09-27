@@ -42,6 +42,7 @@ AppendCliRolloutEvent = Callable[..., dict[str, object]]
 
 PROJECT_LIFECYCLE_COMMANDS = {
     "refresh-state",
+    "checkpoint-context",
     "read-only-map",
     "reward",
     "operator-gate",

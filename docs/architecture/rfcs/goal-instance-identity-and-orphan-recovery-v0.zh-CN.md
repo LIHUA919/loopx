@@ -1,6 +1,7 @@
 # Goal 实例身份与孤儿状态恢复（v0）
 
-- **RFC 状态：** Draft
+- **RFC 状态：** 已接受
+- **替代 / 关闭：** 无
 - **交付成熟度：** Identity/recovery 提案；codec 前置已由 #4917 交付
 - **作者／Owner：** LoopX contributors
 - **创建日期：** 2026-09-23
@@ -661,9 +662,9 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
 1. **受支持 package/profile matrix：** release/host owner 在 M2 activation 前固定
    object-only、codec-only、enforcement 版本及排除证据。v2 名称是提案，support
    必须包含语义。
-2. **精确 commit guard：** Goal lifecycle/TS transaction owner 在 M2 前选定并证明
-   本地 retirement/commit lock 与 external-effect drain contract；digest recheck
-   不能解除 hold。
+2. **精确 commit guard：** M2 source-session 候选在 project-registry transaction
+   外使用 alias-scoped cross-runtime lock。M3 仍须在 activation 前证明
+   external-effect drain contract；digest recheck 不能解除该 hold。
 3. **Canonical destination/provider import：** 复用当前 path owner，跟随 #4915
    但不预设已合并。Provider-state adoption 要有独立审阅的 import contract；首个
    file-only 切片拒绝它。
@@ -686,6 +687,29 @@ service adoption、D1–D3 provider promotion 保留各自验收。不授权付�
 - **已知缺口：** 尚无 instance enforcement、activation 或 resolution fixture。
 - **对规范设计的影响：** 对齐 roadmap/TS/shared authority；分开 codec compatibility
   与 enforcement，明确 commit fence、legacy cleanup。
+
+### 2026-09-23：M2 source-session 实现候选
+
+- **基线：** `cbbdd837f65c8ba28161115cc4ce39093bfa2951`
+- **候选实现：** 仅支持新项目的 `source_session_v1` profile、精确 bind/unbind
+  receipt、带 journal 的 A-to-B recreation，以及只读精确 resolution。
+- **证据：** 真实 CLI 测试覆盖 ABA 顺序、publication 前重试、publication 后前向
+  修复、replacement 原字节回滚、operation ID 冲突、容量拒绝和满容量 replay。
+- **剩余 hold：** 所有结果均为 `execution_authority: false`。M3 必须先完成其余
+  effect owner 资格化，才能开放既有项目 activation 或 global routing。
+
+### 2026-09-27：第一方 Host runtime 部分 enforcement
+
+- **基线：** `fd96e5e2574272262b9ea604a96581a0d20e94d1`
+- **已交付：** 为 source profile 的 Turn journal、Codex descriptor、DSH session
+  identity 和 Kunlun native runtime journal 增加 TypeScript-owned exact GoalRef
+  决策与 alias-scoped lifecycle guard。
+- **证据：** 负向测试覆盖同名 Goal B 发布后 Goal A 结果迟到、缓存 Turn result
+  恢复、legacy Host state、跨实例 session selection，以及 result/recreation
+  commit 串行化。非 source plan、路径、schema 与持久化字节保持 legacy 行为。
+- **剩余 hold：** 这只是 M3 的部分 enforcement。accepted-before-retirement 的
+  downstream drain、不支持的旧/常驻二进制和其余 inventory owner 尚未
+  qualified；`execution_authority: false` 与 M3 activation hold 保持不变。
 
 ## 附录 B：决策日志
 

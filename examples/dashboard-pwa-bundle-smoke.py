@@ -75,10 +75,9 @@ def assert_bounded_chat_assets() -> None:
 
 
 def main() -> int:
-    # The full-public suite is Python-only and starts from a clean checkout, so
-    # the ignored Vite output is not guaranteed to exist. Always validate the
-    # tracked build inputs; the dedicated frontstage build job proves that Vite
-    # can produce the root bundle. When a local build is present, validate it too.
+    # The full-public suite builds Chat before running this smoke. The separate
+    # frontstage job builds the root site; validate that optional local output
+    # when present, and always require the delivered Chat bundle.
     assert_pwa_contract(
         "root dashboard source",
         index=ROOT_SOURCE / "index.html",

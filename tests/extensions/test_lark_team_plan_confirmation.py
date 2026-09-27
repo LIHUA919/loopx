@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from loopx.chat_action_store import ChatActionStore
+from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.extensions.lark.team_plan_confirmation import (
     build_team_plan_review_card,
     deliver_team_plan_review_cards,
@@ -71,6 +71,9 @@ def _record_delivery(
     audience_id: str,
     message_id: str,
     chat_id: str,
+    app_id: str = "cli_public_fixture",
+    cli_bin: str = "fake-lark",
+    sender_profile: str = "fixture",
 ) -> dict[str, Any]:
     card = build_team_plan_review_card(proposal, audience_id=audience_id)
     store.record_review_card_delivery(
@@ -80,9 +83,9 @@ def _record_delivery(
             "provider": "lark",
             "message_id": message_id,
             "chat_id": chat_id,
-            "app_id": "cli_public_fixture",
-            "cli_bin": "fake-lark",
-            "sender_profile": "fixture",
+            "app_id": app_id,
+            "cli_bin": cli_bin,
+            "sender_profile": sender_profile,
             "binding_digest": "sha256:" + "b" * 64,
             "card_digest": _digest(card),
             "submitted_card": card,
@@ -193,8 +196,6 @@ def test_two_lark_audiences_apply_one_canonical_team_plan(
         action_service=service,
         action_store_root=store.root,
         profile_app_id="cli_public_fixture",
-        cli_bin="fake-lark",
-        profile="fixture",
     )
     assert first["ok"] is True
     assert first["proposal_status"] == "applied"
@@ -212,8 +213,6 @@ def test_two_lark_audiences_apply_one_canonical_team_plan(
         action_service=service,
         action_store_root=store.root,
         profile_app_id="cli_public_fixture",
-        cli_bin="fake-lark",
-        profile="fixture",
     )
     assert replay["ok"] is True
     assert service.calls == 1
@@ -228,6 +227,192 @@ def test_two_lark_audiences_apply_one_canonical_team_plan(
         delivery.get("result", {}).get("card_digest")
         for delivery in durable["review_card"]["deliveries"].values()
     )
+
+
+def test_standby_app_alias_applies_a_card_another_alias_delivered(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """One App-scoped consumer must confirm a card its peer alias delivered."""
+
+    import loopx.extensions.lark.team_plan_confirmation as confirmation
+
+    store = ChatActionStore(tmp_path / "actions")
+    proposal = _proposal(store)
+    store.prepare_review_card_delivery(
+        proposal["proposal_id"],
+        audience_ids=["manager", "goal:goal-alpha"],
+        authorized_principal="lark:ou_owner",
+    )
+    # Alias ``bravo`` delivered both audiences, but one App-scoped consumer
+    # holds the lease and therefore receives bravo's callbacks while listening
+    # under a different local alias.
+    manager_card = _record_delivery(
+        store,
+        proposal,
+        audience_id="manager",
+        message_id="om_manager",
+        chat_id="oc_manager",
+        sender_profile="alias-bravo",
+        cli_bin="lark-cli-bravo",
+    )
+    goal_card = _record_delivery(
+        store,
+        proposal,
+        audience_id="goal:goal-alpha",
+        message_id="om_goal",
+        chat_id="oc_goal",
+        sender_profile="alias-bravo",
+        cli_bin="lark-cli-bravo",
+    )
+
+    hydrated: list[tuple[str, str]] = []
+
+    def fake_read_callback_card_content(**kwargs: Any) -> object:
+        hydrated.append((str(kwargs["profile"]), str(kwargs["cli_bin"])))
+        return manager_card
+
+    monkeypatch.setattr(
+        confirmation, "_read_callback_card_content", fake_read_callback_card_content
+    )
+    monkeypatch.setattr(
+        confirmation, "_operator_membership_verified", lambda **_kwargs: True
+    )
+    monkeypatch.setattr(
+        confirmation,
+        "_update_callback_card",
+        lambda **_kwargs: {
+            "external_write_performed": True,
+            "readback_verified": True,
+        },
+    )
+    monkeypatch.setattr(
+        confirmation,
+        "_patch_operation_result_card",
+        lambda **_kwargs: {
+            "external_write_performed": True,
+            "readback_verified": True,
+        },
+    )
+
+    class ActionService:
+        calls = 0
+
+        def apply(self, proposal_id: str) -> dict[str, Any]:
+            self.calls += 1
+            applied = store.apply(
+                proposal_id,
+                current_state_fingerprint="state-alpha",
+                receipt={
+                    "receipt_id": "receipt-alpha",
+                    "outcome": "team_plan_applied",
+                    "projection_verified": True,
+                },
+            )
+            return {"proposal": applied, "turn": None}
+
+    service = ActionService()
+    manager_event = _event(
+        audience_id="manager",
+        message_id="om_manager",
+        chat_id="oc_manager",
+        card=manager_card,
+    )
+    manager_event["action_value"]["proposal_id"] = proposal["proposal_id"]
+    # Force the handler to hydrate the card through the delivering alias.
+    manager_event["card_content"] = ""
+    first = handle_team_plan_review_callback(
+        manager_event,
+        action_service=service,
+        action_store_root=store.root,
+        profile_app_id="cli_public_fixture",
+    )
+    assert first["ok"] is True
+    assert first["proposal_status"] == "applied"
+    assert service.calls == 1
+    assert hydrated == [("alias-bravo", "lark-cli-bravo")]
+
+    goal_event = _event(
+        audience_id="goal:goal-alpha",
+        message_id="om_goal",
+        chat_id="oc_goal",
+        card=goal_card,
+    )
+    goal_event["action_value"]["proposal_id"] = proposal["proposal_id"]
+    replay = handle_team_plan_review_callback(
+        goal_event,
+        action_service=service,
+        action_store_root=store.root,
+        profile_app_id="cli_public_fixture",
+    )
+    assert replay["ok"] is True
+    assert service.calls == 1
+    durable = store.load(proposal["proposal_id"])
+    assert durable is not None
+    assert durable["review_card"]["confirmation"]["event_id"] == "evt_manager"
+
+
+def test_team_plan_callback_rejects_drifted_delivery_binding(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A callback bound to another App or chat must never be applied."""
+
+    import loopx.extensions.lark.team_plan_confirmation as confirmation
+
+    store = ChatActionStore(tmp_path / "actions")
+    proposal = _proposal(store)
+    store.prepare_review_card_delivery(
+        proposal["proposal_id"],
+        audience_ids=["manager"],
+        authorized_principal="lark:ou_owner",
+    )
+    manager_card = _record_delivery(
+        store,
+        proposal,
+        audience_id="manager",
+        message_id="om_manager",
+        chat_id="oc_manager",
+        sender_profile="alias-bravo",
+        cli_bin="lark-cli-bravo",
+    )
+
+    monkeypatch.setattr(
+        confirmation, "_operator_membership_verified", lambda **_kwargs: True
+    )
+    monkeypatch.setattr(
+        confirmation,
+        "_read_callback_card_content",
+        lambda **_kwargs: manager_card,
+    )
+
+    class ActionService:
+        calls = 0
+
+        def apply(self, proposal_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return {"proposal": store.load(proposal_id), "turn": None}
+
+    service = ActionService()
+
+    def callback(*, app_id: str, chat_id: str) -> Any:
+        event = _event(
+            audience_id="manager",
+            message_id="om_manager",
+            chat_id=chat_id,
+            card=manager_card,
+        )
+        event["action_value"]["proposal_id"] = proposal["proposal_id"]
+        return handle_team_plan_review_callback(
+            event,
+            action_service=service,
+            action_store_root=store.root,
+            profile_app_id=app_id,
+        )
+
+    with pytest.raises(ActionConflictError):
+        callback(app_id="cli_other_app", chat_id="oc_manager")
+    with pytest.raises(ActionConflictError):
+        callback(app_id="cli_public_fixture", chat_id="oc_elsewhere")
+    assert service.calls == 0
 
 
 def test_delivery_projects_one_proposal_to_manager_and_goal_audiences(
@@ -548,8 +733,6 @@ def test_recovery_uses_the_first_durable_decision_not_a_later_click(
         action_service=service,
         action_store_root=store.root,
         profile_app_id="cli_public_fixture",
-        cli_bin="fake-lark",
-        profile="fixture",
     )
 
     assert result["decision"] == "confirm"

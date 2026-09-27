@@ -90,8 +90,12 @@ test("corrupt, cross-goal, or revision-divergent documents fail closed", async (
   const { store } = await fixture(t);
   const applied = await store.commitAuthority(commit(null, "operation-a", 1, 1));
   assert.equal(applied.status, "applied");
+  const otherHandle = new FileAuthorityStore(store.directory, "goal-a");
+  assert.deepEqual(await otherHandle.loadAuthority(), await store.loadAuthority());
   const original = JSON.parse(await readFile(store.path, "utf8"));
 
+  // A same-length replacement must not inherit the verified journal simply
+  // because its path or filesystem size is unchanged.
   await writeFile(store.path, JSON.stringify({ ...original, goal_id: "goal-b" }), "utf8");
   assert.equal((await store.loadAuthority()).status, "failed");
 
@@ -99,12 +103,76 @@ test("corrupt, cross-goal, or revision-divergent documents fail closed", async (
   assert.equal((await store.loadAuthority()).status, "failed");
 
   const changed = structuredClone(original);
-  changed.committed[0].projection.authority_revision = 99;
+  changed.committed[0].state.projection.authority_revision = 99;
   changed.head.authority_revision = 99;
   await writeFile(store.path, JSON.stringify(changed), "utf8");
   const divergent = await store.loadAuthority();
   assert.equal(divergent.status, "failed");
   if (divergent.status === "failed") assert.match(divergent.reason, /revision lineage/);
+});
+
+test("file verification is reused only for exact bytes and store identity", async (t) => {
+  const { root, store } = await fixture(t);
+  const applied = await store.commitAuthority(commit(null, "operation-a", 1, 1));
+  assert.equal(applied.status, "applied");
+  const validBytes = await readFile(store.path, "utf8");
+  // A benign external rewrite forces one full validation; a second handle
+  // reads the same proven bytes without validating the whole journal again.
+  await writeFile(store.path, `${validBytes}\n`, "utf8");
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations += 1;
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const first = new CountingStore(root, "goal-a");
+  const second = new CountingStore(root, "goal-a");
+  assert.equal((await first.loadAuthority()).status, "loaded");
+  assert.equal((await second.loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 1);
+
+  const originalIdentity = await readFile(store.identityPath, "utf8");
+  await writeFile(store.identityPath, `file:${"f".repeat(32)}`, "utf8");
+  assert.equal((await second.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 2);
+  await writeFile(store.identityPath, originalIdentity, "utf8");
+
+  await writeFile(store.path, validBytes.replace('"goal-a"', '"goal-b"'), "utf8");
+  assert.equal((await second.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 3);
+});
+
+test("large file read view reuses verified head and receipts without retaining history", async (t) => {
+  const {root, store} = await fixture(t);
+  assert.equal((await store.commitAuthority(commit(null, "operation-a", 1, 1))).status, "applied");
+  const original = await readFile(store.path, "utf8");
+  await writeFile(store.path, `${original}\n`, "utf8");
+
+  class CompactStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override fullDocumentCacheLimitBytes() { return 1; }
+    protected override decodeStoredDocument(value: unknown, identity: string) {
+      CompactStore.validations += 1;
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const first = new CompactStore(root, "goal-a");
+  const second = new CompactStore(root, "goal-a");
+  const head = await first.loadAuthority();
+  assert.equal(head.status, "loaded");
+  assert.deepEqual(await second.loadAuthority(), head);
+  assert.equal((await second.readReceipt("operation-a")).status, "found");
+  assert.equal(CompactStore.validations, 1);
+  assert.equal((await second.scanCommitted(null, 1)).status, "page");
+  assert.equal(CompactStore.validations, 2, "history scans still verify the complete journal");
+
+  const changed = JSON.parse(original);
+  changed.committed[0].state.projection.authority_revision = 99;
+  changed.head.authority_revision = 99;
+  await writeFile(store.path, JSON.stringify(changed), "utf8");
+  assert.equal((await second.loadAuthority()).status, "failed");
+  assert.equal((await second.readReceipt("operation-a")).status, "failed");
 });
 
 test("store identity is one durable directory lineage and restored bytes are fenced", async (t) => {
@@ -180,4 +248,33 @@ test("ambiguous file commits reconcile only from durable receipt readback", asyn
   const loaded = await store.loadAuthority();
   assert.equal(loaded.status, "loaded");
   if (loaded.status === "loaded") assert.equal(loaded.head.authority_revision, 1);
+});
+
+test("concurrent cold reads share only the same exact-byte proof and recover after failure", async t => {
+  const {root, store} = await fixture(t);
+  assert.equal((await store.commitAuthority(commit(null, "operation-shared", 1, 1))).status, "applied");
+  const valid = await readFile(store.path, "utf8");
+  await writeFile(store.path, valid + "\n");
+  class CountingStore extends FileAuthorityStore {
+    static validations = 0;
+    protected override async decodeStoredDocument(value: unknown, identity: string) {
+      CountingStore.validations++;
+      // Hold the asynchronous proof open while sibling handles enter the read.
+      await new Promise(resolve => setTimeout(resolve, 25));
+      return super.decodeStoredDocument(value, identity);
+    }
+  }
+  const readers = Array.from({length: 6}, () => new CountingStore(root, "goal-a"));
+  const first = await Promise.all(readers.map(s => s.readReceipt("operation-shared")));
+  assert.ok(first.every(r => r.status === "found"));
+  assert.equal(CountingStore.validations, 1);
+  const corrupt = JSON.parse(valid); corrupt.committed[0].provider_revision = "corrupt";
+  await writeFile(store.path, JSON.stringify(corrupt));
+  assert.ok((await Promise.all(readers.map(s => s.loadAuthority()))).every(r => r.status === "failed"));
+  assert.equal(CountingStore.validations, 2);
+  assert.equal((await readers[0]!.loadAuthority()).status, "failed");
+  assert.equal(CountingStore.validations, 3, "a rejected promise must not remain in the in-flight registry");
+  await writeFile(store.path, valid + "\n\n");
+  assert.equal((await readers[0]!.loadAuthority()).status, "loaded");
+  assert.equal(CountingStore.validations, 4);
 });

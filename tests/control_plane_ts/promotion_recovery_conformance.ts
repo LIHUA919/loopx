@@ -1,7 +1,7 @@
 import { LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA } from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -17,7 +17,8 @@ import {
   executeReviewedCoordinationPromotion,
   LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
-import { commitLocalAuthorityShadowEntry } from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
+import {deliverShadowEntry} from "../../loopx/control_plane/coordination/shadow_entry_delivery.ts";
+import {entrySelection} from "./shadow_file_fixture.ts";
 import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { loadLegacyCoordinationWriterFence } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
@@ -56,7 +57,7 @@ export async function qualifiedPromotionSource(root: string, input: JsonObject) 
     { handoff_mode: "hard_lease", todos },
     { writeClass: "todo_update" },
   );
-  const mirrored = await commitLocalAuthorityShadowEntry(entry);
+  const mirrored = await deliverShadowEntry(entrySelection(entry));
   assert.equal(mirrored.outcome, "delivered", JSON.stringify(mirrored));
   await settleFiles(fixture, entry, mirrored);
   const loaded = await store.loadAuthority();
@@ -96,6 +97,18 @@ export function registerPromotionRecoveryConformance(
         goal_id: "goal-a",
         reviewed_plan: envelope,
       };
+      const registryPath = join(root, "registry.json");
+      const originalRegistry = await readFile(registryPath);
+      await writeFile(registryPath, JSON.stringify({goals: []}));
+      const stale = await executeReviewedCoordinationPromotion({
+        ...operation, action: "apply", execute: true,
+        projection: source.request.projection, source_snapshot: source.request.source_snapshot,
+      }, dependencies);
+      assert.equal(stale.reason_code, "source_registry_changed_retry");
+      assert.equal(stale.legacy_writer_fenced, false);
+      assert.equal((await store.loadAuthority()).status, "missing");
+      assert.equal((await loadLegacyCoordinationWriterFence(root, "goal-a")).status, "missing");
+      await writeFile(registryPath, originalRegistry);
       const applied = await executeReviewedCoordinationPromotion(
         {
           ...operation,
@@ -132,6 +145,7 @@ export function registerPromotionRecoveryConformance(
       });
       assert.equal(changed.status, "applied");
       await rm(source.statePath);
+      await rm(registryPath);
       const head = await store.loadAuthority();
       const fence = await loadLegacyCoordinationWriterFence(root, "goal-a");
       for (const execute of [false, true]) {

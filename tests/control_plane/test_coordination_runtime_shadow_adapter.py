@@ -461,7 +461,6 @@ def test_todo_projection_is_complete_stable_and_declares_read_model_contract() -
                 "source_section": "User Todo",
                 "successor_todo_ids": ["todo_b"],
             },
-            {"status": "open"},
         ],
         leases=[
             {

@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from operator import itemgetter
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority import read_canonical_todo_fields_if_promoted
+from ..control_plane.coordination.local_authority import (
+    local_authority_is_promoted,
+    read_canonical_todo_fields_if_promoted,
+)
+from ..control_plane.effect_runtime import effect_runtime_result
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.todos.contract import (
     replan_successor_semantic_binding,
@@ -15,10 +20,12 @@ from ..control_plane.quota.settlement import (
     read_heartbeat_settlement,
     settlement_result_payload,
 )
+from ..control_plane.runtime.time import chronology_key
 from ..control_plane.todos.markdown import render_todo_markdown
 from ..control_plane.todos.provider_projection import (
     project_current_canonical_todos,
 )
+from ..control_plane.todos.completion_result import read_completion_result
 from ..history import load_index, load_registry
 from ..paths import resolve_runtime_root
 from ..registry import registry_goals
@@ -46,6 +53,8 @@ from .todo_argument_validation import (
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_list_options,
+    validate_todo_receipt_options,
+    validate_todo_result_read_options,
     validate_todo_project_markdown_options,
     validate_todo_plan_options,
     validate_todo_supersede_options,
@@ -137,7 +146,7 @@ def _validated_replan_successor_obligation(
         for _, run in sorted(
             enumerate(existing_runs),
             key=lambda item: (
-                str(item[1].get("generated_at") or ""),
+                *chronology_key(item[1].get("generated_at")),
                 item[0],
             ),
             reverse=True,
@@ -181,6 +190,23 @@ def _todo_path_args(args: argparse.Namespace) -> dict[str, Path | None]:
     }
 
 
+def _render_todo_receipt(payload: dict[str, object]) -> str:
+    lines = [
+        "# LoopX Canonical Operation Receipt",
+        "",
+        f"- status: `{payload.get('status')}`",
+        f"- goal_id: `{payload.get('goal_id')}`",
+        f"- operation_id: `{payload.get('operation_id')}`",
+        f"- source_authority: `{payload.get('source_authority')}`",
+        f"- provider_revision: `{payload.get('provider_revision')}`",
+        f"- cursor: `{payload.get('cursor')}`",
+        "- note: Historical readback only; it does not grant a current lease or a retry.",
+    ]
+    if payload.get("error") or payload.get("reason"):
+        lines.append(f"- error: `{payload.get('error') or payload.get('reason')}`")
+    return "\n".join(lines)
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -192,11 +218,13 @@ def handle_todo_command(
     post_writeback_hooks: Sequence[PostWritebackHookRegistration] | None = None,
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int:
-    renderer = (
-        render_task_planning_packet
-        if args.todo_command == "plan"
-        else render_todo_markdown
-    )
+    renderer = render_todo_markdown
+    if args.todo_command == "plan":
+        renderer = render_task_planning_packet
+    elif args.todo_command == "receipt":
+        renderer = _render_todo_receipt
+    elif args.todo_command == "result-read":
+        renderer = itemgetter("text")
     try:
         if args.todo_command is None:
             raise ValueError(
@@ -227,6 +255,30 @@ def handle_todo_command(
                 **_todo_path_args(args),
                 runtime_root_arg=runtime_root_arg,
             )
+        elif args.todo_command == "receipt":
+            validate_todo_receipt_options(args)
+            runtime_root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg)
+            if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=args.goal_id):
+                raise ValueError("todo receipt requires promoted canonical authority; no legacy fallback")
+            result = effect_runtime_result(
+                "coordination.local_authority.operation_receipt",
+                {"schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+                 "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
+                 "goal_id": args.goal_id, "operation_id": args.operation_id},
+                timeout=15.0,
+            )
+            if not isinstance(result, dict):
+                raise RuntimeError("canonical operation receipt returned an invalid result")
+            payload = {"ok": result.get("status") in {"found", "missing"},
+                       "command": "receipt", **result}
+        elif args.todo_command == "result-read":
+            validate_todo_result_read_options(args)
+            registry = load_registry(registry_path)
+            payload = read_completion_result(
+                registry_path=registry_path,
+                runtime_root=resolve_runtime_root(registry, runtime_root_arg),
+                goal_id=args.goal_id, todo_id=args.todo_id,
+            )
         elif args.todo_command == "project-markdown":
             validate_todo_project_markdown_options(args)
             registry = load_registry(registry_path)
@@ -253,6 +305,7 @@ def handle_todo_command(
                 runtime_root_arg=runtime_root_arg,
             )
             payload = add_goal_todo(
+                operation_id=args.operation_id,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
@@ -503,6 +556,7 @@ def handle_todo_command(
                     role=args.role,
                     decision_outcome=args.decision_outcome,
                     evidence=args.evidence,
+                    completion_result_file=Path(args.result_file).expanduser() if args.result_file else None,
                     completion_turn_key=completion_turn_key,
                     completion_identity_source=completion_identity_source,
                     completion_delivery_workspace=completion_delivery_workspace,

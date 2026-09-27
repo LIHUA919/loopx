@@ -92,6 +92,45 @@ the caller must label the conclusion as partial or exact-read the missing
 authority through another path. Fail-open must not masquerade as complete
 context coverage.
 
+## Code Map
+
+A decision runs through the modules in this order. Read only the rows your
+change touches.
+
+| Module | Owns |
+|---|---|
+| `profile.py` | Default-off, goal-scoped profile: which source classes matter, freshness policy, scan mode, weight; activation status |
+| `providers.py` | Registry of replaceable current-authority providers, plus the local-file provider |
+| `sources.py` | Provider-neutral source contracts: specs, items, scans, exact reads, source manifest |
+| `runtime.py` | Thin orchestration from profile to providers to evidence assembly and advisory recall |
+| `assembler.py` | Deterministic authority rebase, advisory recall assembly, `decision_source_coverage_v0` |
+| `freshness.py` | Per-source freshness reports and capture host health projection |
+| `packets.py` | Public-safe evidence, proposal, review and outcome packets |
+| `review_settlement.py` | Owner-gated or quiet settlement of one assembly |
+| `cursor_commit.py` | Validated private cursor commit after settlement |
+| `private_state.py` | Private cursor and pending-settlement file IO |
+| `outcome_feedback.py` | Audited feedback from outcomes into Reward Memory |
+| `capture.py` | Opt-in source-reference capture and `capture-status` |
+| `capture_recovery.py` | Reference-preserving capture diagnosis and recovery |
+| `extension_provider.py` | Advisory context provider delivered by an extension (`decision_context_advisory_provider_v0`) |
+| `architecture.py` | `architecture` readback of the capability contract |
+| `catalog_entry.py` | Capability catalog record |
+| `cli.py` | Every `loopx decision-context` subcommand and its rendering |
+
+To add an observable field:
+
+- **A per-source fact**, such as read time or scan status: produce it in
+  `sources.py` or the provider in `providers.py`, then carry it into coverage
+  in `assembler.py`.
+- **A decision-level field:** add it in `assembler.py`, and in `packets.py`
+  only if it belongs in a public packet, where the public-safety checks live.
+- **A capture-only fact:** add it in `capture.py`.
+- **Exposing it:** `cli.py` renders it. `loopx/cli.py` changes only when a new
+  top-level dispatch is needed.
+- **Documenting and testing it:** update the matching surface in this README
+  and `README.zh-CN.md`. Test it in `tests/capabilities/test_decision_context_<module>.py`
+  and, for packet shape, in `examples/decision-context-contract-smoke.py`.
+
 ## Four Auditable Outputs
 
 | Output | Answers | Typical contents |
@@ -384,11 +423,37 @@ available instead of waiting an additional scan interval.
 `capture-status` separates active `pending_batch_count`, unresolved
 `held_batch_count`, per-source `acquisition_held` and
 `semantic_review_completion=not_inferred_from_capture`. `last_checked_at` is
-the last attempt, not necessarily a successful scan; host service liveness and
-successful-scan timestamps remain separate. No status-only call proves historical
-replay or complete decision coverage. Disable capture using the existing profile
+the last attempt, not necessarily a successful scan. No status-only call proves
+historical replay or complete decision coverage. Disable capture using the existing profile
 switch; stop the scheduler before downgrading, since older runtimes do not honor
 recovery holds. Retain the spool/receipts rather than treating downgrade as rollback.
+
+#### Source freshness contract
+
+An enabled profile, a healthy `loopx doctor` or a settled projection never
+implies fresh sources. Every `prepare-evidence` / `prepare-review` assembly and
+every `capture` / `capture-status` result carries `source_freshness`
+(`decision_source_freshness_v0`): one row per enabled source with
+`last_read_at` (last *successful* read), `staleness_seconds`, the source
+`freshness_seconds` window, `status` (`fresh`, `stale`, `never_read`,
+`not_scanned`), `failure_streak` and `alert_reasons`. Enabled sources outside
+the current scan (for example on-demand sources) appear as `not_scanned`
+instead of disappearing. Markdown output marks every alerted row with 🔴.
+Consumers must disclose alerted sources before presenting a conclusion as current.
+
+A failed provider attempt updates `last_checked_at` and increments
+`failure_streak`, but never advances `last_read_at`. Existing spools migrate in
+place; a legacy row whose last attempt succeeded uses that attempt as its last read.
+
+`loopx decision-context capture --execute` records a local host health file
+under `<runtime-root>/decision-context/capture-hosts/`. Private hosts calling
+`capture_profile_sources` should pass `health_runtime_root` for the same effect.
+`loopx doctor` reports the optional `decision_context_capture_hosts_healthy`
+check without opening private spools. It alerts when a registered host has not
+ticked within `max(2 × interval, interval + 600s)` (for example a scheduler still
+pointing at a deleted checkout), when the last tick failed, when the spool is
+gone, or when a recorded source is stale or failing. Remove the record of a
+deliberately retired host.
 
 ## Relationship To Other Capabilities
 

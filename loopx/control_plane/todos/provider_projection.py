@@ -22,6 +22,7 @@ from ...state_refresh import resolve_goal_state
 from ..coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
+    local_authority_is_promoted,
 )
 from .machine_section_projection import (
     TodoSectionProjectionError,
@@ -80,6 +81,7 @@ def project_current_canonical_todos(
     state_file: Path | None = None,
     execute: bool = True,
     registry_data: Mapping[str, Any] | None = None,
+    canonical_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Render one exact canonical head into machine-owned Markdown regions."""
 
@@ -95,7 +97,10 @@ def project_current_canonical_todos(
     with exclusive_cross_runtime_file_lock(
         state_path, operation="project_canonical_todo_sections"
     ):
-        authority_read = read_canonical_todos_if_promoted(
+        # The refresh planner can supply its complete authoritative snapshot.
+        # It may age while refresh commits: durable confirmation below must still
+        # observe the provider and can never be replaced by this earlier read.
+        authority_read = canonical_snapshot if canonical_snapshot is not None else read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
             goal_id=goal_id,
         )
@@ -106,7 +111,9 @@ def project_current_canonical_todos(
         recovered_missing = False
         changed = False
         confirmation: dict[str, Any] | None = None
-        for attempt in range(1, 4):
+        attempt = 0
+        while True:
+            attempt += 1
             provider_revision = authority_read.get("provider_revision")
             if not isinstance(provider_revision, str) or not provider_revision:
                 raise ValueError("canonical Todo authority omitted provider revision")
@@ -169,29 +176,23 @@ def project_current_canonical_todos(
                 break
             confirmed = read_canonical_todos_if_promoted(
                 runtime_root=runtime_root, goal_id=goal_id,
-                projection_readback={"provider_revision": provider_revision, "changed": changed},
+                projection_readback={"provider_revision": provider_revision, "changed": changed,
+                                     "attempt": attempt,
+                                     "target": "pinned" if expected_provider_revision is not None else "latest"},
             )
             if not isinstance(confirmed, dict) or not isinstance(confirmed.get("projection_readback"), dict):
                 raise ValueError("canonical projection confirmation is missing")
             confirmation = confirmed["projection_readback"]
-            if parse_projection_delivery(confirmation["status"]) != ProjectionDeliveryStatus.PENDING:
+            if confirmation["next_action"] == "finish":
                 break
-            # A pinned command must not silently render a different revision.
-            # Unpinned recovery reuses this complete read for its next attempt.
-            if expected_provider_revision is not None or attempt == 3:
-                break
+            # TS owns the retry bound and exact-revision intent. Reuse the
+            # complete confirmation snapshot instead of issuing another read.
             authority_read = confirmed
 
     return {
         "schema_version": TODO_PROJECTION_DELIVERY_SCHEMA,
-        "status": confirmation["status"] if confirmation is not None else "planned",
-        **({"observed_provider_revision": confirmation["observed_provider_revision"]}
-           if confirmation is not None else {}),
+        **(confirmation if confirmation is not None else {"status": "planned"}),
         "delivery_attempts": attempt,
-        **({"reason_code": "todo_projection_revision_advanced", "retryable": True,
-            "retry_business_mutation": False,
-            "recommended_action": "Read the current provider revision with todo list, then retry todo project-markdown for that revision."}
-           if confirmation is not None and confirmation["status"] == "pending" else {}),
         "source": "committed_authority_journal",
         "goal_id": goal_id,
         "state_file": str(state_path),
@@ -220,6 +221,8 @@ def settle_canonical_todo_projection(
     goal_id: str,
     project: Path | None = None,
     state_file: Path | None = None,
+    only_if_promoted: bool = False,
+    canonical_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drain the committed provider head, preserving a successful mutation."""
 
@@ -234,6 +237,8 @@ def settle_canonical_todo_projection(
     trigger_revision = payload.get("provider_revision")
     trigger_cursor = payload.get("cursor")
     try:
+        if only_if_promoted and not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
+            return payload
         delivery = project_current_canonical_todos(
             registry_path=registry_path,
             runtime_root=runtime_root,
@@ -241,6 +246,7 @@ def settle_canonical_todo_projection(
             project=project,
             state_file=state_file,
             execute=True,
+            canonical_snapshot=canonical_snapshot,
         )
     except Exception as error:  # noqa: BLE001 - canonical commit already landed
         if isinstance(error, LocalCoordinationAuthorityUnavailable):
@@ -273,6 +279,28 @@ def settle_canonical_todo_projection(
     return payload
 
 
+def recover_refresh_todo_projection(
+    payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    goal_id: str, project: Path | None = None, state_file: Path | None = None,
+    canonical_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A committed refresh/replay is a recovery opportunity, never a new Todo write.
+
+    Keep legacy, rejected and preview calls unchanged. The journal already owns
+    durable projection intent; there is no additional queue, receipt or quota
+    event here. A display failure stays pending alongside the committed refresh.
+    """
+    if payload.get("dry_run") is True or not (
+        payload.get("ok") is True or payload.get("appended") is True
+    ):
+        return payload
+    return settle_canonical_todo_projection(
+        payload, registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, project=project, state_file=state_file, only_if_promoted=True,
+        canonical_snapshot=canonical_snapshot,
+    )
+
+
 __all__ = [
     "TODO_PROJECTION_DELIVERY_SCHEMA",
     "ProjectionDeliveryStatus",
@@ -281,4 +309,5 @@ __all__ = [
     "projection_delivery_for_mutation",
     "project_current_canonical_todos",
     "settle_canonical_todo_projection",
+    "recover_refresh_todo_projection",
 ]

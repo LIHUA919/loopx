@@ -77,6 +77,7 @@ def _authority_read(**kwargs) -> dict[str, object]:
             "provider_revision": witness["provider_revision"],
             "observed_provider_revision": result["provider_revision"],
             "status": "delivered" if witness["changed"] else "current",
+        "next_action": "finish",
         }
     return result
 

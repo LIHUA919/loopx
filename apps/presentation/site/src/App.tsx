@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clipboard,
   Code2,
+  Download,
   ExternalLink,
   FileCheck2,
   GitBranch,
@@ -25,16 +26,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { usePublicPageNavigation } from "./usePublicPageNavigation";
 
-type Language = "en" | "zh";
+import issueEvidenceUrl from "../../../../docs/assets/long-running-loop-openviking-trajectory.png?url";
+import mlEvidenceUrl from "../../../../docs/assets/long-running-loop-ml-experiment-trajectory.png?url";
 
-const issueEvidenceUrl = new URL(
-  "../../../../docs/assets/long-running-loop-openviking-trajectory.png",
-  import.meta.url,
-).href;
-const mlEvidenceUrl = new URL(
-  "../../../../docs/assets/long-running-loop-ml-experiment-trajectory.png",
-  import.meta.url,
-).href;
+type Language = "en" | "zh";
 
 const setupPrompts: Record<Language, string> = {
   en: `Connect the current project to LoopX: https://github.com/loopx-project/loopx
@@ -66,19 +61,26 @@ cd /path/to/your-project
 loopx connect
 loopx status`;
 
+const macAppDownloadUrl = "https://github.com/loopx-project/loopx/releases/latest/download/LoopX.app.zip";
+const macAppGuideUrl = "https://github.com/loopx-project/loopx/blob/main/apps/desktop/loopx-control-plane/README.md";
+
 const content = {
   en: {
     nav: ["Product", "Workflow", "Learn"],
-    eyebrow: "Open · Provider-neutral · Stateful",
+    eyebrow: "The control plane for long-running AI agents",
     title: {
-      first: "Your agents keep",
-      secondPrefix: "the ",
-      secondAccent: "night shift",
-      thirdPrefix: "You keep the ",
-      thirdAccent: "judgment",
+      first: "Long-running agents.",
+      secondPrefix: "Lasting ",
+      secondAccent: "progress",
     },
-    body: "LoopX runs on top of any agent harness, providing long-horizon state, semantic decisions, governance, recovery, and human-agent collaboration while authority, gates, todos, quota, and evidence stay in one loop.",
+    body: "Turn complex work into durable goals, coordinated tasks, and reviewable results. LoopX keeps your agents moving across sessions. You keep the judgment.",
     copy: "Get started",
+    mac: {
+      download: "Download for Mac",
+      compact: "Mac App",
+      note: "Apple Silicon preview (.app.zip) · Python 3.11+ required.",
+      guide: "Install and first launch",
+    },
     setup: {
       eyebrow: "Set up LoopX",
       title: "Choose how you want to start.",
@@ -93,19 +95,19 @@ const content = {
     },
     demo: "See in action",
     panel: {
-      label: "GOAL CONTROL PLANE",
-      title: "Ship a reviewable result",
+      label: "ONE GOAL · ACROSS SESSIONS",
+      title: "Ship the next release",
       status: "On track",
       running: "Agent work",
       researcher: "Research and implementation",
       gate: "Human gate",
-      gateBody: "Review the proposed boundary",
+      gateBody: "Merge needs your approval",
       waiting: "Waiting",
       evidence: "Evidence",
       evidenceBody: "Validation and handoff written",
       complete: "Complete",
       next: "Next safe action",
-      nextBody: "Wait for approval, continue independent P1 work",
+      nextBody: "Keep independent tasks moving while review waits",
     },
     proof: [
       ["Explicit authority", "Agents move fast without silently taking control."],
@@ -184,16 +186,20 @@ const content = {
   },
   zh: {
     nav: ["产品", "工作方式", "学习"],
-    eyebrow: "开放 · 有状态 · Provider-neutral",
+    eyebrow: "长程 AI Agent 的有状态控制面",
     title: {
-      first: "",
-      secondPrefix: "Agent ",
-      secondAccent: "持续推进",
-      thirdPrefix: "判断始终",
-      thirdAccent: "由你掌握",
+      first: "让 Agent 持续推进。",
+      secondPrefix: "让目标成为",
+      secondAccent: "结果",
     },
-    body: "LoopX 运行在任何 agent harness 之上，提供长程状态、语义决策、治理、恢复与人机协同；权限、Gate、Todo、Quota 与 Evidence 仍集中在同一个控制闭环中。",
+    body: "把复杂工作变成持久的目标、协同的任务和可审查的成果。跨越会话，Agent 接着做；关键判断，始终由你掌握。",
     copy: "开始使用",
+    mac: {
+      download: "下载 Mac App",
+      compact: "Mac App",
+      note: "Apple Silicon 预览版（.app.zip）· 需要 Python 3.11+。",
+      guide: "安装与首次启动",
+    },
     setup: {
       eyebrow: "设置 LoopX",
       title: "选择你的开始方式。",
@@ -208,19 +214,19 @@ const content = {
     },
     demo: "查看实战",
     panel: {
-      label: "目标控制面",
-      title: "交付可审查的结果",
+      label: "一个目标 · 跨越多轮会话",
+      title: "交付下一个版本",
       status: "进展正常",
       running: "Agent 执行",
       researcher: "研究与实现",
       gate: "Human Gate",
-      gateBody: "审查当前方案边界",
+      gateBody: "合并前，等待你的批准",
       waiting: "等待中",
       evidence: "Evidence",
       evidenceBody: "验证与交接已写回",
       complete: "已完成",
       next: "下一步安全动作",
-      nextBody: "等待批准，同时继续独立的 P1 工作",
+      nextBody: "审批等待中，继续推进不依赖审批的任务",
     },
     proof: [
       ["显式权限", "Agent 快速推进，但不会静默接管用户权力。"],
@@ -313,22 +319,6 @@ function ProductMark() {
   );
 }
 
-function AnimatedAccent({ text }: { text: string }) {
-  return (
-    <span className="hero-gradient-word" aria-label={text}>
-      {text}
-    </span>
-  );
-}
-
-function GitHubIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-      <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.2c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.78 2.71 1.27 3.37.97.1-.75.4-1.27.74-1.56-2.57-.29-5.27-1.29-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.17 1.18A11 11 0 0 1 12 6.13c.98 0 1.95.13 2.87.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.24c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
-    </svg>
-  );
-}
-
 function StatusPill({
   tone,
   children,
@@ -350,17 +340,14 @@ function ControlPlane({ language }: { language: Language }) {
     <div className="control-shell">
       <div className="control-topline">
         <span>{panel.label}</span>
-        <span className="live-indicator">
-          <i />
-          LIVE
-        </span>
+        <span className="live-indicator"><i aria-hidden="true" /> LIVE</span>
       </div>
       <div className="control-goal">
         <div className="control-icon">
           <Target size={18} strokeWidth={1.8} />
         </div>
         <div>
-          <small>ACTIVE GOAL</small>
+          <small>{language === "en" ? "ACTIVE GOAL" : "当前目标"}</small>
           <strong>{panel.title}</strong>
         </div>
         <StatusPill tone="ok">{panel.status}</StatusPill>
@@ -381,7 +368,7 @@ function ControlPlane({ language }: { language: Language }) {
           <div className="progress-track">
             <span />
           </div>
-          <StatusPill tone="neutral">Running</StatusPill>
+          <StatusPill tone="neutral">{language === "en" ? "Running" : "执行中"}</StatusPill>
         </div>
         <div className="control-row is-gate">
           <div className="row-icon">
@@ -665,7 +652,7 @@ function EvidenceViewer({
         </div>
         <footer className="evidence-dialog-footer">
           <p>{content[language].showcase.boundary}</p>
-          <a href={evidence.source} target="_blank" rel="noreferrer">
+          <a href={evidence.source} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">
             {language === "zh" ? "在新标签页打开原图" : "Open original image"} <ExternalLink size={13} />
           </a>
         </footer>
@@ -771,7 +758,6 @@ export function App() {
 
   useEffect(() => {
     document.body.dataset.language = language;
-    document.title = language === "zh" ? "LoopX — 让长程目标持续推进" : "LoopX — Keep the loop moving";
   }, [language]);
 
   async function copySetup(option: "agent" | "shell") {
@@ -790,6 +776,7 @@ export function App() {
       fallback.remove();
       if (!copied) throw new Error("clipboard unavailable");
     }
+    window.dispatchEvent(new CustomEvent("loopx:setup-copy", { detail: option }));
     setCopiedOption(option);
     window.setTimeout(() => setCopiedOption(null), 2200);
   }
@@ -816,6 +803,7 @@ export function App() {
           <a href="#explore">{language === "zh" ? "探索" : "Explore"}</a>
           <a href={`${basePath}blog/${language === "zh" ? "zh/" : ""}`}>Blog</a>
           <a href={`${basePath}docs/`}>Docs</a>
+          <a href="https://github.com/loopx-project/loopx">GitHub</a>
         </nav>
         <div className="header-actions">
           <button
@@ -825,9 +813,10 @@ export function App() {
           >
             {language === "en" ? "中文" : "EN"}
           </button>
-          <a className="github-button" href="https://github.com/loopx-project/loopx">
-            <GitHubIcon />
-            GitHub
+          <a className="header-download" data-analytics-event="desktop_download" href={macAppDownloadUrl} aria-label={copy.mac.download} referrerPolicy="strict-origin-when-cross-origin">
+            <Download size={16} aria-hidden="true" />
+            <span className="header-download-full">{copy.mac.download}</span>
+            <span className="header-download-compact">{copy.mac.compact}</span>
           </a>
           <button
             className="menu-button"
@@ -874,42 +863,41 @@ export function App() {
               ) : null}
               <span className="hero-title-line">
                 {copy.title.secondPrefix}
-                <AnimatedAccent text={copy.title.secondAccent} />
-                {language === "zh" ? "。" : "."}
-              </span>
-              <span className="hero-title-line">
-                {copy.title.thirdPrefix}
-                <AnimatedAccent text={copy.title.thirdAccent} />
+                <span className="hero-accent">{copy.title.secondAccent}</span>
                 {language === "zh" ? "。" : "."}
               </span>
             </h1>
             <p className="hero-body">{copy.body}</p>
             <div className="hero-actions">
-              <button className="button button-primary" type="button" onClick={() => setSetupOpen(true)}>
+              <a className="button button-primary hero-download" data-analytics-event="desktop_download" href={macAppDownloadUrl} referrerPolicy="strict-origin-when-cross-origin">
+                <Download size={16} aria-hidden="true" />
+                {copy.mac.download}
+              </a>
+              <button className="button button-secondary" data-analytics-event="setup_open" type="button" onClick={() => setSetupOpen(true)}>
                 <span>{copy.copy}</span>
                 <ArrowRight className="button-trailing-icon" size={15} />
               </button>
-              <a className="button button-secondary" href="#showcases" onClick={showTerminalReplay}>
+              <a className="hero-demo" data-analytics-event="showcase_open" href="#showcases" onClick={showTerminalReplay}>
                 <Play size={15} fill="currentColor" />
                 {copy.demo}
               </a>
             </div>
-            <div className="supported-hosts">
-              <span>WORKS WITH</span>
-              <div>
-                <b>Codex</b>
-                <i />
-                <b>Claude Code</b>
-                <i />
-                <b>OpenCode</b>
-                <i />
-                <b>TraeX</b>
-                <i />
-                <b>Pi</b>
-              </div>
-            </div>
+            <p className="hero-footnote">
+              {copy.mac.note}{" "}
+              <a href={macAppGuideUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{copy.mac.guide} <ExternalLink size={12} aria-hidden="true" /></a>
+            </p>
           </div>
-          <ControlPlane language={language} />
+          <div className="hero-system">
+            <div className="runtime-rail" aria-label={language === "en" ? "Explore agent integrations" : "查看 Agent 集成"}>
+              <a href={`${basePath}docs/guides/long-running-coding-agents/#codex-continue-a-task-across-sessions`}>Codex</a>
+              <a href={`${basePath}docs/guides/long-running-coding-agents/#claude-code-track-work-without-losing-review-state`}>Claude Code</a>
+              <a href="https://github.com/loopx-project/loopx/tree/main/packages/dsh-loopx-plugin">DeepSeek Harness</a>
+              <a href={`${basePath}docs/integrations/runtime-connector-catalog/`}>+ {language === "en" ? "more" : "更多"}</a>
+            </div>
+            <div className="runtime-bridge" aria-hidden="true"><span /><span /><span /></div>
+            <ControlPlane language={language} />
+            <p className="hero-system-caption">{language === "en" ? "A workflow illustration. Your runtime executes; LoopX keeps the state." : "工作流示意：Runtime 负责执行，LoopX 保存状态。"}</p>
+          </div>
         </section>
 
         <section className="proof-strip" aria-label="LoopX product principles">

@@ -220,12 +220,35 @@ def _has_new_terminal_coverage(
     return False
 
 
+def _normalized_window(
+    window: Iterable[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Normalize the typed observations an obligation window already holds."""
+
+    normalized: list[dict[str, Any]] = []
+    for item in window or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            normalized.append(normalize_progress_observation(item))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return normalized
+
+
 def semantic_progress_delta(
     observation: Mapping[str, Any] | None,
     *,
     baseline: Mapping[str, Any] | None,
+    window: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Qualify a typed observation as a replan-closing semantic delta."""
+    """Qualify a typed observation as a replan-closing semantic delta.
+
+    `baseline` is the observation the delta kinds are computed against.
+    `window` lists every typed observation already claimed while the
+    obligation formed; the codec reports novelty facts against the whole
+    window so an outcome owner can refuse a replayed claim.
+    """
 
     if not isinstance(observation, Mapping):
         return {"accepted": False, "reason": "typed progress observation missing"}
@@ -235,6 +258,7 @@ def semantic_progress_delta(
         if isinstance(baseline, Mapping)
         else None
     )
+    claimed = _normalized_window(window)
     result_class = current["result_class"]
     delta_kinds: list[str] = []
     if result_class == ProgressResultClass.ADVANCED.value:
@@ -271,10 +295,24 @@ def semantic_progress_delta(
             and _has_new_terminal_coverage(current, prior)
         ):
             delta_kinds.append("coverage_backed_no_followup")
+    # Novelty facts are computed here against the baseline and every claim in
+    # the obligation window; which obligation sources require them behind a
+    # renamed surface, hypothesis or probe family is decided by the TypeScript
+    # outcome owner (work_item.replan_semantics).
+    known_evidence: set[str] = set(prior.get("evidence_ids") or []) if prior else set()
+    known_fingerprints: set[str] = {prior["fingerprint"]} if prior else set()
+    for item in claimed:
+        known_evidence.update(item.get("evidence_ids") or [])
+        known_fingerprints.add(item["fingerprint"])
+    evidence_novel = bool(set(current.get("evidence_ids") or []) - known_evidence)
+    observation_repeated = current["fingerprint"] in known_fingerprints
     return {
         "schema_version": "replan_semantic_delta_v0",
         "accepted": bool(delta_kinds),
         "delta_kinds": delta_kinds,
+        "evidence_novel": evidence_novel,
+        "observation_repeated": observation_repeated,
+        "window_size": len(claimed),
         "observation_fingerprint": current["fingerprint"],
         "baseline_fingerprint": prior.get("fingerprint") if prior else None,
         "reason": (
@@ -302,6 +340,27 @@ def replan_writeback_requirements(
 
 def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
+
+
+def guarded_replan_transition_delta(
+    *, guard_scoped: bool, selected_obligation_id: str | None,
+    transition_acks: list[dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """Adapt revalidated canonical receipts to the TS-owned exact Turn gate."""
+    try:
+        result = effect_runtime_result("work_item.replan_semantics.project", {
+            "operation": "turn_transition", "guard_scoped": guard_scoped,
+            "selected_obligation_id": selected_obligation_id,
+            "transition_acks": transition_acks,
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    if not isinstance(result, Mapping) or "semantic_delta" not in result:
+        raise RuntimeError("TypeScript guarded replan transition shape mismatch")
+    delta = result["semantic_delta"]
+    if delta is not None and not isinstance(delta, Mapping):
+        raise RuntimeError("TypeScript guarded replan delta must be an object or null")
+    return dict(delta) if delta is not None else None
 
 
 def replan_obligation_trigger_kinds(
@@ -360,9 +419,21 @@ def semantic_delta_from_writeback(
             ),
             None,
         )
+    window = obligation.get("progress_window")
+    if not isinstance(window, list):
+        window = next(
+            (
+                trigger.get("progress_window")
+                for trigger in (obligation.get("triggers") or [])
+                if isinstance(trigger, Mapping)
+                and isinstance(trigger.get("progress_window"), list)
+            ),
+            None,
+        )
     observation_delta = semantic_progress_delta(
         progress_observation,
         baseline=baseline if isinstance(baseline, Mapping) else None,
+        window=window if isinstance(window, list) else None,
     )
     vision = dict(agent_vision) if isinstance(agent_vision, Mapping) else {}
     if vision:
@@ -513,7 +584,8 @@ def build_replan_action_packet(
             "explore_result_node_refs"
         ),
     )
-    writeback_contract = replan_writeback_requirements(obligation)["writeback_contract"]
+    requirements = replan_writeback_requirements(obligation)
+    writeback_contract = requirements["writeback_contract"]
     successor_summary = str(
         selected_gap_values.get("successor_summary") or ""
     ).strip()[:240]
@@ -562,6 +634,7 @@ def build_replan_action_packet(
         "obligation_id": obligation.get("obligation_id"),
         "uncovered_frontier": context.get("uncovered_frontier"),
         "required_outcome": "semantic_delta",
+        "planning_guidance": requirements["planning_guidance"],
         "writeback_contract": writeback_contract,
         "allowed_terminal": [
             ProgressResultClass.EXPLORATION_EXHAUSTED.value,

@@ -661,6 +661,8 @@ export type ChatSessionSummary = {
   updated_at: string;
   last_activity_at: string;
   resumable: boolean;
+  session_mode?: string;
+  host_surface?: string | null;
   manager_runtime?: ManagerRuntimeSessionReadback | null;
 };
 
@@ -675,6 +677,8 @@ export type ManagerRuntimeSessionReadback = {
 };
 
 export type ChatVisibleMessage = {
+  /** Client-side lineage added when messages from several Sessions are merged. */
+  session_id?: string;
   collaboration?: CollaborationReadback;
   origin?: string;
   attachments?: ChatImageAttachment[];
@@ -742,7 +746,7 @@ export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
   const messages = new Map<string, ChatVisibleMessage>();
   for (const snapshot of snapshots) {
     for (const message of snapshot.messages) {
-      messages.set(message.message_id, message);
+      messages.set(message.message_id, { ...message, session_id: snapshot.session.session_id });
     }
   }
   return [...messages.values()].sort((left, right) =>
@@ -876,10 +880,26 @@ export async function streamChatTurn(
 }
 
 export async function interruptChatTurn(sessionId: string, turnId: string) {
-  return requestJson<{ ok: true; session_id: string; turn_id: string; status: string }>(
+  const receipt = await requestJson<{ ok: true; session_id: string; turn_id: string; status: string }>(
     `/api/chat/sessions/${sessionId}/turns/${turnId}/interrupt`,
     { method: "POST", body: "{}" },
   );
+  if (receipt.ok !== true || receipt.session_id !== sessionId || receipt.turn_id !== turnId) {
+    throw new ChatApiError("中断回执与本次请求不一致，请刷新后查看。", { error_code: "interrupt_receipt_mismatch" });
+  }
+  return receipt;
+}
+
+export async function steerChatTurn(sessionId: string, turnId: string, message: string, ingressId: string) {
+  const receipt = await requestJson<{ ok: boolean; session_id: string; turn_id: string; client_ingress_id: string; status: string }>(
+    `/api/chat/sessions/${sessionId}/turns/${turnId}/steer`,
+    { method: "POST", body: JSON.stringify({ message, client_ingress_id: ingressId }) },
+  );
+  if (receipt.ok !== true || receipt.session_id !== sessionId || receipt.turn_id !== turnId
+    || receipt.client_ingress_id !== ingressId || receipt.status !== "delivered") {
+    throw new ChatApiError("追加指令的回执不匹配，请保留草稿并检查当前状态。", { error_code: "steer_receipt_mismatch" });
+  }
+  return receipt;
 }
 
 export type LoopXModeSnapshot = {
@@ -922,6 +942,28 @@ export function readLoopXTeamWork(sessionId: string, operationId: string) {
   return requestJson<DelegationReadback>(`/api/chat/sessions/${sessionId}/loopx`, {
     method: "POST", body: JSON.stringify({operation: "read", operation_id: operationId}),
   });
+}
+export type ManagedGoalResultRow = {
+  todo_id: string; title: string; producer_agent_id: string; sha256: string;
+  content_type: string; size_bytes: number; completed_at?: string | null;
+};
+export type ManagedGoalResultPage = {
+  ok: true; items: ManagedGoalResultRow[]; total: number; next_cursor: string | null;
+  unavailable_count: number; unavailable_todo_ids: string[];
+};
+export type ManagedGoalResultRead = {
+  ok: true; goal_id: string; todo_id: string; text: string;
+  result: {sha256: string; content_type: string; producer_agent_id: string};
+};
+export function fetchManagedGoalResults(goalId: string, cursor?: string) {
+  const params = new URLSearchParams({goal_id: goalId});
+  if (cursor) params.set("cursor", cursor);
+  return requestJson<ManagedGoalResultPage>(`/api/chat/goal-results?${params}`);
+}
+export function readManagedGoalResult(goalId: string, todoId: string) {
+  return requestJson<ManagedGoalResultRead>(
+    `/api/chat/goal-results/${encodeURIComponent(todoId)}?goal_id=${encodeURIComponent(goalId)}`,
+  );
 }
 // Keep inventory and selected-operation labels consistent; unknown states stay unknown.
 export function delegationStateLabel(row: {status: string; worker_active?: boolean; recovery_required: boolean | null}, zh: boolean) {
@@ -1007,7 +1049,8 @@ async function receiveChatTurnStreaming(
           options.onDelta?.(String(event.payload.text ?? ""));
         }
         if (event.kind === "agent.phase") {
-          options.onActivity?.(String(event.payload.label ?? "Agent 正在处理"));
+          const label = typeof event.payload.label === "string" ? event.payload.label.trim() : "";
+          if (label) options.onActivity?.(label);
         }
         if (event.kind === "turn.completed") {
           finalResponse = event.payload.response;
@@ -1594,6 +1637,59 @@ export async function fetchGoalConfiguration(goalId: string) {
   );
 }
 
+const automationCadenceSourceSchema = z.object({
+  agent_id: z.string().nullable(),
+  automation_id: z.string().nullable(),
+  min_interval_minutes: z.number().int().nonnegative(),
+});
+
+export const automationCadenceSchema = z.object({
+  ok: z.literal(true),
+  schema_version: z.literal("chat_automation_cadence_v0"),
+  goal_id: z.string(),
+  agent_id: z.string().nullable(),
+  automation_id: z.string().nullable(),
+  configuration_revision: z.number().int().nonnegative(),
+  min_interval_minutes: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  enforcement: z.string(),
+  pre_model_admission: z.string(),
+  sources: z.array(automationCadenceSourceSchema),
+  preview_revision: z.string().optional(),
+  written: z.boolean().optional(),
+  readback_verified: z.boolean().optional(),
+});
+
+export type AutomationCadence = z.infer<typeof automationCadenceSchema>;
+export type AutomationCadenceChange = {
+  goal_id: string;
+  agent_id: string | null;
+  automation_id: string | null;
+  min_interval_minutes: number;
+  expected_revision: number;
+  owner_reference: string;
+  approve_reduction: boolean;
+};
+
+export async function fetchAutomationCadence(goalId: string, agentId: string | null, automationId: string | null) {
+  const query = new URLSearchParams({ goal_id: goalId });
+  if (agentId) query.set("agent_id", agentId);
+  if (automationId) query.set("automation_id", automationId);
+  return automationCadenceSchema.parse(await requestJson<unknown>(`/api/chat/automation-cadence?${query}`));
+}
+
+export async function previewAutomationCadence(change: AutomationCadenceChange) {
+  return automationCadenceSchema.parse(await requestJson<unknown>("/api/chat/automation-cadence/preview", {
+    method: "POST", body: JSON.stringify(change),
+  }));
+}
+
+export async function applyAutomationCadence(change: AutomationCadenceChange, previewRevision: string) {
+  return automationCadenceSchema.parse(await requestJson<unknown>("/api/chat/automation-cadence/apply", {
+    method: "POST", body: JSON.stringify({ ...change, preview_revision: previewRevision }),
+  }));
+}
+
 export async function previewGoalConfiguration(
   goalId: string,
   capabilityId: string,
@@ -1970,4 +2066,16 @@ export async function disconnectLarkGoalTopic(goalId: string, connectionId: stri
       method: "DELETE",
     }),
   );
+}
+
+const usageStatisticsSchema = z.object({
+  consent: z.enum(["default", "enabled", "disabled"]),
+  sending: z.boolean(), blocked_by: z.string().nullable(), endpoint: z.string().nullable(),
+  policy: z.string(), notice_required: z.boolean(),
+  next_payload: z.unknown(), aggregate_preview: z.unknown(), goal_preview: z.unknown(),
+});
+export type UsageStatistics = z.infer<typeof usageStatisticsSchema>;
+export async function usageStatistics(enabled?: boolean): Promise<UsageStatistics> {
+  return usageStatisticsSchema.parse(await requestJson<unknown>("/api/chat/usage-statistics",
+    enabled === undefined ? undefined : { method: "POST", body: JSON.stringify({ enabled }) }));
 }

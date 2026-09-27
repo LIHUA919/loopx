@@ -10,6 +10,7 @@ from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.goals.activation import goal_is_stopped
 
 # Retained imports are the shipped manager-context API; the shared owner is neutral.
 from ...control_plane.collaboration.inbox import (
@@ -75,12 +76,17 @@ def authority(
             raise ValueError("invalid registry")
     except (OSError, ValueError, TypeError):
         return {"mode": "unavailable", "targets": []}
-    available = {
-        (g["id"], a): g
-        for g in registry.get("goals", [])
-        if isinstance(g, dict) and g.get("id")
-        for a in registered_agent_ids_for_goal(g)
-    }
+    available = set()
+    for goal in registry.get("goals", []):
+        if not isinstance(goal, dict) or not goal.get("id"):
+            continue
+        try:
+            if goal_is_stopped(goal):
+                continue
+        except ValueError:
+            # An unreadable activation state cannot grant a new handoff.
+            continue
+        available.update((goal["id"], agent) for agent in registered_agent_ids_for_goal(goal))
     scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
     if scope["private_conversation"] and turn.get("origin") == "web":
         allowed = {target for target in available
@@ -112,7 +118,7 @@ def authority(
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return {"mode": "unavailable", "targets": []}
     targets = [
-        {"goal_id": g, "agent_id": a} for g, a in sorted(allowed & set(available))
+        {"goal_id": g, "agent_id": a} for g, a in sorted(allowed & available)
     ]
     return {
         "mode": "context_only",
@@ -285,3 +291,103 @@ def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel
     return {"ok": True, "executed": execute, "channel_id": channel,
             "evidence_goal_ids": ids, "scope": "audience_goal_summaries",
             "delegation_authority_changed": False}
+
+
+def configure_delivery_target(
+    runtime_root: Path,
+    registry_path: Path,
+    *,
+    channel: str,
+    goal_id: str,
+    agent_id: str,
+    grant: bool,
+    execute: bool = False,
+) -> dict:
+    """Preview or change one sender-bound recipient on an existing external channel."""
+    if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
+        raise ValueError("an exact external manager channel is required")
+    if not goal_id or not agent_id:
+        raise ValueError("an exact Goal and Agent are required")
+    target = {"goal_id": goal_id, "agent_id": agent_id}
+
+    def is_target(item: dict) -> bool:
+        return item.get("goal_id") == goal_id and item.get("agent_id") == agent_id
+
+    if grant:
+        registry = load_registry(registry_path)
+        goal = next(
+            (g for g in registry.get("goals", []) if isinstance(g, dict) and g.get("id") == goal_id),
+            None,
+        )
+        if (
+            goal is None
+            or goal_is_stopped(goal)
+            or agent_id not in registered_agent_ids_for_goal(goal)
+        ):
+            raise ValueError("delivery target must be a registered Agent in an active Goal")
+
+    path = _root(runtime_root) / "policy.json"
+
+    def update() -> dict:
+        policy = _read(path)
+        if policy.get("schema_version") != POLICY_SCHEMA or not isinstance(
+            policy.get("sources"), dict
+        ):
+            raise ValueError("invalid manager policy")
+        source = policy["sources"].get(channel)
+        if not isinstance(source, dict):
+            raise ValueError("external manager channel must already be configured")
+        senders = source.get("sender_ids")
+        if grant and (
+            not isinstance(senders, list)
+            or not senders
+            or any(not isinstance(sender, str) or not sender for sender in senders)
+        ):
+            raise ValueError("external manager channel has no valid sender grant")
+        if (
+            grant
+            and "evidence_goal_ids" in source
+            and goal_id not in (evidence_goal_scope(runtime_root, channel) or [])
+        ):
+            raise ValueError("target Goal is outside the channel read scope")
+        targets = source.get("targets", [])
+        if not isinstance(targets, list) or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("goal_id"), str)
+            or not isinstance(item.get("agent_id"), str)
+            for item in targets
+        ):
+            raise ValueError("invalid external manager delivery targets")
+        before = any(is_target(item) for item in targets)
+        if grant:
+            updated_targets = targets if before else [*targets, target]
+        else:
+            updated_targets = [item for item in targets if not is_target(item)]
+        changed = updated_targets != targets
+        if execute and changed:
+            source["targets"] = updated_targets
+            _write(path, policy)
+        return {
+            "ok": True,
+            "executed": execute,
+            "changed": changed if execute else False,
+            "would_change": changed,
+            "channel_id": channel,
+            "target": target,
+            "granted_before": before,
+            "granted_after": grant,
+            "existing_target_count": len(targets),
+            "resulting_target_count": len(updated_targets),
+            "scope": "sender_bound_context_delivery",
+            "execution_started": False,
+        }
+
+    if not execute:
+        return update()
+    with exclusive_file_lock(path.with_suffix(".lock")):
+        result = update()
+        saved = _read(path)
+        saved_targets = saved.get("sources", {}).get(channel, {}).get("targets", [])
+        if any(is_target(item) for item in saved_targets) != grant:
+            raise ValueError("delivery target verification failed")
+    return {**result, "readback_verified": True}

@@ -1,24 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2, SlidersHorizontal } from "lucide-react";
 
 import type { WorkspaceLocale } from "./i18n";
 import { useWorkspaceI18n } from "./i18n";
 import { LarkSettingsPage } from "./lark-settings-page";
 import { GoalCapabilitySettings } from "./goal-capability-settings";
+import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
 
-type WorkspaceSettingsTab = "provider" | "machine" | "capabilities" | "lark" | "appearance" | "language";
+type WorkspaceSettingsTab = "steward" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
 const tabIcons: Record<WorkspaceSettingsTab, typeof Settings2> = {
   appearance: Palette,
   capabilities: SlidersHorizontal,
+  cadence: Clock3,
   language: Languages,
   lark: Settings2,
   machine: ServerCog,
   provider: KeyRound,
+  steward: Bot,
 };
 
 export function WorkspaceSettingsPage({
@@ -65,17 +68,29 @@ export function WorkspaceSettingsPage({
     observer.observe(navigation);
     return () => observer.disconnect();
   }, [tab]);
-  const tabs: Array<{ key: WorkspaceSettingsTab; label: string }> = [
-    ...(initialGoalId ? [{ key: "capabilities" as const, label: t("capabilities.title") }] : []),
-    // The model provider is one machine decision (which endpoint and key the
-    // operator credential holds); the capability catalog is another (which
-    // machine defaults every Goal inherits). They answer different questions
-    // and are edited on different surfaces, so they are separate categories.
-    { key: "provider", label: t("settings.modelProvider") },
-    { key: "machine", label: t("settings.globalCapabilities") },
-    { key: "lark", label: "Lark" },
-    { key: "appearance", label: t("settings.appearance") },
-    { key: "language", label: t("settings.language") },
+  const tabGroups: Array<{ label: string; tabs: Array<{ key: WorkspaceSettingsTab; label: string }> }> = [
+    {
+      label: t("settings.agentGroup"),
+      tabs: [
+        { key: "steward", label: t("settings.steward") },
+        // The model provider is one machine decision (which endpoint and key the
+        // operator credential holds); the capability catalog is another (which
+        // machine defaults every Goal inherits). They answer different questions
+        // and are edited on different surfaces, so they are separate categories.
+        { key: "provider", label: t("settings.modelProvider") },
+        { key: "machine", label: t("settings.globalCapabilities") },
+        ...(initialGoalId ? [{ key: "capabilities" as const, label: t("capabilities.title") }] : []),
+        ...(initialGoalId ? [{ key: "cadence" as const, label: t("cadence.title") }] : []),
+      ],
+    },
+    {
+      label: t("settings.workspaceGroup"),
+      tabs: [
+        { key: "lark", label: "Lark" },
+        { key: "appearance", label: t("settings.appearance") },
+        { key: "language", label: t("settings.language") },
+      ],
+    },
   ];
   const localeOptions: Array<{ label: string; value: WorkspaceLocale }> = [
     {
@@ -94,6 +109,9 @@ export function WorkspaceSettingsPage({
     capabilities: {
       title: t("capabilities.title"),
     },
+    cadence: {
+      title: t("cadence.title"),
+    },
     language: {
       title: t("settings.language"),
     },
@@ -106,8 +124,15 @@ export function WorkspaceSettingsPage({
     provider: {
       title: t("settings.modelProvider"),
     },
+    steward: {
+      title: t("settings.steward"),
+    },
   };
   const heading = headings[tab];
+  const selectedGoal = goals.find((item) => item.goalId === initialGoalId);
+  const goalSettingsTarget = (tab === "capabilities" || tab === "cadence") && initialGoalId
+    ? selectedGoal?.title || initialGoalId
+    : null;
 
   return (
     <section aria-label={t("settings.title")} className="personal-settings-page" data-pw-theme={theme}>
@@ -120,24 +145,31 @@ export function WorkspaceSettingsPage({
           <strong>{t("settings.title")}</strong>
         </div>
         <nav aria-label={t("settings.categories")} className="personal-settings-tabs" ref={tabsRef}>
-          {tabs.map((item) => {
-            const Icon = tabIcons[item.key];
-            return (
-              <button aria-current={tab === item.key ? "page" : undefined} key={item.key} onClick={() => setTab(item.key)} type="button">
-                <Icon size={17} />
-                <span>
-                  <strong>{item.label}</strong>
-                </span>
-              </button>
-            );
-          })}
+          {tabGroups.map((group) => <div className="personal-settings-tab-group" key={group.label}>
+            <span className="personal-settings-tab-group-label">{group.label}</span>
+            {group.tabs.map((item) => {
+              const Icon = tabIcons[item.key];
+              return (
+                <button aria-current={tab === item.key ? "page" : undefined} key={item.key} onClick={() => setTab(item.key)} type="button">
+                  <Icon size={17} />
+                  <span><strong>{item.label}</strong></span>
+                </button>
+              );
+            })}
+          </div>)}
         </nav>
       </aside>
 
       <main className="personal-settings-body">
         <header className="personal-settings-header">
-          <div>
+          <div className="personal-settings-heading">
             <h1>{heading.title}</h1>
+            {goalSettingsTarget ? (
+              <span className="personal-settings-goal-target" title={`${goalSettingsTarget} · ${initialGoalId}`}>
+                <span>Goal</span>
+                <strong>{goalSettingsTarget}</strong>
+              </span>
+            ) : null}
           </div>
         </header>
         {tab === "lark" ? (
@@ -157,7 +189,8 @@ export function WorkspaceSettingsPage({
           </div>
         ) : null}
 
-        {tab === "machine" ? <MachineConfigurationSettings /> : null}
+        {tab === "steward" ? <MachineConfigurationSettings section="steward" /> : null}
+        {tab === "machine" ? <MachineConfigurationSettings section="other" /> : null}
         {tab === "capabilities" ? (
           <GoalCapabilitySettings
             callbacks={callbacks}
@@ -166,6 +199,7 @@ export function WorkspaceSettingsPage({
             onChanged={onChanged}
           />
         ) : null}
+        {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings goal={selectedGoal} /> : null}
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">

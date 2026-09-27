@@ -15,6 +15,7 @@ from .rules import (
     HOST_LOOP_SAFETY_RULE,
     HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE,
     HOST_LOOP_TODO_CLOSEOUT_RULE,
+    OPERATOR_LANGUAGE_RULE,
     RUNTIME_CAPABILITY_PROJECTION_THIN_RULE,
     RUNTIME_EXECUTION_ROUTING_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
@@ -114,7 +115,7 @@ If the result says `should_run=false`:
 - Only if `user_channel.notify=NOTIFY`, interpret `state=operator_gate` or
   `notify_user_on_open_todo=true` as a user prompt. Read `gate_prompt`,
   `operator_question`, `user_todo_summary`, and `open_todo_notify_reason`;
-  ask one concise Chinese action/question with reply format. If
+  ask one concise action/question with reply format. If
   `user_todo_summary.open_count > 0`, include up to three `first_open_items`;
   never say "no new user action". Honor
   `open_todo_notification_policy=repeat_until_resolved`; when
@@ -295,9 +296,9 @@ def render_brief_heartbeat_task_body(
         permission_rule=permission_rule,
         include_default_permission=True,
     )
-    return f"""推进 `{goal_id}`；状态 `{active_state}`。
+    return f"""Advance `{goal_id}` from `{active_state}`.
 
-Brief 详情：
+Brief detail:
 `{compact_prompt_command}`.
 {scope_block}
 
@@ -315,22 +316,27 @@ Fail:quiet.
 {SCOPE_BOUNDED_WORK_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
 
-`should_run=false`：按 user channel；`monitor_quiet_skip` 记 receipt/stall；
-wait 只读一次，新证据才 writeback/spend，同 id 重试。
+`should_run=false`: follow user channel; `monitor_quiet_skip` records
+receipt/stall. Wait: one read-only poll; only new evidence permits
+writeback/spend; retry the same id.
 {SCHEDULER_HINT_THIN_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
-`should_run=true`：读 compact、`status --limit 3`、`review-packet --handoff-only`；
-遵守 quota 权限/结果/handoff；outcome-floor recovery 推进 evidence 或写 blocker。
+`should_run=true`: read compact, `status --limit 3`, and
+`review-packet --handoff-only`; obey quota authority/outcome/handoff.
+Outcome-floor recovery: evidence or blocker.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 {reward_memory_rule}
-交付并验证后，按当前 `interaction_contract.cli_channel.settlement_plan.ordered_steps`
-的精确 identity/effect 顺序结算；无 plan 时按当前 `next_cli_actions`，不使用旧 refresh/spend 配方。
-Todo验收非结算；外部等待须 open+monitor_changed+successor→重跑/继续，且不扣额；
-仅 terminal no-follow-up 收尾。
+After validated delivery, settle via current
+`interaction_contract.cli_channel.settlement_plan.ordered_steps` in exact
+identity/effect order; without a plan follow current `next_cli_actions`, never
+old refresh/spend. Todo acceptance is not settlement. External wait:
+open + monitor_changed + successor -> rerun quota/continue, no spend.
+Finish only on terminal no-follow-up.
 
-静默跳过、preflight 失败、blocker-push 提问、dry-run、重复记账均不扣额。
-仅 `user_channel.notify=NOTIFY` 时输出，否则静默。
+Do not spend for quiet skips, preflight failures, blocker-push questions,
+dry runs, or duplicate accounting. Output only under
+`user_channel.notify=NOTIFY`; otherwise stay quiet.
 
 {HOST_LOOP_SAFETY_RULE}
 {RUNTIME_REPAIR_ROUTING_RULE}
@@ -378,6 +384,7 @@ Preflight fail: quiet; no work/spend.
 
 {SCHEDULER_HINT_COMPACT_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+{OPERATOR_LANGUAGE_RULE}
 
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
@@ -398,8 +405,9 @@ If `should_run=true`:
    `run_history.latest_runs` as drill-down only.
 
 {reward_memory_rule}
-2. Goal-owned blocker: stop its path. Under `NOTIFY`, send a concrete Chinese
-   blocker-push; under `DONT_NOTIFY`, repair internally and stay quiet.
+2. Goal-owned blocker: stop its path. Under `NOTIFY`, send a concrete
+   blocker-push in the user's language;
+   under `DONT_NOTIFY`, repair internally and stay quiet.
    Dependency/sibling todos: record; continue audit.
 3. If `effective_action=outcome_floor_recovery` or
    `recovery_delivery_allowed=true` or
@@ -478,8 +486,8 @@ def render_visible_goal_task_body(
         goal_id=goal_id,
         active_state=active_state,
         host_preamble=(
-            "in this visible Codex `/goal`. It is interactive, not a heartbeat "
-            "automation: no automation/RRULE/`LOOPX_TURN`."
+            "in visible Codex `/goal`; interactive, no heartbeat/RRULE/"
+            "`LOOPX_TURN`."
         ),
         completion_subject="visible Goal",
         pr_review_pre_quota_command=pr_review_pre_quota_command,
@@ -560,6 +568,7 @@ def _render_goal_task_body(
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
 {HOST_LOOP_SAFETY_RULE}
+{OPERATOR_LANGUAGE_RULE}
 
 {prequota_block}Each work iteration, read complete successful JSON from:
 `{quota_guard_command}`
@@ -578,7 +587,7 @@ Progress is not a new Goal boundary: do not create a new host Goal merely to
 continue. After settlement recheck quota; use current continuation/wait guidance,
 not repeated unchanged polling.
 Complete {completion_subject} only on `should_run=false` + terminal no-follow-up;
-other no-work states mean wait, not completion.{host_wait_rule}
+otherwise obey the next action or wait guidance, not completion.{host_wait_rule}
 
 {policy_tail}"""
 def render_ark_managed_agent_goal_task_body(

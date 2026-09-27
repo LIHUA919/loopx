@@ -139,6 +139,70 @@ test("runtime exposes the canonical task-lease write-scope rule", async () => {
   assert.equal(result.overlap, true);
 });
 
+test("runtime exposes the source-session lifetime decisions", async () => {
+  const goalRef = {
+    goal_id: "release",
+    goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  };
+  const bindingFacts = {
+    profile_id: "source_session_v1",
+    operation_id: "bind-release",
+    request_digest: `sha256:${"a".repeat(64)}`,
+    session_id: "session-a",
+    requested_goal_ref: goalRef,
+    current_goal_ref: goalRef,
+    current_binding: null,
+    prior_receipt: null,
+    binding_count: 0,
+    receipt_count: 0,
+  };
+
+  assert.equal(
+    (
+      await dispatchEffectRuntimeMethod(
+        handlers,
+        "goal.source_session.bind.decide",
+        bindingFacts,
+      ) as Record<string, unknown>
+    ).kind,
+    "commit",
+  );
+  assert.equal(
+    (
+      await dispatchEffectRuntimeMethod(
+        handlers,
+        "goal.source_session.unbind.decide",
+        bindingFacts,
+      ) as Record<string, unknown>
+    ).kind,
+    "commit",
+  );
+  assert.equal(
+    (
+      await dispatchEffectRuntimeMethod(
+        handlers,
+        "goal.source_session.recreate.decide",
+        {
+          profile_id: "source_session_v1",
+          operation_id: "recreate-release",
+          request_digest: `sha256:${"b".repeat(64)}`,
+          requested_goal_ref: goalRef,
+          current_goal_ref: goalRef,
+          reserved_goal_ref: {
+            goal_id: "release",
+            goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+          prior_receipt: null,
+          lifetime_receipt_count: 0,
+          session_receipt_count: 0,
+          retiring_binding_count: 0,
+        },
+      ) as Record<string, unknown>
+    ).kind,
+    "commit",
+  );
+});
+
 test("runtime boundary registers the quota monitor-poll transaction", async () => {
   await assert.rejects(
     dispatchEffectRuntimeMethod(handlers, "quota.monitor_poll.commit", {}),

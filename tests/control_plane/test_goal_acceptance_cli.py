@@ -61,6 +61,7 @@ def acceptance_goal(tmp_path, monkeypatch, request):
         runtime, "goal-acceptance", projection, state_path=state, provider=request.param
     )
     document = {
+        "scope": {"kind": "all_advancement"},
         "objective": "Produce a usable export",
         "non_goals": ["No unrelated code cleanup"],
         "criteria": [
@@ -270,6 +271,9 @@ def test_bound_todo_completes_only_after_its_criteria_actually_run(acceptance_go
     )
     code, refused = run(*complete)
     assert code == 1 and refused["reason_code"] == "goal_acceptance_validation_rejected", refused
+    assert refused["goal_acceptance_validation_failure"]["criterion_id"] == "export"
+    assert refused["goal_acceptance_validation_failure"]["validation_status"] == "command_failed"
+    assert "configured criterion" in refused["reason"]
     assert "validation_argv" not in json.dumps(refused)
 
     (project / "artifact.txt").write_text("accepted")
@@ -332,15 +336,44 @@ def test_bound_work_cannot_be_closed_by_editing_its_way_out_of_the_gate(
         terminal = ("todo", "supersede", *common, "--reason", "pivot")
     code, refused = run(*terminal)
     assert code == 1, refused
-    assert refused["reason_code"] in {
-        "goal_acceptance_validation_required",
-        "goal_acceptance_stale",
-    }, refused
+    if escape and "--resume-when" in escape:
+        # A newly added scheduling wait preserves the binding, but the fresh
+        # completion validator must still reject the missing artifact.
+        assert refused["reason_code"] == "goal_acceptance_validation_rejected", refused
+    else:
+        assert refused["reason_code"] in {
+            "goal_acceptance_validation_required",
+            "goal_acceptance_stale",
+        }, refused
     assert "validation_argv" not in json.dumps(refused)
     # The refusal must be a refusal, not a report: the work stays open.
     contract = cli("inspect")[1]["goal_acceptance_contract"]
     assert contract["status"] != "accepted"
     assert contract["verification"] is None
+
+
+def test_real_cli_stale_binding_is_projected_for_agent_replan(acceptance_goal):
+    _, document, cli, run = acceptance_goal
+    basis = cli("inspect")[1]["provider_revision"]
+    code, configured = cli(
+        "configure", "--document", str(document),
+        "--expected-provider-revision", basis, "--execute",
+    )
+    assert code == 0, configured
+    code, updated = run(
+        "todo", "update", "--todo-id", "todo_export", "--goal-id", "goal-acceptance",
+        "--agent-id", "agent-a", "--text", "Write the export artifact and checksum",
+    )
+    assert code == 0, updated
+    assert cli("inspect")[1]["goal_acceptance_contract"]["tasks"][0]["state"] == "stale"
+    code, projected = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+    assert code == 0, projected
+    assert projected["goal_frontier_projection"]["acceptance_gaps"][0]["kind"] == "goal_acceptance_stale"
+    assert "autonomous_replan_obligation" in projected, sorted(projected)
+    obligation = projected["autonomous_replan_obligation"]
+    assert obligation["triggers"][0]["kind"] == "goal_acceptance_stale"
+    assert obligation["triggers"][0]["vision_todo_ids"] == ["todo_export"]
+    assert len(obligation["triggers"][0]["frontier_revision"]) == 64
 
 
 def test_preview_discloses_the_criteria_the_real_call_will_run(acceptance_goal):
@@ -357,3 +390,68 @@ def test_preview_discloses_the_criteria_the_real_call_will_run(acceptance_goal):
     }
     assert "validation_argv" not in json.dumps(preview)
     assert cli("inspect")[1]["goal_acceptance_contract"]["verification"] is None
+
+
+def test_unbound_work_projects_recovery_without_changing_acceptance(acceptance_goal):
+    _, document_path, cli, run = acceptance_goal
+    code, monitor = run(
+        "todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+        "--text", "Observe the public release", "--task-class", "continuous_monitor",
+        "--action-kind", "monitor", "--claimed-by", "agent-a",
+        "--target-key", "release:acceptance-recovery", "--cadence", "30m",
+        "--next-due-at", "2000-01-01T00:00:00+00:00", "--watch-only",
+    )
+    assert code == 0, monitor
+    document = json.loads(document_path.read_text())
+    document["bindings"] = []
+    document_path.write_text(json.dumps(document))
+    _configure(cli, document_path)
+    before = cli("inspect")[1]
+    code, quota = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+    assert code == 0, quota
+    assert quota["decision"] == "autonomous_replan_required", quota
+    assert quota.get("selected_todo") is None
+    assert quota.get("agent_lane_next_action") is None
+    packet = quota["autonomous_replan_obligation"]
+    assert any(trigger["kind"] == "goal_acceptance_unbound" for trigger in packet["triggers"])
+    code, refused = run("todo", "complete", "--goal-id", "goal-acceptance", "--todo-id", "todo_export", "--agent-id", "agent-a")
+    assert code == 1 and refused["reason_code"] == "goal_acceptance_unbound", refused
+    assert cli("inspect")[1] == before
+
+
+def test_owner_scope_correction_restores_independent_work_through_real_cli(acceptance_goal):
+    project, document_path, cli, run = acceptance_goal
+    from loopx.control_plane.goals.goal_frontier.acceptance import acceptance_gaps_from_held_goal_binding
+
+    document = json.loads(document_path.read_text())
+    _configure(cli, document_path)
+    code, added = run("todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+                      "--text", "Review independent public sources", "--claimed-by", "agent-a")
+    assert code == 0, added
+    code, listed = run("todo", "list", "--goal-id", "goal-acceptance", "--role", "agent")
+    assert code == 0, listed
+    independent = next(row for row in listed["todos"] if row["todo_id"] != "todo_export")
+    todo_id = independent["todo_id"]
+    assert independent["goal_acceptance_guard"]["state"] == "unbound"
+    claim = ("todo", "claim", "--goal-id", "goal-acceptance", "--todo-id", todo_id,
+             "--agent-id", "agent-a", "--claimed-by", "agent-a")
+    refused_code, refused = run(*claim)
+    assert refused_code == 1 and "goal_acceptance_unbound" in json.dumps(refused), refused
+    document["scope"] = {"kind": "selected_work", "todo_ids": ["todo_export"]}
+    document_path.write_text(json.dumps(document))
+    configured = _configure(cli, document_path)
+    contract = configured["goal_acceptance_contract"]
+    assert contract["scope"] == document["scope"]
+    code, claimed = run(*claim)
+    assert code == 0, claimed
+    after = run("todo", "list", "--goal-id", "goal-acceptance", "--role", "agent")[1]
+    recovered = next(row for row in after["todos"] if row["todo_id"] == todo_id)
+    assert "goal_acceptance_guard" not in recovered
+    assert acceptance_gaps_from_held_goal_binding(
+        {"goal_acceptance_contract": contract}, after["todos"], agent_id="agent-a") == []
+    # The scoped work's real validator still fails with no artifact; narrowing
+    # the scope does not confer acceptance or manufacture validation receipts.
+    code, verified = cli("verify", "--execute")
+    assert code == 1 and verified["checks_passed"] is False
+    (project / "artifact.txt").write_text("accepted")
+    assert cli("verify", "--execute")[0] == 0

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -10,12 +9,24 @@ from ...control_plane.runtime.time import now_local_iso
 from ...paths import resolve_runtime_root
 from ..todos.active_state_editing import atomic_write_state_text as _atomic_write_text
 from ..coordination.legacy_writer_fence import legacy_todo_write_transaction, require_legacy_state_replacement_allowed
-from ...paths import DEFAULT_RUNTIME_ROOT
-from ..goals.active_state_metadata import (
-    markdown_blockquote, markdown_frontmatter_string, split_state_frontmatter,
+from ..goals.source_session_services import (
+    FreshSourceSessionRegistration,
+    RecreateGoalRequest,
+    SessionBindingRequest,
+    commit_project_session_binding,
+    commit_project_session_unbinding,
+    recreate_goal_instance,
+    register_fresh_source_session_project,
+    resolve_source_session_project,
 )
+from ...paths import DEFAULT_RUNTIME_ROOT
 from ...repository_identity import normalize_repository_identity
 from .contract import validate_project_record_bindings
+from .registration_state import (
+    registration_state_matches,
+    registration_state_updated_at,
+    render_registration_state,
+)
 from .registry_codec import (
     load_project_registry,
     mutate_project_registry,
@@ -120,82 +131,6 @@ def _resolve_exact_project_binding(
     }
 
 
-def _state_markdown(
-    *,
-    project_id: str,
-    goal_id: str,
-    objective: str,
-    non_goals: list[str],
-    acceptance: list[str],
-    unknowns: list[str],
-    next_effect: str,
-    stop_condition: str,
-    updated_at: str,
-) -> str:
-    def bullets(items: list[str], *, empty: str) -> str:
-        return "\n".join(f"- {item}" for item in items) if items else f"- {empty}"
-
-    return f"""---
-status: active
-owner_mode: goal
-project_id: {json.dumps(project_id, ensure_ascii=False)}
-objective: {markdown_frontmatter_string(objective)}
-updated_at: {updated_at}
-adapter_id: {goal_id}
----
-
-# Active Goal State
-
-## Objective
-
-{markdown_blockquote(objective)}
-
-## Acceptance
-
-{bullets(acceptance, empty="No acceptance evidence recorded.")}
-
-## Non-Goals
-
-{bullets(non_goals, empty="No additional non-goals recorded.")}
-
-## Unknowns
-
-{bullets(unknowns, empty="No decision-relevant unknowns recorded.")}
-
-## User Todo / Owner Review Reading Queue
-
-## Agent Todo
-
-## Next Action
-
-- {next_effect}
-
-## Stop Condition
-
-- {stop_condition}
-
-## Progress Ledger
-
-- Registered Project `{project_id}` and Goal `{goal_id}`.
-"""
-
-
-def _registration_state_matches(existing: str, expected: str, *, objective: str) -> bool:
-    """Compare metadata values and exact narrative without rewriting old state."""
-    existing_metadata, existing_body = split_state_frontmatter(existing)
-    expected_metadata, expected_body = split_state_frontmatter(expected)
-    if existing_metadata != expected_metadata:
-        return False
-    marker = "\n## Objective\n\n"
-    existing_prefix, separator, existing_section = existing_body.partition(marker)
-    expected_prefix, _, expected_section = expected_body.partition(marker)
-    if not separator or existing_prefix != expected_prefix:
-        return False
-    quoted = markdown_blockquote(objective)
-    remainder = expected_section[len(quoted):]
-    return existing_section in (quoted + remainder, objective + remainder)
-
-
 def register_project_goal(
     *,
     registry_path: Path,
@@ -212,6 +147,8 @@ def register_project_goal(
     stop_condition: str,
     repository_bindings: list[str],
     external_locator_bindings: list[str],
+    goal_instance_profile: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     project_id = _identifier(project_id, field="project_id")
     goal_id = _identifier(goal_id, field="goal_id")
@@ -271,7 +208,7 @@ def register_project_goal(
         "next_effect": next_effect,
         "stop_condition": stop_condition,
     }
-    state_text = _state_markdown(
+    state_text = render_registration_state(
         project_id=project_id,
         goal_id=goal_id,
         objective=objective,
@@ -282,6 +219,32 @@ def register_project_goal(
         stop_condition=stop_condition,
         updated_at=updated_at,
     )
+    if goal_instance_profile is not None:
+        if goal_instance_profile != "source_session_v1":
+            raise ValueError("goal_instance_profile is unsupported")
+        operation_id = _identifier(operation_id or "", field="operation_id")
+        return register_fresh_source_session_project(
+            FreshSourceSessionRegistration(
+                registry_path=registry_path,
+                runtime_root=(runtime_root or DEFAULT_RUNTIME_ROOT)
+                .expanduser()
+                .resolve(),
+                operation_id=operation_id,
+                project_id=project_id,
+                goal_id=goal_id,
+                objective=objective,
+                non_goals=non_goals,
+                acceptance=acceptance,
+                unknowns=unknowns,
+                next_effect=next_effect,
+                stop_condition=stop_condition,
+                project_record=project_record,
+                goal_record=goal_record,
+                state_file=state_file,
+            )
+        )
+    if operation_id is not None:
+        raise ValueError("operation_id requires goal_instance_profile")
 
     with project_registry_transaction(
         registry_path,
@@ -326,13 +289,9 @@ def register_project_goal(
                 require_legacy_state_replacement_allowed(runtime_root=effective_root, goal_id=goal_id, goal=existing_goal)
             if state_file.exists():
                 existing_state = state_file.read_text(encoding="utf-8")
-                existing_updated_at = re.search(
-                    r"^updated_at: (.+)$",
-                    existing_state,
-                    flags=re.MULTILINE,
-                )
+                existing_updated_at = registration_state_updated_at(existing_state)
                 matching_state = (
-                    _state_markdown(
+                    render_registration_state(
                         project_id=project_id,
                         goal_id=goal_id,
                         objective=objective,
@@ -341,12 +300,12 @@ def register_project_goal(
                         unknowns=unknowns,
                         next_effect=next_effect,
                         stop_condition=stop_condition,
-                        updated_at=existing_updated_at.group(1),
+                        updated_at=existing_updated_at,
                     )
                     if existing_updated_at is not None
                     else None
                 )
-                if matching_state is None or not _registration_state_matches(
+                if matching_state is None or not registration_state_matches(
                     existing_state, matching_state, objective=objective,
                 ):
                     raise ValueError(
@@ -405,12 +364,28 @@ def bind_session(
     registry_path: Path,
     session_id: str,
     goal_id: str,
+    goal_instance_id: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     session_id = str(session_id or "").strip()
     if not session_id:
         raise ValueError("session_id is required")
     goal_id = _identifier(goal_id, field="goal_id")
     registry_path = registry_path.expanduser()
+    if goal_instance_id is not None or operation_id is not None:
+        if goal_instance_id is None or operation_id is None:
+            raise ValueError(
+                "goal_instance_id and operation_id are both required for exact binding"
+            )
+        return commit_project_session_binding(
+            SessionBindingRequest(
+                registry_path=registry_path,
+                session_id=session_id,
+                goal_id=goal_id,
+                goal_instance_id=goal_instance_id,
+                operation_id=_identifier(operation_id, field="operation_id"),
+            )
+        )
 
     def reduce(registry: dict[str, Any]) -> dict[str, Any]:
         project_id = _project_id_for_goal(
@@ -476,6 +451,8 @@ def unbind_session(
     registry_path: Path,
     session_id: str,
     goal_id: str,
+    goal_instance_id: str | None = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Remove one exact session-to-goal binding without touching peer sessions."""
 
@@ -484,6 +461,20 @@ def unbind_session(
         raise ValueError("session_id is required")
     goal_id = _identifier(goal_id, field="goal_id")
     registry_path = registry_path.expanduser()
+    if goal_instance_id is not None or operation_id is not None:
+        if goal_instance_id is None or operation_id is None:
+            raise ValueError(
+                "goal_instance_id and operation_id are both required for exact unbinding"
+            )
+        return commit_project_session_unbinding(
+            SessionBindingRequest(
+                registry_path=registry_path,
+                session_id=session_id,
+                goal_id=goal_id,
+                goal_instance_id=goal_instance_id,
+                operation_id=_identifier(operation_id, field="operation_id"),
+            )
+        )
 
     def reduce(registry: dict[str, Any]) -> dict[str, Any]:
         project_id = _project_id_for_goal(
@@ -538,6 +529,26 @@ def unbind_session(
     )
 
 
+def recreate_goal(
+    *,
+    registry_path: Path,
+    goal_id: str,
+    goal_instance_id: str,
+    operation_id: str,
+    execute: bool,
+) -> dict[str, Any]:
+    if not execute:
+        raise ValueError("recreate-goal requires --execute")
+    return recreate_goal_instance(
+        RecreateGoalRequest(
+            registry_path=registry_path.expanduser(),
+            goal_id=_identifier(goal_id, field="goal_id"),
+            goal_instance_id=str(goal_instance_id or "").strip(),
+            operation_id=_identifier(operation_id, field="operation_id"),
+        )
+    )
+
+
 def resolve_project(
     *,
     registry_path: Path,
@@ -545,11 +556,21 @@ def resolve_project(
     session_id: str | None,
     repository: str | None,
     external_locator: str | None,
+    goal_id: str | None = None,
+    goal_instance_id: str | None = None,
 ) -> dict[str, Any]:
     registry_path = registry_path.expanduser()
     if not registry_path.exists():
         raise FileNotFoundError(f"registry file does not exist: {registry_path}")
     registry = load_project_registry(registry_path)
+    if registry.get("profile_id") == "source_session_v1":
+        return resolve_source_session_project(
+            registry=registry,
+            registry_path=registry_path,
+            goal_id=goal_id,
+            goal_instance_id=goal_instance_id,
+            session_id=session_id,
+        )
     projects = _registry_records(
         registry,
         field="projects",

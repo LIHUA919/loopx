@@ -12,10 +12,14 @@ import { FrontstageDeveloperPage } from "./views/frontstage-developer-page";
 import { useEffect } from "react";
 import { resolveLocalStatusUrl } from "./data/local-status-query";
 import { BenchmarkStudyPage } from "./views/benchmark-study-page";
+import { AnswerReportPage } from "./features/personal-workspace/answer-report-page";
 
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
   statusUrl: z.string().optional().default(""),
+  view: z.literal("conversation").optional(),
+  reportSessionId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
+  reportMessageId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
 });
 
 const frontstageSearchSchema = z.object({
@@ -71,7 +75,12 @@ export const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   validateSearch: (search) => searchSchema.parse(search),
-  component: DashboardPage,
+  component: () => {
+    const search = dashboardRoute.useSearch();
+    return search.reportSessionId && search.reportMessageId
+      ? <AnswerReportPage sessionId={search.reportSessionId} messageId={search.reportMessageId} statusUrl={search.statusUrl}/>
+      : <DashboardPage/>;
+  },
 });
 
 export const frontstageRoute = createRoute({

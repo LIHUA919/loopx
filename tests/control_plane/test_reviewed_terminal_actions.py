@@ -95,7 +95,11 @@ def test_completion_replay_does_not_need_private_validator(tmp_path, monkeypatch
     state.unlink()
     declaration_path = completion_validation_declaration_path(runtime_root=tmp_path / "runtime", goal_id="goal-a", todo_id=todo_id)
     saved_declaration = declaration_path.read_bytes()
+    declaration_digest = json.loads(saved_declaration)["declaration_sha256"]
+    prepared_blob_path = declaration_path.parent / "blobs" / f"{declaration_digest}.json"
+    saved_prepared_blob = prepared_blob_path.read_bytes()
     declaration_path.unlink()
+    prepared_blob_path.unlink()
     service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
     result = service.apply(proposal["proposal_id"])["proposal"]
     assert result["status"] == "failed"
@@ -103,8 +107,9 @@ def test_completion_replay_does_not_need_private_validator(tmp_path, monkeypatch
     assert result["failure"]["details"]["canonical_committed"] is True
     assert marker.read_text() == "x"
     # The business receipt needs no argv; lossless Markdown still needs the
-    # original private declaration. Restore it, never invent a replacement.
-    declaration_path.write_bytes(saved_declaration)
+    # canonical digest's original private declaration. The per-Todo copy and
+    # immutable prepared blob are alternate reads of the same declaration.
+    prepared_blob_path.write_bytes(saved_prepared_blob)
     result = service.apply(proposal["proposal_id"])["proposal"]
     assert result["status"] == "applied"
     assert marker.read_text() == "x"
@@ -198,3 +203,36 @@ def test_packaged_chat_http_recovers_terminal_action(tmp_path, monkeypatch, prov
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("turn_key", [None, "named-completion"])
+def test_monitor_completion_uses_explicit_identity_modes(tmp_path, monkeypatch, provider, turn_key):
+    from loopx.control_plane.todos import provider_terminal_lifecycle
+
+    registry, _, _, _ = fixture(tmp_path, provider, "stop")
+    todo_id = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"][0]["todo_id"]
+    execute = provider_terminal_lifecycle.effect_runtime_result
+    identities = []
+
+    def capture(method, params, **kwargs):
+        if method == "coordination.local_authority.todo_terminal":
+            assert params["schema_version"] == "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
+            assert "operation_id" not in params
+            identities.append(params["operation_identity"])
+        return execute(method, params, **kwargs)
+
+    monkeypatch.setattr(provider_terminal_lifecycle, "effect_runtime_result", capture)
+    kwargs = dict(registry_path=registry, goal_id="goal-a", todo_id=todo_id,
+                  agent_id="agent-a", no_followup=True, completion_turn_key=turn_key)
+    completed = complete_goal_todo(**kwargs)
+    assert completed["provider_status"] == "applied"
+    replay = complete_goal_todo(**kwargs)
+    assert replay["provider_status"] == "replayed"
+    assert replay["original_receipt"] == completed["original_receipt"]
+    assert identities
+    if turn_key is None:
+        assert all(identity == {"kind": "current_monitor_cycle"} for identity in identities)
+    else:
+        assert all(identity["kind"] == "explicit" and identity["operation_id"] for identity in identities)
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"][0]["status"] == "done"

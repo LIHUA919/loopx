@@ -102,15 +102,11 @@ class TeamPlanReviewCallbackStream:
         self.thread.join(timeout=1)
 
 
-def active_profile_chat_ids(
-    snapshot: Mapping[str, Any], profile: str
-) -> list[str]:
+def active_profile_chat_ids(snapshot: Mapping[str, Any], profile: str) -> list[str]:
     """Return active Goal-channel chats owned by one sender profile."""
 
     binding_payloads = snapshot.get("binding_payloads")
-    binding_payloads = (
-        binding_payloads if isinstance(binding_payloads, Mapping) else {}
-    )
+    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
     active_target_refs = {
         str(binding.get("target_ref") or "")
         for goal_id, payload in binding_payloads.items()
@@ -122,6 +118,15 @@ def active_profile_chat_ids(
     targets = targets.get("targets") if isinstance(targets, Mapping) else None
     if not isinstance(targets, Mapping):
         return []
+    app_ids = {
+        str(identity.get("bot_app_id") or "")
+        for target in targets.values()
+        if isinstance(target, Mapping)
+        for identity in [target.get("identity")]
+        if isinstance(identity, Mapping)
+        and str(identity.get("sender_profile") or "") == profile
+        and identity.get("bot_app_id")
+    }
     chats: set[str] = set()
     for target_ref, target in targets.items():
         if not isinstance(target, Mapping) or target.get("enabled") is not True:
@@ -133,10 +138,10 @@ def active_profile_chat_ids(
         if not isinstance(identity, Mapping) or not isinstance(channel, Mapping):
             continue
         chat_id = str(channel.get("chat_id") or "")
+        same_app = bool(app_ids) and str(identity.get("bot_app_id") or "") in app_ids
         if (
-            str(identity.get("sender_profile") or "") == profile
-            and _CHAT_ID.fullmatch(chat_id)
-        ):
+            same_app or str(identity.get("sender_profile") or "") == profile
+        ) and _CHAT_ID.fullmatch(chat_id):
             chats.add(chat_id)
     return sorted(chats)
 
@@ -281,10 +286,9 @@ def handle_lark_review_callback_for_profile(
     *,
     action_service: Any,
     action_store_root: Path,
-    profile: str,
     profile_config: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Bind a callback to the exact configured sender identity."""
+    """Bind a callback to the App identity of the configured listener."""
 
     if not isinstance(profile_config, Mapping):
         raise ValueError("Lark manager profile is unavailable")
@@ -293,8 +297,6 @@ def handle_lark_review_callback_for_profile(
         action_service=action_service,
         action_store_root=action_store_root,
         profile_app_id=str(profile_config.get("bot_app_id") or ""),
-        cli_bin=str(profile_config.get("cli_bin") or "lark-cli"),
-        profile=profile,
     )
 
 
@@ -671,11 +673,15 @@ def handle_team_plan_review_callback(
     action_service: Any,
     action_store_root: Path,
     profile_app_id: str,
-    cli_bin: str,
-    profile: str,
     runner: CommandRunner = default_subprocess_runner,
 ) -> dict[str, Any]:
-    """Apply one authenticated decision and patch every audience readback."""
+    """Apply one authenticated decision and patch every audience readback.
+
+    The card's sending identity is authoritative from the authenticated
+    delivery record: one App-scoped consumer may handle several local profile
+    aliases, so the alias that receives a callback can differ from the alias
+    that sent the card (see :func:`active_profile_chat_ids`).
+    """
 
     action = _callback_action(event)
     callback_token = str(event.get("token") or "").strip()
@@ -714,10 +720,12 @@ def handle_team_plan_review_callback(
         raise ActionConflictError("team plan review card delivery was not recorded")
     if action["state_fingerprint"] != proposal.get("expected_state_fingerprint"):
         raise ActionConflictError("team plan callback state fingerprint drifted")
+    delivery_profile = str(delivery.get("sender_profile") or "")
+    delivery_cli_bin = str(delivery.get("cli_bin") or "")
     if (
         profile_app_id != delivery.get("app_id")
-        or cli_bin != delivery.get("cli_bin")
-        or profile != delivery.get("sender_profile")
+        or not delivery_profile
+        or not delivery_cli_bin
         or str(event["message_id"]) != delivery.get("message_id")
         or str(event["chat_id"]) != delivery.get("chat_id")
     ):
@@ -739,8 +747,8 @@ def handle_team_plan_review_callback(
         if card_content is None or card_content == "":
             card_content = _read_callback_card_content(
                 runner=runner,
-                cli_bin=cli_bin,
-                profile=profile,
+                cli_bin=delivery_cli_bin,
+                profile=delivery_profile,
                 message_id=str(event["message_id"]),
                 chat_id=str(event["chat_id"]),
                 app_id=profile_app_id,
@@ -751,8 +759,8 @@ def handle_team_plan_review_callback(
             raise ActionConflictError("team plan callback card content drifted")
     if not _operator_membership_verified(
         runner=runner,
-        cli_bin=cli_bin,
-        profile=profile,
+        cli_bin=delivery_cli_bin,
+        profile=delivery_profile,
         chat_id=str(event["chat_id"]),
         operator_id=operator_id,
     ):

@@ -390,7 +390,16 @@ PY
     fi
     skill_target="$skills_dir/$skill_name"
     skill_tmp="$(mktemp -d "$skills_dir/.${skill_name}.tmp.XXXXXX")"
-    if ! cp -R "$skill_source"/. "$skill_tmp"/; then
+    if ! PYTHONSAFEPATH=1 PYTHONPATH="$source_root${PYTHONPATH:+:$PYTHONPATH}" \
+      "${LOOPX_PYTHON:-python3}" - "$skill_source" "$skill_tmp" <<'PY'
+import sys
+from pathlib import Path
+
+from loopx.workflow_skill_install import _install_one_skill
+
+_install_one_skill(Path(sys.argv[1]), Path(sys.argv[2]))
+PY
+    then
       rm -rf "$skill_tmp"
       return 1
     fi
@@ -670,11 +679,28 @@ if [[ -z "$shell_profile" ]]; then
 fi
 
 configure_python_runtime
-
 promote_default=0
 if resolve_default_promotion; then
   promote_default=1
 fi
+if [[ "$promote_default" == "1" ]]; then
+  # Preparing shared Chat assets is part of the guarded installation.
+  mkdir -p "$releases_dir"
+  run_under_install_guard "$@"
+fi
+chat_bundle_args=(ensure)
+if [[ -L "$bin_dir/loopx" ]]; then
+  previous_chat_assets="$("${LOOPX_PYTHON:-python3}" - "$bin_dir/loopx" <<'PYTHON'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve().parents[1] / "loopx/web/chat")
+PYTHON
+)"
+  if [[ -f "$previous_chat_assets/index.html" ]]; then
+    chat_bundle_args+=(--previous "$previous_chat_assets")
+  fi
+fi
+"${LOOPX_PYTHON:-python3}" "$repo_root/scripts/chat_bundle.py" "${chat_bundle_args[@]}"
 
 if [[ "$promote_default" == "0" ]]; then
   if [[ "$install_canary" == "0" ]]; then
@@ -708,8 +734,6 @@ fi
 
 export LOOPX_PROMOTION_MODE="$promotion_mode"
 
-mkdir -p "$releases_dir"
-run_under_install_guard "$@"
 warn_stale_promotion_readiness
 acquire_install_lock
 mkdir -p "$bin_dir"
@@ -730,13 +754,15 @@ copy_path "$repo_root/.github" "$release_tmp/.github"
 copy_path "$repo_root/README.md" "$release_tmp/README.md"
 copy_path "$repo_root/LICENSE" "$release_tmp/LICENSE"
 copy_path "$repo_root/pyproject.toml" "$release_tmp/pyproject.toml"
+copy_path "$repo_root/setup.py" "$release_tmp/setup.py"
+copy_path "$repo_root/MANIFEST.in" "$release_tmp/MANIFEST.in"
 printf '%s\n' "$LOOPX_PYTHON" >"$release_tmp/.loopx-python"
 find "$release_tmp" -name __pycache__ -type d -prune -exec rm -rf {} +
 find "$release_tmp" -name '*.pyc' -type f -delete
 if [[ -d "$release_tmp/apps" ]]; then
   find "$release_tmp/apps" \
     \( -name node_modules -o -name .next -o -name dist -o -name build -o -name coverage \) \
-    -type d -prune -exec rm -rf {} +
+    \( -type d -o -type l \) -prune -exec rm -rf {} +
 fi
 PYTHONPATH="$release_tmp" "${LOOPX_PYTHON:-python3}" \
   "$release_tmp/scripts/render-manpage.py" \
@@ -758,6 +784,12 @@ if ! validate_release_candidate "$release_dir"; then
 fi
 if ! preflight_workflow_skills "$release_dir/skills" "$release_dir" "$bin_dir/loopx"; then
   rm -rf "$release_dir"
+  exit 1
+fi
+# Data upgrade is a separate, resumable operation. Never delete its backups or
+# roll migrated stores back merely because a later launcher/skill step fails.
+if ! "$release_dir/scripts/loopx" --format json authority-archive upgrade --all-known --execute; then
+  echo "loopx installer error: authority format upgrade failed; backups are retained. Retry with this candidate before activation." >&2
   exit 1
 fi
 install_symlink "$release_dir/scripts/loopx" "$bin_dir/loopx"
@@ -925,6 +957,7 @@ $slash_line
 $claude_line
 $opencode_line
 - first-run feedback (optional): https://github.com/loopx-project/loopx/issues/new?template=first_run.yml
+- basic usage statistics (after first-use notice): loopx usage-ping status; disable: loopx usage-ping disable
 
 Current shell can use it with:
   export PATH="$bin_dir:\$PATH"

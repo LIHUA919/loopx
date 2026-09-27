@@ -94,6 +94,9 @@ def register_quota_monitor_poll_request_arguments(
         help="Current Monitor execution key for canonical quota monitor-poll; requires --task-lease-expected-version.")
     quota_parser.add_argument("--task-lease-expected-version", type=int,
         help="Current Monitor lease version, checked atomically with observation and successors; never renews the lease.")
+    quota_parser.add_argument("--use-current-task-lease", action="store_true",
+        help=("For an executing, turn-scoped monitor-poll with --todo-id, resolve the canonical "
+              "lease proof or replay the exact prior transaction proof. Does not acquire or renew a lease."))
     quota_parser.add_argument("--next-claimed-by", help="Registered agent id to claim the `--next-agent-todo` follow-up.")
 
 
@@ -101,6 +104,18 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
     lease_key = getattr(args, "task_lease_idempotency_key", None)
     lease_version = getattr(args, "task_lease_expected_version", None)
+    use_current_lease = bool(getattr(args, "use_current_task_lease", False))
+    if use_current_lease:
+        if command != "monitor-poll" or not args.execute:
+            raise QuotaCommandValidationError("--use-current-task-lease requires executing quota monitor-poll")
+        if not args.todo_id or not args.turn_instance_id or not args.agent_id:
+            raise QuotaCommandValidationError(
+                "--use-current-task-lease requires --todo-id, --turn-instance-id, and --agent-id"
+            )
+        if lease_key is not None or lease_version is not None:
+            raise QuotaCommandValidationError(
+                "--use-current-task-lease cannot be combined with explicit task lease proof"
+            )
     if lease_key is not None or lease_version is not None:
         if command != "monitor-poll":
             raise QuotaCommandValidationError("task lease proof is only valid with quota monitor-poll")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from ..control_plane.goals.acceptance import (
     configure_goal_acceptance,
@@ -14,7 +15,7 @@ from ..control_plane.goals.acceptance import (
 )
 
 
-def register_goal_acceptance_command(subparsers, add_format):
+def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
     parser = subparsers.add_parser(
         "goal-acceptance",
         help="Configure, inspect or verify a versioned Goal acceptance basis.",
@@ -29,7 +30,7 @@ def register_goal_acceptance_command(subparsers, add_format):
     parser.add_argument(
         "--document",
         type=Path,
-        help="Owner-approved contract JSON; used only by configure.",
+        help="Owner-approved JSON with explicit scope: selected_work plus todo_ids, or all_advancement. Used only by configure.",
     )
     parser.add_argument(
         "--expected-provider-revision",
@@ -45,7 +46,7 @@ def register_goal_acceptance_command(subparsers, add_format):
     )
 
 
-def render_goal_acceptance(payload):
+def render_goal_acceptance(payload: dict[str, Any]) -> str:
     lines = ["# Goal acceptance", "", f"- ok: {payload.get('ok')}"]
     if payload.get("error"):
         return "\n".join([*lines, f"- error: {payload['error']}"])
@@ -56,6 +57,7 @@ def render_goal_acceptance(payload):
     if contract.get("enabled"):
         lines.extend(
             [
+                f"- coverage: {(contract.get('scope') or {}).get('kind', 'all_advancement')}",
                 f"- acceptance revision: {contract.get('revision')}",
                 f"- objective: {contract.get('objective')}",
             ]
@@ -75,9 +77,9 @@ def handle_goal_acceptance_command(
     *,
     registry_path: Path,
     runtime_root_arg: str | None,
-    output_format,
-    print_payload,
-):
+    output_format: Any,
+    print_payload: Any,
+) -> int | None:
     if args.command != "goal-acceptance":
         return None
     try:

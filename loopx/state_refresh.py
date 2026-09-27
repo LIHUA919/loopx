@@ -7,7 +7,7 @@ from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from typing import Any
 
-from .control_plane.runtime.time import now_local_iso
+from .control_plane.runtime.time import chronology_key, now_local_iso
 from .control_plane.work_items.delivery_history import require_consistent_delivery_claim
 from .control_plane.work_items.delivery_batch_scale import (
     DELIVERY_BATCH_SCALE_CHOICES as DELIVERY_BATCH_SCALE_CHOICES,
@@ -28,6 +28,9 @@ from .control_plane.agents.workspace_guard import (
 from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
+from .control_plane.quota.blocked_retry import require_blocked_retry_wait
+from .control_plane.coordination.local_authority import local_authority_is_promoted
+from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from .control_plane.quota.settlement import (
     SettlementIdentity,
     attach_settlement_progress,
@@ -53,6 +56,7 @@ from .control_plane.work_items.progress_observation import (
 from .control_plane.work_items.semantic_replan_writeback import (
     qualify_refresh_replan_writeback,
 )
+from .capabilities.progress_review.context import external_progress_review_context
 from .control_plane.work_items.refresh_recommendation import (
     DEFAULT_REFRESH_ACTION as DEFAULT_REFRESH_ACTION,
     RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION as RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION,
@@ -92,6 +96,10 @@ from .control_plane.goals.vision_checkpoint import (
     prepare_vision_refresh,
 )
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
+from .control_plane.goals.checkpoint_context_io import (
+    checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
+)
+from .file_lock import exclusive_run_index_lock
 from .registry import registry_goals, resolve_state_file
 from .runtime import validate_goal_id_path_segment
 from .state_projection import (
@@ -376,6 +384,7 @@ def build_state_refresh_record(
     progress_observation: dict[str, Any] | None = None,
     delivery_workspace: dict[str, Any] | None = None,
     settlement_identity: SettlementIdentity | None = None,
+    todo_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     frontmatter = parse_frontmatter(state_text)
     next_action = active_state_next_action_entries(
@@ -417,7 +426,12 @@ def build_state_refresh_record(
     }
     if recommended_action_resolution:
         record["recommended_action_resolution"] = recommended_action_resolution
-    projection_gap = state_projection_gap_warning(state_text)
+    projection_gap = state_projection_gap_warning(
+        state_text,
+        # An authoritative empty group must not fall back to stale Markdown.
+        user_todos=(todo_fields.get("user_todos") or {}) if todo_fields is not None else None,
+        agent_todos=(todo_fields.get("agent_todos") or {}) if todo_fields is not None else None,
+    )
     if projection_gap:
         record["state_projection_gap"] = projection_gap
     if delivery_batch_scale:
@@ -504,6 +518,7 @@ def _build_state_refresh_output_projections(
         "delivery_outcome",
         "delivery_workspace",
         "settlement_identity",
+        "blocked_retry",
         "refresh_recovery",
         "turn_instance_id",
         "todo_id",
@@ -573,9 +588,16 @@ def _build_state_refresh_output_projections(
 
 
 def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
+    delivery = payload.get("projection_outbox")
+    delivery_lines = []
+    if isinstance(delivery, dict):
+        delivery_lines.append(f"- Todo display: `{delivery['status']}`")
+        if delivery.get("status") == "pending":
+            delivery_lines.append("- Canonical Todo state is committed; repair the display without repeating business work or quota spend.")
+            delivery_lines.append(str(delivery.get("recommended_action") or ""))
     recovery_markdown = render_refresh_recovery_markdown(payload)
     if recovery_markdown is not None:
-        return recovery_markdown
+        return "\n".join([recovery_markdown, *delivery_lines])
     state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
     frontmatter = state.get("frontmatter") if isinstance(state.get("frontmatter"), dict) else {}
     lines = [
@@ -598,6 +620,7 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
         f"- state_updated_at: `{frontmatter.get('updated_at')}`",
         f"- health_check: `{payload.get('health_check')}`",
     ]
+    lines.extend(delivery_lines)
     lines.extend(render_settlement_progress_markdown(payload))
     if "external_sink_delivery_authorized" in payload:
         lines.append(
@@ -796,6 +819,7 @@ def refresh_state_run(
     agent_vision_packet: dict[str, Any] | None = None,
     merge_agent_vision_patch: bool = False,
     vision_unchanged_reason: str | None = None,
+    checkpoint_read_context_id: str | None = None,
     progress_observation: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
@@ -805,7 +829,11 @@ def refresh_state_run(
     sync_global: bool = True,
     external_delivery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .control_plane.todos.provider_projection import recover_refresh_todo_projection
+
     safe_goal_id = validate_goal_id_path_segment(goal_id)
+    if checkpoint_read_context_id and not turn_instance_id:
+        raise ValueError("--checkpoint-read-context requires the original Turn identity")
     validate_public_safe_text("classification", classification)
     if usage_measurement is not None and usage_codex_session is not None:
         raise ValueError("--usage-json cannot be combined with --usage-codex-session")
@@ -876,7 +904,7 @@ def refresh_state_run(
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
     # State-dependent admission through the final append remains serialized.
     # Only pure input validation runs before this transitional persistence lock.
-    with (nullcontext() if dry_run else exclusive_file_lock(
+    with (nullcontext() if dry_run else exclusive_run_index_lock(
         runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl", operation="refresh-state"
     )):
         settlement_identity = None
@@ -888,6 +916,8 @@ def refresh_state_run(
         prior_writeback_run = None
         checkpoint_supplement = False
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
+            if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
+                require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
             if not turn_scoped_settlement_qualified:
                 raise ValueError(
                     TURN_SCOPED_SETTLEMENT_REQUIREMENT + ": " + turn_scoped_settlement_gap
@@ -899,7 +929,8 @@ def refresh_state_run(
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
                 replan_obligation_id=normalized_replan_obligation_id,
-                refresh_retry={
+                refresh_retry=(refresh_retry_request := {
+                    "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,
                     "vision": agent_vision_packet,
                     "unchanged_reason": vision_unchanged_reason,
@@ -918,7 +949,7 @@ def refresh_state_run(
                     "delivery_batch_scale": normalized_delivery_batch_scale,
                     "delivery_boundary": normalized_delivery_boundary,
                     "progress_observation": normalized_progress_observation,
-                },
+                }),
             )
             if settlement_readback is None:
                 raise RuntimeError("exact settlement readback unexpectedly returned not-found")
@@ -936,12 +967,19 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
+                inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run,
             )
             if recovery_payload is not None:
-                return recovery_payload
+                return recover_refresh_todo_projection(
+                    recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
+                    goal_id=safe_goal_id, project=project, state_file=state_file,
+                )
+            if checkpoint_read_context_id and not checkpoint_supplement:
+                raise ValueError("--checkpoint-read-context applies only to a missing-checkpoint supplement")
             settlement_workspace_requirement = resolve_settlement_workspace_requirement(
                 delivery_workspace_causality, settlement_binding_kind=settlement_identity.binding_kind.value
             )
@@ -969,8 +1007,11 @@ def refresh_state_run(
             project_override=project,
             state_file_override=state_file,
         )
-        state_text, planning_events, todo_fields = load_refresh_planning_source(
+        planning_source = load_refresh_planning_source(
             runtime_root, safe_goal_id, resolved_state_file, require_display=bool(next_action)
+        )
+        state_text, planning_events, todo_fields = (
+            planning_source.state_text, planning_source.events, planning_source.todo_fields,
         )
         expected_write_state_text = state_text
         normalized_next_action = normalize_next_action_text(next_action) if next_action else None
@@ -1026,7 +1067,10 @@ def refresh_state_run(
                 run
                 for _, run in sorted(
                     enumerate(existing_runs),
-                    key=lambda item: (str(item[1].get("generated_at") or ""), item[0]),
+                    key=lambda item: (
+                        *chronology_key(item[1].get("generated_at")),
+                        item[0],
+                    ),
                     reverse=True,
                 )
             ]
@@ -1116,6 +1160,11 @@ def refresh_state_run(
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
             registry_goal=registry_goal,
+            # The acknowledgement is judged against the same sentinel-derived
+            # obligation that status shows; `off` loads nothing.
+            external_progress_review=external_progress_review_context(
+                registry_goal or {"id": safe_goal_id}, runtime_root
+            ),
             completion_todo_id=completion_todo_id,
             completion_turn_key=completion_turn_key,
             classification=classification,
@@ -1129,6 +1178,34 @@ def refresh_state_run(
         effective_autonomous_replan_recorded = (
             replan_qualification.autonomous_replan_recorded
         )
+        blocked_retry = None
+        if checkpoint_supplement and prior_writeback_run is not None:
+            blocked_retry = prior_writeback_run.get("blocked_retry")
+        elif (
+            settlement_identity is not None
+            and settlement_identity.binding_kind.value == "todo"
+            and normalized_delivery_outcome == "outcome_gap"
+            and isinstance(normalized_progress_observation, dict)
+            and normalized_progress_observation.get("result_class") == "blocked"
+        ):
+            blocked_todo_fields = todo_fields
+            if blocked_todo_fields is None:
+                blocked_todo_fields = parse_active_state_todos(
+                    state_text,
+                    goal=registry_goal,
+                    state_path=resolved_state_file,
+                    preferred_todo_ids={settlement_identity.todo_id or ""},
+                    rollout_events=planning_events,
+                    item_limit=None,
+                )
+            blocked_retry = require_blocked_retry_wait(
+                blocked_todo_fields,
+                todo_id=settlement_identity.todo_id or "",
+                observed_at=generated_at,
+                allow_turn_settlement_retry=local_authority_is_promoted(
+                    runtime_root=runtime_root, goal_id=safe_goal_id,
+                ),
+            )
         # read_heartbeat_settlement admits checkpoint_supplement only for a
         # checkpoint-only retry of an already committed writeback with the
         # exact Goal/Agent/Todo/Turn and delivery identity. It rejects replayed
@@ -1161,6 +1238,7 @@ def refresh_state_run(
             todo_id=(settlement_identity.todo_id if settlement_identity else None),
             completion_todo_id=completion_todo_id,
             autonomous_replan_recorded=effective_autonomous_replan_recorded,
+            blocked_retry=blocked_retry,
         )
         if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
             raise ValueError(
@@ -1265,7 +1343,10 @@ def refresh_state_run(
             progress_observation=normalized_progress_observation,
             delivery_workspace=delivery_workspace,
             settlement_identity=settlement_identity,
+            todo_fields=todo_fields,
         )
+        if blocked_retry is not None:
+            record["blocked_retry"] = blocked_retry
         if delivery_workspace_causality:
             record["delivery_workspace_causality"] = delivery_workspace_causality
         if refresh_recovery:
@@ -1334,6 +1415,17 @@ def refresh_state_run(
         # spans ledger-basis read + row append so concurrent refreshes cannot fund
         # two deltas from one stale basis; the appended row advances the basis.
         with ExitStack() as usage_booking_guard:
+            if checkpoint_supplement:
+                assert settlement_identity is not None
+                context = usage_booking_guard.enter_context(checkpoint_commit_guard(
+                    runtime_root=runtime_root, registry_path=registry_path,
+                    state_file=resolved_state_file, identity=settlement_identity,
+                    read_context_id=checkpoint_read_context_id,
+                ))
+                for projection in (record, index_record, payload):
+                    projection["vision_checkpoint"] = {
+                        **projection["vision_checkpoint"], "read_context": context,
+                    }
             if usage_codex_session is not None:
                 if not dry_run:
                     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -1403,13 +1495,25 @@ def refresh_state_run(
                 index_record["markdown_path"] = str(markdown_path)
                 payload["json_path"] = str(json_path)
                 payload["markdown_path"] = str(markdown_path)
-                json_path.write_text(
-                    json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-                    encoding="utf-8",
-                )
-                markdown_path.write_text(render_state_refresh_markdown(payload) + "\n", encoding="utf-8")
-                with index_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(index_record, ensure_ascii=False, allow_nan=False) + "\n")
+                if checkpoint_supplement:
+                    saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
+                        state_file=resolved_state_file, identity=settlement_identity,
+                        refresh_retry=refresh_retry_request, record=record, index_record=index_record,
+                        markdown=render_state_refresh_markdown(payload) + "\n")
+                    for projection in (record, index_record, payload):
+                        projection["vision_checkpoint"]["read_context"] = saved["context"]
+                    for projection in (index_record, payload):
+                        projection.update({key: saved[key] for key in ("json_path", "markdown_path")})
+                    if saved["replayed"]:
+                        payload.update(appended=False, idempotent_replay=True)
+                else:
+                    json_path.write_text(
+                        json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    markdown_path.write_text(render_state_refresh_markdown(payload) + "\n", encoding="utf-8")
+                    with index_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(index_record, ensure_ascii=False, allow_nan=False) + "\n")
         if sync_global and route_status in {"missing", "ambiguous"}:
             payload["ok"] = False
             payload["partial_write"] = not dry_run
@@ -1501,6 +1605,11 @@ def refresh_state_run(
             if committed_readback is None:
                 raise RuntimeError("committed refresh settlement readback missing")
             attach_settlement_progress(payload, committed_readback, registry_path=registry_path, runtime_root=runtime_root)
-        return finish_external_delivery_refresh(
-            payload, settlement_readback, runtime_root, dry_run=dry_run,
+        return recover_refresh_todo_projection(
+            finish_external_delivery_refresh(
+                payload, settlement_readback, runtime_root, dry_run=dry_run,
+            ),
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
+            project=resolved_project, state_file=resolved_state_file,
+            canonical_snapshot=planning_source.canonical_snapshot,
         )

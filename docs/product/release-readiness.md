@@ -115,14 +115,16 @@ versions may still match while the installed source commit is behind.
 
 Use `loopx update check --ref main` for archive maintainer qualification. Its
 `runtime_activation_qualification` result compares the release-manifest source
-commit with the trusted source lineage reported by `loopx doctor`:
+commit with the selected ref's current GitHub commit. `source_commit_check`
+records the bounded read; an unavailable lookup does not turn equal package
+versions or a locally cached ref into an up-to-date claim:
 
 - `runtime_active` means the installed commit is the target commit or contains it;
 - `release_or_install_successor_required` means the installed commit is behind
   or diverged, so a release/install successor must remain explicit;
-- `activation_qualification_required` means commit lineage is unavailable or
-  belongs to a different `repo/ref`; the runtime-active claim must fail closed
-  until identity is refreshed.
+- `activation_qualification_required` means the selected commit differs without
+  proven ancestry, the ref lookup is unavailable, or archive identity is not
+  established; the runtime-active claim must fail closed until qualified.
 
 A pinned full commit SHA is its own trusted target, so
 `loopx update check --ref <40-hex-commit>` qualifies against the installed
@@ -627,6 +629,11 @@ path, and canary route rather than as a user-facing release baseline.
   and Goal acceptance plus replan obligations retained their existing authority
   owners. The published package, desktop artifacts, signed update feed, and
   website were verified before `stable` fast-forwarded.
+
+- `v1.2.0` on 2026-09-25 10:19 +08:00: recoverable authority, typed Todo
+  transitions, and inspectable host activation at commit `eb11130e1`.
+  The release separates package acquisition, delivered host material, runtime
+  activation, and enabled-extension readiness.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

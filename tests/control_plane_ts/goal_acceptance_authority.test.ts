@@ -11,12 +11,13 @@ import type {AuthorityStore} from "../../loopx/control_plane/coordination/author
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {prepareCoordinationProjectionCommit, validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {loadLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {shadowManagementStatePath} from "../../loopx/control_plane/coordination/shadow_management.ts";
-import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {authorityProjectionFixture, todoFixtureRecord} from "./authority_projection_fixture.ts";
 import {acceptanceCompletionRequirements, acceptanceWorkGuard, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest,
   normalizeGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance, validateAcceptanceCompletion} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {commitGoalAcceptanceVerification, commitLocalGoalAcceptance, commitLocalGoalAcceptanceVerification,
@@ -35,7 +36,7 @@ function todo(todo_id: string, extra: JsonObject = {}): JsonObject {
     text: `Implement ${todo_id}`, task_class: "advancement_task", action_kind: "implement", ...extra};
 }
 function document(): JsonObject {
-  return {objective: "Deliver independently validated work", non_goals: ["Grant additional permissions"],
+  return {scope: {kind: "all_advancement"}, objective: "Deliver independently validated work", non_goals: ["Grant additional permissions"],
     criteria: [{id: "prerequisite", description: "Prerequisite passes its own check", validation_argv: [process.execPath, "-e", "process.exit(0)"]},
       {id: "outcome", description: "Final outcome passes its check", validation_argv: [process.execPath, "-e", "process.exit(0)"]}],
     bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}, {todo_id: "todo_second", criterion_ids: ["outcome"]}]};
@@ -53,6 +54,42 @@ test("terminal continuation observations preserve work while changed requirement
   assert.equal(goalAcceptanceTodoDigest(completed), goalAcceptanceTodoDigest(work));
   assert.notEqual(goalAcceptanceTodoDigest({...completed, text: "Deliver different work"}), goalAcceptanceTodoDigest(work));
   assert.notEqual(goalAcceptanceTodoDigest({...completed, completion_validation_required: true}), goalAcceptanceTodoDigest(work));
+});
+test("validator revisions and successor links preserve an existing acceptance binding", () => {
+  const original = todo("todo_first", {completion_validation_required: true,
+    completion_validation_sha256: "a".repeat(64), completion_validation_revision: 0,
+    completion_validation_revision_history: [], successor_todo_ids: []});
+  const contract = normalizeGoalAcceptanceDocument({...document(),
+    bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]});
+  const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+    digest: canonicalAuthoritySha256(contract), document: contract, verification: null,
+    bindings: [{todo_id: "todo_first", todo_semantic_digest: goalAcceptanceTodoDigest(original),
+      revision: 1, criterion_ids: ["prerequisite"], confirmed_by: "owner"}]};
+  const receipt = {schema_version: "loopx_todo_completion_validation_revision_receipt_v0", revision: 1,
+    operation_id: "revise", previous_declaration_sha256: "a".repeat(64),
+    declaration_sha256: "b".repeat(64), actor_agent_id: "agent-a", revised_at: "2026-09-23T00:00:00Z"};
+  const revised = {...original, completion_validation_sha256: "b".repeat(64),
+    completion_validation_revision: 1, completion_validation_revision_history: [receipt],
+    successor_todo_ids: ["todo_followup"]};
+  const guarded = (work: JsonObject) => acceptanceWorkGuard(authorityProjectionFixture(goal,
+    [work, todo("todo_followup")], [], "native", {goal_acceptance: state}), goal, "todo_first");
+  assert.equal(guarded(original)?.state, "ready");
+  assert.notEqual(goalAcceptanceTodoDigest(revised), goalAcceptanceTodoDigest(original),
+    "persisted v0 digests must remain compatible without rebinding every existing Todo");
+  assert.equal(guarded(revised)?.state, "ready");
+  assert.equal(guarded({...revised, resume_when: "monitor_changed:todo_followup"})?.state, "ready",
+    "an added scheduling wait cannot alter the confirmed acceptance association");
+  assert.equal(guarded({...revised, text: "Different work"})?.state, "stale");
+  assert.equal(guarded({...revised, required_write_scopes: ["private"]})?.state, "stale");
+  assert.equal(guarded({...revised, completion_validation_required: false})?.state, "stale");
+  assert.equal(guarded({...revised, completion_validation_revision_history: [{...receipt,
+    declaration_sha256: "c".repeat(64)}]})?.state, "stale");
+  const boundWithWait = {...state, bindings: [{...state.bindings[0],
+    todo_semantic_digest: goalAcceptanceTodoDigest({...original, resume_when: "monitor_changed:todo_first"})}]};
+  const changedWait = acceptanceWorkGuard(authorityProjectionFixture(goal,
+    [{...original, resume_when: "monitor_changed:todo_followup"}, todo("todo_followup")], [], "native",
+    {goal_acceptance: boundWithWait}), goal, "todo_first");
+  assert.equal(changedWait?.state, "stale", "the matcher cannot reconstruct a replaced prior wait condition");
 });
 async function seed(store: AuthorityStore) {
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
@@ -83,9 +120,8 @@ async function update(store: AuthorityStore, todoId: string, patch: JsonObject) 
   assert.equal(result.status, "applied");
 }
 const providers = ["file", "sqlite", "postgresql"] as const;
-// SQLite authority needs the WAL-reset driver; the public Node minimum ships
-// an older one. Skip those rows there rather than fail, and keep the file
-// rows running: the qualified runtime job executes every row for real.
+// Developer runtimes outside the supported Node range may lack the WAL-reset
+// driver. CI asserts SQLite qualification and runs every provider row.
 const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
 async function fixture(t: TestContext, provider: typeof providers[number]): Promise<AuthorityStore> {
   if (provider !== "postgresql") {
@@ -114,6 +150,81 @@ async function fixture(t: TestContext, provider: typeof providers[number]): Prom
 for (const provider of providers) {
   const options = {skip: (provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL) ||
     (provider === "sqlite" && !sqliteQualified)};
+  test(`${provider}: selected work isolates admission and verification without weakening its own guard`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]},
+      bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
+    const request = await configureRequest(store, {document: doc});
+    assert.equal((await configureGoalAcceptance(store, request)).status, "applied");
+    const first = (await head(store)).head;
+    assert.equal(acceptanceWorkGuard(first, goal, "todo_first")?.allowed, true);
+    assert.equal(acceptanceWorkGuard(first, goal, "todo_second"), null);
+    assert.equal(acceptanceCompletionRequirements(first, goal, "todo_second"), null);
+    assert.deepEqual((projectGoalAcceptance(first, goal).tasks as JsonObject[]).map(row => row.todo_id), ["todo_first"]);
+    assert.equal((await commitGoalAcceptanceVerification(store, await verifyRequest(store))).status, "applied");
+    await update(store, "todo_second", {text: "Independent work changed"});
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_new", todoFixtureRecord(todo("todo_new"), "native"));
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_new"), null);
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_first", {task_class: "continuous_monitor"});
+    const changed = (await head(store)).head;
+    assert.equal(acceptanceWorkGuard(changed, goal, "todo_first")?.allowed, false);
+    assert.throws(() => acceptanceCompletionRequirements(changed, goal, "todo_first"), /stale/);
+    assert.equal(projectGoalAcceptance(changed, goal).status, "held");
+    assert.equal((await configureGoalAcceptance(store, request)).status, "replayed", "old exact operation cannot rebind changed work");
+  });
+  test(`${provider}: explicit selection is not binding and cannot be edited away by the worker`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]}, bindings: []};
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: doc}))).status, "applied");
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_first")?.state, "unbound");
+    await update(store, "todo_first", {task_class: "continuous_monitor", status: "blocked"});
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_first")?.allowed, false);
+    const changed = (await head(store)).head;
+    assert.throws(() => acceptanceCompletionRequirements(changed, goal, "todo_first"), /unbound/);
+  });
+  test(`${provider}: legacy scope-free committed configuration still recovers its exact receipt`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const raw = document(); delete raw.scope;
+    const request = await configureRequest(store, {document: raw});
+    const basis = await head(store);
+    const doc = normalizeGoalAcceptanceDocument(raw);
+    const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+      document: doc, digest: canonicalAuthoritySha256(doc), verification: null,
+      bindings: doc.bindings.map(binding => ({...binding, revision: 1, confirmed_by: "owner",
+        todo_semantic_digest: goalAcceptanceTodoDigest((basis.head.todos as JsonObject[]).find(row => row.todo_id === binding.todo_id)!)}))};
+    const next = {...basis.head, goal_acceptance: state};
+    const receipt = {schema_version: "loopx_goal_acceptance_operation_v0", operation_id: request.operation_id,
+      goal_id: goal, request_sha256: canonicalAuthoritySha256({kind: "configure", ...request}),
+      result: {goal_id: goal, operation_id: request.operation_id, goal_acceptance_contract: projectGoalAcceptance(next, goal)}};
+    assert.equal((await store.commitAuthority({operation_id: String(request.operation_id),
+      expected_provider_revision: basis.provider_revision, next_projection: next, events: [], receipts: [receipt]})).status, "applied");
+    const committed = await head(store);
+    assert.equal((await configureGoalAcceptance(store, request)).status, "replayed");
+    assert.deepEqual(await head(store), committed);
+  });
+  test(`${provider}: owner configuration requires an explicit valid scope before any write`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const before = await head(store);
+    const missing = document(); delete missing.scope;
+    assert.equal((await configureGoalAcceptance(store, await configureRequest(store, {document: missing}))).reason_code,
+      "goal_acceptance_scope_required");
+    assert.deepEqual(await head(store), before);
+    for (const doc of [
+      {...document(), scope: {kind: "selected_work", todo_ids: []}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first", "todo_first"]}},
+      {...document(), scope: {kind: "all"}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]}},
+      {...document(), scope: {kind: "selected_work", todo_ids: ["todo_missing"]}, bindings: []}]) {
+      await assert.rejects(configureGoalAcceptance(store, await configureRequest(store, {document: doc})), /scope/);
+      assert.deepEqual(await head(store), before);
+    }
+    await assert.rejects(configureGoalAcceptance(store, await configureRequest(store, {
+      document: {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first", "todo_second"]}},
+      actor_agent_id: "agent-a"})), /trusted owner/);
+    assert.deepEqual(await head(store), before);
+  });
   test(`${provider}: default off, owner configure, private inspection and public held work`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const before = await head(store);
@@ -455,6 +566,15 @@ for (const provider of ["file", "sqlite"] as const) {
     const inspect = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"});
     assert.equal(inspect.source_authority, `${provider}_v0`);
     assert.equal((inspect.tasks as JsonObject[]).length, 1);
+    assert.equal((inspect.todo as JsonObject).todo_id, "todo_first");
+    const heldDoc = {...document(), bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
+    assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store, {document: heldDoc}), runtime_root: root})).status, "applied");
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_second"})).reason_code,
+      "goal_acceptance_unbound", "canonical task diagnosis survives the private effect adapter");
+    await update(store, "todo_first", {text: "Changed owner-bound work"});
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"})).reason_code,
+      "goal_acceptance_stale");
+    assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store), runtime_root: root})).status, "applied");
     const verified = await commitLocalGoalAcceptanceVerification({...await verifyRequest(store), runtime_root: root});
     assert.equal((verified.goal_acceptance_contract as JsonObject).status, "accepted");
     assert.equal((await loadLegacyCoordinationWriterFence(root, goal)).status, "missing", "acceptance never promotes a provider");
@@ -464,4 +584,89 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal(blocked.status, "failed");
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal})).status, "loaded");
   });
+}
+
+test("legacy omitted scope preserves document bytes, bindings and global admission", () => {
+  const raw = document(); delete raw.scope;
+  const doc = normalizeGoalAcceptanceDocument(raw);
+  assert.equal(Object.hasOwn(doc, "scope"), false);
+  const records = [todo("todo_first"), todo("todo_second"), todo("todo_new")];
+  const state = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+    document: doc, digest: canonicalAuthoritySha256(doc), verification: null,
+    bindings: doc.bindings.map(binding => ({...binding, revision: 1, confirmed_by: "owner",
+      todo_semantic_digest: goalAcceptanceTodoDigest(records.find(row => row.todo_id === binding.todo_id)!)}))};
+  const value = authorityProjectionFixture(goal, records, [], "native", {goal_acceptance: state});
+  assert.deepEqual(readGoalAcceptance(value, goal), state);
+  assert.equal(acceptanceWorkGuard(value, goal, "todo_first")?.allowed, true);
+  assert.equal(acceptanceWorkGuard(value, goal, "todo_new")?.state, "unbound");
+});
+
+for (const provider of providers) {
+  test(`${provider}: exact stale-declaration restoration preserves owner authority and lease lineage`,
+    {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL || provider === "sqlite" && !sqliteQualified}, async t => {
+      const {executeCoordinationTodoUpdate} = await import("../../loopx/control_plane/coordination/todo_update.ts");
+      const store = await fixture(t, provider);
+      const wait = "resume_at:2020-01-01T00:00:00Z";
+      const original = todo("todo_first", {claimed_by: "agent-a", resume_when: wait});
+      const lease = {todo_id: "todo_first", goal_id: goal, owner: "agent-a", status: "released",
+        idempotency_key: "previous-execution", version: 1, lease_epoch: 1,
+        expires_at: "2020-01-01T00:00:00Z", write_scopes: []};
+      await store.commitAuthority({operation_id: "seed", expected_provider_revision: null, events: [], receipts: [],
+        next_projection: authorityProjectionFixture(goal, [original], [lease], "native", {handoff_mode: "hard_lease"})});
+      await configureGoalAcceptance(store, await configureRequest(store, {document: {...document(),
+        bindings: [{todo_id: "todo_first", criterion_ids: ["outcome"]}]}}));
+      const confirmed = (await head(store)).head.goal_acceptance;
+      const current = await head(store);
+      const changedTodo = {...(current.head.todos as JsonObject[])[0]}; delete changedTodo.resume_when;
+      await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal, operation_id: "prior-unintended-edit",
+        expected_provider_revision: current.provider_revision, projection: current.head,
+        mutations: [{kind: "todo_upsert", todo: changedTodo, clear_fields: ["resume_when"]}]}));
+      const stale = await head(store);
+      assert.equal(acceptanceWorkGuard(stale.head, goal, "todo_first")?.state, "stale");
+      const request = {goal_id: goal, todo_id: "todo_first", expected_role: "agent", actor_agent_id: "agent-a",
+        registered_agents: ["agent-a", "agent-b"], operation_id: "restore-exact-declaration",
+        expected_provider_revision: stale.provider_revision, patch: {}, clear_fields: [],
+        planning_intent: {resume_when: wait}, dry_run: false, now: new Date("2030-01-01T00:00:00Z")};
+      for (const change of [
+        {actor_agent_id: "agent-b"}, {expected_provider_revision: undefined},
+        {expected_provider_revision: "stale"}, {planning_intent: {resume_when: "resume_at:2021-01-01T00:00:00Z"}},
+        {patch: {text: "Different scope"}}, {planning_intent: {resume_when: wait, status: "done"}},
+        {lease_idempotency_key: "previous-execution", lease_expected_version: 1},
+      ]) {
+        const refused = await executeCoordinationTodoUpdate(store, {...request, ...change});
+        assert.equal(refused.status, "failed", JSON.stringify(refused));
+        assert.deepEqual(await head(store), stale);
+      }
+      // Exercise the full admission path against rejected current facts too.
+      for (const [name, patch, activeLease] of [
+        ["excluded", {excluded_agents: ["agent-a"]}, false],
+        ["active-lease", {}, true],
+      ] as const) {
+        const basis = await head(store);
+        await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal, operation_id: `facts-${name}`,
+          expected_provider_revision: basis.provider_revision, projection: basis.head,
+          mutations: [{kind: "todo_upsert", todo: {...changedTodo, ...patch}},
+            {kind: "lease_upsert", lease: activeLease ? {...lease, status: "active", expires_at: "2031-01-01T00:00:00Z"} : lease}]}));
+        const held = await head(store);
+        const denied = await executeCoordinationTodoUpdate(store, {...request,
+          expected_provider_revision: held.provider_revision});
+        assert.equal(denied.status, "failed", name);
+        assert.deepEqual(await head(store), held);
+        await store.commitAuthority({operation_id: `reset-${name}`, expected_provider_revision: held.provider_revision,
+          next_projection: stale.head, events: [], receipts: []});
+      }
+      request.expected_provider_revision = (await head(store)).provider_revision;
+      const readyToRestore = await head(store);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, dry_run: true})).status, "planned");
+      assert.deepEqual(await head(store), readyToRestore);
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "applied");
+      const restored = await head(store);
+      assert.equal(acceptanceWorkGuard(restored.head, goal, "todo_first")?.state, "ready");
+      assert.deepEqual(restored.head.goal_acceptance, confirmed);
+      assert.deepEqual(restored.head.leases, stale.head.leases);
+      assert.equal((await executeCoordinationTodoUpdate(store, request)).status, "replayed");
+      assert.deepEqual(await head(store), restored);
+      assert.equal((await executeCoordinationTodoUpdate(store, {...request, patch: {text: "Changed replay"}})).status, "failed");
+      assert.deepEqual(await head(store), restored);
+    });
 }

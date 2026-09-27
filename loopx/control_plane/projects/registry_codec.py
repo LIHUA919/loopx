@@ -18,7 +18,10 @@ from ...paths import GLOBAL_REGISTRY_FILENAME
 
 
 STRICT_SCHEMA_VERSION = "loopx_project_registry_envelope_v1"
+SOURCE_SESSION_SCHEMA_VERSION = "loopx_project_registry_envelope_v2"
 CURRENT_WRITER_PROTOCOL = "goal_instance_v1"
+SOURCE_SESSION_WRITER_PROTOCOL = "goal_instance_v2"
+SOURCE_SESSION_PROFILE_ID = "source_session_v1"
 _STRICT_HEADER_KEYS = {
     "schema_version",
     "minimum_writer_protocol",
@@ -47,7 +50,8 @@ class ProjectRegistryRestoreError(ProjectRegistryMutationError):
 
 class _ProjectRegistryFormat(str, Enum):
     LEGACY_OBJECT = "legacy_object_v0"
-    STRICT_ENVELOPE = "strict_envelope_v1"
+    STRICT_ENVELOPE_V1 = "strict_envelope_v1"
+    STRICT_ENVELOPE_V2 = "strict_envelope_v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +131,12 @@ def _decode_document(raw_bytes: bytes) -> _ProjectRegistryDocument:
             "strict project registry header must contain exactly "
             "schema_version, minimum_writer_protocol, and payload_sha256"
         )
-    if header["schema_version"] != STRICT_SCHEMA_VERSION:
+    schema_version = header["schema_version"]
+    strict_formats = {
+        STRICT_SCHEMA_VERSION: _ProjectRegistryFormat.STRICT_ENVELOPE_V1,
+        SOURCE_SESSION_SCHEMA_VERSION: _ProjectRegistryFormat.STRICT_ENVELOPE_V2,
+    }
+    if schema_version not in strict_formats:
         raise ProjectRegistryError(
             "strict project registry schema_version is unsupported"
         )
@@ -155,9 +164,17 @@ def _decode_document(raw_bytes: bytes) -> _ProjectRegistryDocument:
         raise ProjectRegistryError(
             "strict project registry payload digest does not match"
         )
+    document_format = strict_formats[schema_version]
+    if (
+        document_format is _ProjectRegistryFormat.STRICT_ENVELOPE_V2
+        and payload.get("profile_id") != SOURCE_SESSION_PROFILE_ID
+    ):
+        raise ProjectRegistryError(
+            "strict v2 project registry profile_id is unsupported"
+        )
     return _ProjectRegistryDocument(
         payload=payload,
-        format=_ProjectRegistryFormat.STRICT_ENVELOPE,
+        format=document_format,
         minimum_writer_protocol=protocol,
         raw_bytes=raw_bytes,
     )
@@ -187,7 +204,12 @@ def decode_registry_snapshot(path: Path, raw_bytes: bytes) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ProjectRegistryError("global registry root must be a JSON object")
         return payload
-    return decode_project_registry(raw_bytes)
+    payload = decode_project_registry(raw_bytes)
+    require_runtime_compatible_project_registry(
+        payload,
+        operation="generic registry read",
+    )
+    return payload
 
 
 def load_registry(path: Path) -> dict[str, Any]:
@@ -197,6 +219,20 @@ def load_registry(path: Path) -> dict[str, Any]:
     if not expanded.exists():
         return {}
     return decode_registry_snapshot(expanded, expanded.read_bytes())
+
+
+def require_runtime_compatible_project_registry(
+    payload: dict[str, Any],
+    *,
+    operation: str,
+) -> None:
+    """Reject the lifecycle-only M2 profile before host or business effects."""
+
+    if payload.get("profile_id") == SOURCE_SESSION_PROFILE_ID:
+        raise ProjectRegistryProtocolError(
+            f"{operation} rejects lifecycle-only profile "
+            f"{SOURCE_SESSION_PROFILE_ID}; use project lifecycle commands"
+        )
 
 
 def _encode_document(
@@ -211,9 +247,14 @@ def _encode_document(
         root: object = payload
         allow_nan = True
     else:
+        schema_version = (
+            STRICT_SCHEMA_VERSION
+            if format is _ProjectRegistryFormat.STRICT_ENVELOPE_V1
+            else SOURCE_SESSION_SCHEMA_VERSION
+        )
         root = [
             {
-                "schema_version": STRICT_SCHEMA_VERSION,
+                "schema_version": schema_version,
                 "minimum_writer_protocol": minimum_writer_protocol,
                 "payload_sha256": _payload_digest(payload),
             },
@@ -254,12 +295,26 @@ def _atomic_write_bytes(path: Path, payload: bytes, *, mode: int | None) -> None
 def _require_supported_writer(document: _ProjectRegistryDocument) -> None:
     protocol = document.minimum_writer_protocol
     if (
-        document.format is _ProjectRegistryFormat.STRICT_ENVELOPE
+        document.format is not _ProjectRegistryFormat.LEGACY_OBJECT
         and protocol != CURRENT_WRITER_PROTOCOL
     ):
         raise ProjectRegistryProtocolError(
             "project registry requires unsupported writer protocol: "
             f"{protocol}"
+        )
+
+
+def _require_source_session_writer(document: _ProjectRegistryDocument) -> None:
+    if (
+        document.format is not _ProjectRegistryFormat.STRICT_ENVELOPE_V2
+        or document.minimum_writer_protocol != SOURCE_SESSION_WRITER_PROTOCOL
+        or document.payload.get("profile_id") != SOURCE_SESSION_PROFILE_ID
+    ):
+        raise ProjectRegistryProtocolError(
+            "source-session transaction requires "
+            f"{SOURCE_SESSION_SCHEMA_VERSION}, "
+            f"{SOURCE_SESSION_WRITER_PROTOCOL}, and "
+            f"profile_id={SOURCE_SESSION_PROFILE_ID}"
         )
 
 
@@ -356,15 +411,14 @@ class ProjectRegistryTransaction:
 
 
 @contextmanager
-def project_registry_transaction(
+def _registry_transaction(
     path: Path,
     *,
     operation: str,
-    create: Callable[[], dict[str, Any]] | None = None,
+    create_document: Callable[[], _ProjectRegistryDocument] | None,
+    require_writer: Callable[[_ProjectRegistryDocument], None],
     agent_id: str | None = None,
 ) -> Iterator[ProjectRegistryTransaction]:
-    """Hold one project-registry lock for a compound owner transaction."""
-
     expanded = path.expanduser()
     with exclusive_cross_runtime_file_lock(
         expanded,
@@ -376,29 +430,105 @@ def project_registry_transaction(
             document = _read_document(expanded)
             mode = expanded.stat().st_mode & 0o777
         else:
-            if create is None:
+            if create_document is None:
                 raise FileNotFoundError(
                     f"registry file does not exist: {expanded}"
                 )
-            payload = create()
-            if not isinstance(payload, dict):
-                raise TypeError(
-                    "project registry initializer must return a JSON object"
-                )
-            document = _ProjectRegistryDocument(
-                payload=copy.deepcopy(payload),
-                format=_ProjectRegistryFormat.LEGACY_OBJECT,
-                minimum_writer_protocol=None,
-                raw_bytes=b"",
-            )
+            document = create_document()
             mode = None
-        _require_supported_writer(document)
+        require_writer(document)
         yield ProjectRegistryTransaction(
             expanded,
             document=document,
             existed=existed,
             mode=mode,
         )
+
+
+def _created_document(
+    create: Callable[[], dict[str, Any]],
+    *,
+    format: _ProjectRegistryFormat,
+    minimum_writer_protocol: str | None,
+) -> _ProjectRegistryDocument:
+    payload = create()
+    if not isinstance(payload, dict):
+        raise TypeError("project registry initializer must return a JSON object")
+    return _ProjectRegistryDocument(
+        payload=copy.deepcopy(payload),
+        format=format,
+        minimum_writer_protocol=minimum_writer_protocol,
+        raw_bytes=b"",
+    )
+
+
+def _document_factory(
+    create: Callable[[], dict[str, Any]] | None,
+    *,
+    format: _ProjectRegistryFormat,
+    minimum_writer_protocol: str | None,
+) -> Callable[[], _ProjectRegistryDocument] | None:
+    if create is None:
+        return None
+
+    def build() -> _ProjectRegistryDocument:
+        return _created_document(
+            create,
+            format=format,
+            minimum_writer_protocol=minimum_writer_protocol,
+        )
+
+    return build
+
+
+@contextmanager
+def project_registry_transaction(
+    path: Path,
+    *,
+    operation: str,
+    create: Callable[[], dict[str, Any]] | None = None,
+    agent_id: str | None = None,
+) -> Iterator[ProjectRegistryTransaction]:
+    """Hold one legacy/v1 project-registry transaction."""
+
+    create_document = _document_factory(
+        create,
+        format=_ProjectRegistryFormat.LEGACY_OBJECT,
+        minimum_writer_protocol=None,
+    )
+    with _registry_transaction(
+        path,
+        operation=operation,
+        create_document=create_document,
+        require_writer=_require_supported_writer,
+        agent_id=agent_id,
+    ) as transaction:
+        yield transaction
+
+
+@contextmanager
+def source_session_registry_transaction(
+    path: Path,
+    *,
+    operation: str,
+    create: Callable[[], dict[str, Any]] | None = None,
+    agent_id: str | None = None,
+) -> Iterator[ProjectRegistryTransaction]:
+    """Hold one source-session v2 project-registry transaction."""
+
+    create_document = _document_factory(
+        create,
+        format=_ProjectRegistryFormat.STRICT_ENVELOPE_V2,
+        minimum_writer_protocol=SOURCE_SESSION_WRITER_PROTOCOL,
+    )
+    with _registry_transaction(
+        path,
+        operation=operation,
+        create_document=create_document,
+        require_writer=_require_source_session_writer,
+        agent_id=agent_id,
+    ) as transaction:
+        yield transaction
 
 
 def mutate_project_registry(

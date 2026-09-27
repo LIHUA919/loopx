@@ -15,20 +15,20 @@ from uuid import uuid4
 from ...agent_registry import registered_agent_ids_from_registry
 from .authority_source_capture import authority_registry_source
 from ..runtime.time import now_local_iso as now_local
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import (
+    CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    effect_runtime_result,
+)
 from .coordination_state_contract import (
     TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
     TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
     TODO_DOMAIN_ITEM_SCHEMA_VERSION,
     TODO_ITEM_SCHEMA_VERSION,
 )
-from .coordination_state_contract_generated import (
-    LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-)
+from .canonical_snapshot import read_canonical_snapshot
 from .legacy_writer_fence import legacy_coordination_writer_fence_path
 
 
-LOCAL_COORDINATION_TODO_LIST_METHOD = "coordination.local_authority.todo_list"
 LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS = 15.0
 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = (
     "loopx_local_coordination_todo_claim_request_v1"
@@ -136,6 +136,7 @@ def claim_canonical_todo_if_promoted(
             "observed_at": now_local(),
             "dry_run": dry_run,
         },
+        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     )
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
@@ -197,19 +198,11 @@ def read_canonical_todos_if_promoted(
     if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
         return None
 
-    result = effect_runtime_result(
-        LOCAL_COORDINATION_TODO_LIST_METHOD,
-        {
-            "schema_version": LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-            "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
-            "goal_id": goal_id,
-            **({"include_leases": True} if include_leases else {}),
-            **({"projection_readback": dict(projection_readback)} if projection_readback is not None else {}),
-        },
-        # Promoted goals can carry hundreds of preserved Todos.  Keep the
-        # generic Effect request budget strict, but give this known bounded
-        # canonical scan the same cold-start allowance as the neighbouring
-        # shadow/lease authority reads.
+    result = read_canonical_snapshot(
+        rpc=effect_runtime_result,
+        runtime_root=str(runtime_root.expanduser().resolve(strict=False)),
+        goal_id=goal_id, include_leases=include_leases,
+        projection_readback=projection_readback,
         timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
     )
     if not isinstance(result, Mapping):
@@ -258,7 +251,9 @@ def read_canonical_todos_if_promoted(
         if (not isinstance(confirmation, Mapping)
             or confirmation.get("provider_revision") != projection_readback["provider_revision"]
             or confirmation.get("observed_provider_revision") != payload.get("provider_revision")
-            or confirmation.get("status") not in {"pending", "delivered", "current"}):
+            or confirmation.get("status") not in {"pending", "delivered", "current"}
+            or confirmation.get("next_action") not in {"retry", "finish"}
+            or (confirmation.get("next_action") == "retry" and confirmation.get("status") != "pending")):
             raise LocalCoordinationAuthorityUnavailable(
                 "canonical projection confirmation is missing or invalid",
                 code="local_authority_projection_confirmation_invalid", payload=payload,

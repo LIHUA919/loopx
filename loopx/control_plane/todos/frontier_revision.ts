@@ -25,7 +25,7 @@ type Row = {
 type LongChainObservation = {
   trigger_count: number;
   count_kind: "selectable_advancement_todos" | "selectable_open_todos" |
-    "claimed_advancement_todos" | "claimed_open_todos";
+    "claimed_advancement_todos";
   selectable_open_count: number; selectable_advancement_count: number;
   current_agent_claimed_open_count: number;
   current_agent_claimed_advancement_count: number; unclaimed_advancement_count: number;
@@ -168,6 +168,8 @@ function successorCheckpoints(request: JsonObject, agent: string | null): JsonOb
     : trigger.current_agent_claimed_advancement_count) - 1;
   const priorOpen = count(agent === null ? trigger.selectable_open_count
     : trigger.current_agent_claimed_open_count) - 1;
+  // Retain the former open-count threshold when reading historical obligations.
+  // New Agent-lane observations below count only advancement commitments.
   if (bindings.length === 0 && candidates.length === 1 && triggers.length === 1 &&
       trigger.kind === TRIGGER && trigger.frontier_revision === source.frontier_revision && (priorAdvancement >= 15 || priorOpen >= 20 && priorAdvancement > 0)) {
     const completeSource = indexed === null ? source : checkpoint(rows, agent);
@@ -244,15 +246,15 @@ export function evaluateLongTodoChain(value: unknown): JsonObject {
   // A lane replans commitments it owns. Shared candidates remain selectable,
   // but must not impose a chain obligation with no owned ACK fence.
   const measuredAdvancement = agent === null ? advancement : current;
-  const measuredOpen = agent === null ? open : claimedOpen;
-  const threshold = measuredAdvancement >= 15 ? 15 : measuredOpen >= 20 && measuredAdvancement > 0 ? 20 : null;
+  const threshold = measuredAdvancement >= 15 ? 15
+    : agent === null && open >= 20 && measuredAdvancement > 0 ? 20 : null;
   if (threshold === null) return {observation: null, decision: null};
   const revision = readIndex(summary.advancement_frontier_revision_index, agent)
     ?? checkpoint(decodeRows(request.rows), agent);
-  const observation: LongChainObservation = {trigger_count: threshold === 15 ? measuredAdvancement : measuredOpen,
+  const observation: LongChainObservation = {trigger_count: threshold === 15 ? measuredAdvancement : open,
     count_kind: agent === null
       ? threshold === 15 ? "selectable_advancement_todos" : "selectable_open_todos"
-      : threshold === 15 ? "claimed_advancement_todos" : "claimed_open_todos",
+      : "claimed_advancement_todos",
     selectable_open_count: open, selectable_advancement_count: advancement,
     current_agent_claimed_open_count: claimedOpen,
     current_agent_claimed_advancement_count: current, unclaimed_advancement_count: unclaimed,

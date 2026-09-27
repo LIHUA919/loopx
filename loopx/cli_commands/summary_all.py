@@ -70,7 +70,8 @@ def register_summary_all_command(
         "goal-portfolio", help="Read scoped Goal evidence with explicit source coverage."
     )
     add_subcommand_format(portfolio)
-    portfolio.add_argument("--manager-view", choices=("portfolio", "todos", "deliveries"), help="Export an audience-safe manager evidence page from this registry.")
+    portfolio.add_argument("--manager-view", choices=("portfolio", "todos", "deliveries", "agents"), help="Export an audience-safe manager evidence page from this registry.")
+    portfolio.add_argument("--query", default="", help="Search registered Agent identities and responsibilities with --manager-view agents.")
     portfolio.add_argument("--offset", type=int, default=0)
     portfolio.add_argument("--days", type=int, default=1)
     portfolio.add_argument("--include-stopped", action="store_true")

@@ -68,8 +68,14 @@ export const loopxModeScenario = {
       const team = page.getByRole("region", {name: "团队执行详情"});
       await team.getByText("local-analyst · 已通过当前验收", {exact: true}).waitFor();
       await team.getByText("本页有无法核验的工作，请检查原请求；不要直接重新派工。", {exact: true}).waitFor();
-      await team.getByRole("button", {name: "检查启动条件", exact: true}).click();
+      await team.getByRole("button", {name: "检查整个团队", exact: true}).click();
       await team.getByText(/运行时可用性尚未验证/).waitFor();
+      await team.getByText("上次检查 3/3 名：1 名满足本机启动条件，1 名运行时待核验，1 名受阻或无法读取。检查不代表已经执行。", {exact: true}).waitFor();
+      await team.getByRole("alert").filter({hasText: "Review runtime unavailable"}).waitFor();
+      const inspections = api.loopxModeRequests.filter(row => row.operation === "inspect");
+      if (inspections.length !== 3 || new Set(inspections.map(row => row.binding_id)).size !== 3) {
+        throw new Error("Whole-team check did not inspect each bound member once");
+      }
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-desktop.png"), fullPage: false, animations: "disabled"});
       await team.getByRole("button", {name: "下一页", exact: true}).click();
       await team.getByText("cloud-reviewer · 需要恢复原执行", {exact: true}).waitFor();

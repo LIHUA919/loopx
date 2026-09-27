@@ -53,6 +53,53 @@ def _is_qualified_semantic_replan_writeback(
     )
 
 
+def _is_qualified_in_flight_writeback(
+    delivery_run: dict[str, Any] | None,
+    *,
+    goal_id: str,
+    todo_id: str,
+    agent_id: str | None,
+) -> bool:
+    """An open Todo may settle validated progress without terminal validation.
+
+    The delivery run is the exact Turn-bound writeback supplied by settlement
+    readback.  Its vision checkpoint owns the accepted continuation boundary;
+    the completion validator still owns the Todo's eventual terminal state.
+    """
+
+    if not isinstance(delivery_run, dict):
+        return False
+    identity = delivery_run.get("settlement_identity")
+    checkpoint = delivery_run.get("vision_checkpoint")
+    if agent_id is None:
+        return False
+    if (
+        delivery_run.get("goal_id") != goal_id
+        or normalize_todo_id(delivery_run.get("todo_id")) != todo_id
+        or delivery_run.get("agent_id") != agent_id
+        or not isinstance(identity, dict)
+        or identity.get("goal_id") != goal_id
+        or normalize_todo_id(identity.get("todo_id")) != todo_id
+        or identity.get("agent_id") != agent_id
+        or delivery_run.get("delivery_outcome") != "outcome_progress"
+        or not isinstance(checkpoint, dict)
+        or checkpoint.get("schema_version") != "vision_checkpoint_v0"
+        or checkpoint.get("agent_id") != agent_id
+        or checkpoint.get("delivery_boundary") != "in_flight_continuation"
+        or checkpoint.get("satisfied") is not True
+    ):
+        return False
+    triggers = checkpoint.get("triggers")
+    if not isinstance(triggers, list):
+        return False
+    return any(
+        isinstance(trigger, dict)
+        and trigger.get("kind") == "in_flight_continuation"
+        and normalize_todo_id(trigger.get("todo_id")) == todo_id
+        for trigger in triggers
+    )
+
+
 def completion_validation_spend_error(
     status_payload: dict[str, Any],
     *,
@@ -70,6 +117,11 @@ def completion_validation_spend_error(
     if _is_qualified_semantic_replan_writeback(
         delivery_run,
         todo_id=normalized_todo_id,
+    ) or _is_qualified_in_flight_writeback(
+        delivery_run,
+        goal_id=goal_id,
+        todo_id=normalized_todo_id,
+        agent_id=agent_id,
     ):
         return None
     summaries: list[dict[str, Any]] = []

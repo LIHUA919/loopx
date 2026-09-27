@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startViteDashboardServer } from "../dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 
 const require = createRequire(import.meta.url);
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -187,7 +188,7 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
       fields: [{ key: "coordinator_agent_id", label: "Coordinator Agent", description: "", input_kind: "text", required: false }],
     }),
     multiSubagentCapability({ current: multiSubagentConfiguration }),
-    goalCapability({ availability: "experimental_opt_in", capabilityId: "local_authority_shadow", displayName: "Local authority shadow" }),
+    goalCapability({ availability: "retired", capabilityId: "local_authority_shadow", displayName: "Retired authority observation", fields: [], readOnlyReason: "Clear retired observation config explicitly; bootstrap runtime shadow separately." }),
     goalCapability({
       availability: "experimental_opt_in",
       capabilityId: "reward_memory",
@@ -271,9 +272,18 @@ function teamPlanApplyReceipt(proposal) {
 
 export function startServer() {
   if (packaged) {
-    return spawn(process.env.LOOPX_PYTHON_BIN || "python3", [
-      "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(repoRoot, "loopx/web"),
-    ], {
+    // An explicit installed interpreter must resolve its own package, not the checkout.
+    const isolation = process.env.LOOPX_PYTHON_BIN ? ["-I"] : [];
+    return spawn(resolveTestPython(), [...isolation, "-c", `
+from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
+from loopx.presentation.chat_bundle import validate_bundle
+assets = default_chat_assets_dir()
+validate_bundle(assets)
+server = ChatHTTPServer(("127.0.0.1", ${port}), ChatRequestHandler)
+server.assets_dir = assets
+server.verbose = False
+server.serve_forever()
+`], {
       cwd: repoRoot,
       env: { ...process.env },
       stdio: "ignore",
@@ -415,6 +425,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     goalConfigurationRequests: [],
     machineConfigurationRequests: [],
     machineInspectionStatus: "configured",
+    failNextMachineInspection: false,
     invalidMachineNamespaces: [],
     larkWrites: [],
     actionTransitions: [],
@@ -442,6 +453,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     },
     operatorCredentialWrites: [],
     turnRequests: [],
+    hostThreadActivity: {},
+    answerForMessage: null,
     loopxModeRequests: [],
     get larkConnections() { return runtime.larkConnections; },
     get goalSubagentConfigurations() { return runtime.goalSubagentConfigurations; },
@@ -650,6 +663,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         adapter_kind: "generic_project_goal_v0", adapter_status: "connected",
         lifecycle_phase: "registered", lifecycle_flags: ["registered"],
         quota: { compute: 1, window_hours: 24, slot_minutes: 1, allowed_slots: 1440, spent_slots: 0, state: "eligible" },
+        coordination: { thread_agent_bindings: [{ agent_id: "codex-latest-lane", host_surface: "codex-app", thread_id: "fixture-bound-thread" }] },
         index_exists: false, raw_index_records: 0, unique_runs: 0, latest_runs: [],
       });
       fixture.attention_queue.items.push({
@@ -673,6 +687,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           goal_ids: ["multi-agent-projection"], last_activity_at: "2026-08-24T15:00:00+08:00", next_action: "Continue projected todo todo-latest-lane.", state: "running",
         },
       );
+    }
+    for (const [goalId, activity] of Object.entries(state.hostThreadActivity)) {
+      const goal = fixture.run_history.goals.find((item) => item.id === goalId);
+      if (goal) goal.host_thread_activity = activity;
     }
     const goalActivationScope = new URL(route.request().url()).searchParams.get("goal_activation");
     const isActiveScope = goalActivationScope === "active";
@@ -851,6 +869,10 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       await route.fulfill({ json: { ok: true, total, items, next_cursor: offset + 40 < total ? String(offset + 40) : null } });
       return;
     }
+    if (url.pathname === "/api/chat/goal-results") {
+      await route.fulfill({ json: { ok: true, items: [], total: 0, next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [] } });
+      return;
+    }
     const periodicConfiguration = {
       schema_version: "periodic_report_machine_defaults_v0",
       enabled: true,
@@ -881,7 +903,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       executor_model: null,
       executor_reasoning_effort: null,
     };
-    const machineNamespaces = {
+    // Applied namespaces persist for the page; this handler runs once per request.
+    const machineNamespaces = state.machineNamespaces ??= {
       change_quality_qualification: changeQualityConfiguration,
       manager_runtime: managerRuntimeConfiguration,
       periodic_report: periodicConfiguration,
@@ -1057,6 +1080,11 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       },
     };
     if (url.pathname === "/api/chat/machine-configuration" && request.method() === "GET") {
+      if (state.failNextMachineInspection) {
+        state.failNextMachineInspection = false;
+        await route.fulfill({ contentType: "application/json", json: { error: "Machine catalog temporarily unavailable" }, status: 503 });
+        return;
+      }
       await route.fulfill({ contentType: "application/json", json: {
         ...machineConfigurationBase,
         schema_version: "machine_configuration_inspection_v0",
@@ -1131,6 +1159,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     if (url.pathname === "/api/chat/machine-configuration/apply" && request.method() === "POST") {
       const body = request.postDataJSON();
       state.machineConfigurationRequests.push({ phase: "apply", ...body });
+      machineNamespaces[body.namespace] = body.namespace_configuration;
       state.machineInspectionStatus = "configured";
       state.invalidMachineNamespaces = [];
       await route.fulfill({ contentType: "application/json", json: {
@@ -1175,7 +1204,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         ],
         capability_catalog: {
           schema_version: "capability_configuration_catalog_v0",
-          capabilities: goalCapabilityCatalog(multiSubagentConfiguration).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
+          capabilities: [...machineConfigurationBase.capability_catalog.capabilities.filter(
+            (capability) => !capability.available_scopes.includes("goal"),
+          ), ...goalCapabilityCatalog(multiSubagentConfiguration).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
               machineCurrent: periodicConfiguration,
               effectiveConfiguration: {
                 schema_version: "capability_configuration_resolution_v0",
@@ -1187,7 +1218,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
                 machine_default_present: true,
                 effective_revision: "sha256:periodic-effective",
               },
-            }) : capability),
+            }) : capability)],
         },
       }, status: 200 });
       return;
@@ -1477,8 +1508,15 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         deliveries: [],
         ingress: [],
       };
+      loopxModes.set(sessionId, current);
       if (request.method() === "GET") {
-        await route.fulfill({ contentType: "application/json", json: current, status: 200 });
+        // A conversation's own mode is its work index: the Todos it dispatched
+        // work for and the coordinator bindings it was configured with. Only
+        // these Todo identities can make a Goal conversation relevant.
+        const deliveries = current.fixturePlanTodoId
+          ? [{operation_id: "accepted-analysis", agent_id: "local-analyst", todo_id: current.fixturePlanTodoId, status: "accepted"}]
+          : current.deliveries;
+        await route.fulfill({ contentType: "application/json", json: {...current, deliveries}, status: 200 });
         return;
       }
       const body = request.postDataJSON();
@@ -1490,7 +1528,18 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         return;
       }
       if (body.operation === "read") {
-        if (body.operation_id === "accepted-synthesis") {
+        if (current.fixtureTeamReadDelayMs) await new Promise(resolveWait => setTimeout(resolveWait, current.fixtureTeamReadDelayMs));
+        if (current.fixtureCorrectionEpisode && body.operation_id === "original-analysis") {
+          await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-original",
+            agent_id: "local-analyst", todo_id: "todo_original", status: "accepted", worker_active: false,
+            recovery_required: false, artifacts: [{ref: "report.json", sha256: "a".repeat(64), text: '{"cash_flow":90}'}]}});
+        } else if (current.fixtureCorrectionEpisode && body.operation_id === "review-objection") {
+          await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-review",
+            agent_id: "independent-reviewer", todo_id: "todo_review", status: "accepted", worker_active: false,
+            recovery_required: false, artifacts: [{ref: "objection.json", sha256: "b".repeat(64), text: '{"objection":"The source was superseded"}'}],
+            dependencies: [{operation_id: "original-analysis", ref: "report.json", sha256: "a".repeat(64),
+              input_ref: "original.json", relation: "responds_to", state: "current"}]}});
+        } else if (body.operation_id === "accepted-synthesis") {
           await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-synthesis",
             agent_id: "synthesizer", todo_id: "todo_synthesis", status: "accepted", worker_active: false,
             recovery_required: false, artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64), text: '{"accepted_cash_flow":75}'},
@@ -1502,12 +1551,18 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           await route.fulfill({status: 409, json: {ok: false, error: "delegation artifact unavailable"}});
         } else {
           await route.fulfill({json: {ok: true, operation_id: body.operation_id, request_id: "request-analysis",
-            agent_id: "local-analyst", todo_id: "todo_analysis", status: "accepted", worker_active: false,
+            agent_id: "local-analyst", todo_id: current.fixturePlanTodoId ?? "todo_analysis", status: "accepted", worker_active: false,
             recovery_required: false,
+            ...(current.fixtureCorrectionEpisode ? {dependencies: [
+              {operation_id: "original-analysis", ref: "report.json", sha256: "a".repeat(64),
+                input_ref: "original.json", relation: "revises", state: "current"},
+              {operation_id: "review-objection", ref: "objection.json", sha256: "b".repeat(64),
+                input_ref: "objection.json", relation: "responds_to", state: "current"}]} : {}),
             ...(current.fixtureAdoptionState ? {adoptions: [{requester_agent_id: "lead", consumer_operation_id: "accepted-synthesis",
               consumer_request_id: "request-synthesis", consumer_agent_id: "synthesizer", consumer_todo_id: "todo_synthesis",
               source_artifacts: [{ref: "report.json", sha256: "d".repeat(64)}],
-              consumer_artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64)}], state: current.fixtureAdoptionState}]} : {}),
+              consumer_artifacts: [{ref: "synthesis.json", sha256: "e".repeat(64)},
+                ...(current.fixturePlanTodoId ? [{ref: "report.md", sha256: "8".repeat(64)}] : [])], state: current.fixtureAdoptionState}]} : {}),
             artifacts: [{ref: "report.json", sha256: "d".repeat(64),
               text: '{"cash_flow":75,"note":"<script>window.artifactExecuted=true</script>"}'},
               {ref: "report.md", sha256: "9".repeat(64), text: "# Cash allocation\n\n| Measure | Value |\n|---|---:|\n| Free cash | 75 |\n\n[Source](https://example.org/report)\n<script>window.artifactExecuted=true</script>"}]}});
@@ -1520,18 +1575,34 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
         return;
       }
       if (body.operation === "operations") {
+        if (!current.settings.agent_id) {
+          await route.fulfill({status: 400, json: {ok: false, error: "configure a coordinator identity first"}});
+          return;
+        }
+        if (current.fixtureTeamInventoryError) {
+          await route.fulfill({status: 503, json: {ok: false, error: "delegation inventory unavailable"}});
+          return;
+        }
         const items = body.cursor ? [{record_id: "c".repeat(64), operation_id: "needs-recovery",
           agent_id: "cloud-reviewer", todo_id: "todo_review", status: "running", worker_active: false, recovery_required: true}]
           : [{record_id: "a".repeat(64), operation_id: "accepted-analysis", agent_id: "local-analyst",
-            todo_id: "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
+            todo_id: current.fixturePlanTodoId ?? "todo_analysis", status: "accepted", worker_active: false, recovery_required: false,
             artifacts: [{ref: "report.json", sha256: "d".repeat(64)}, {ref: "report.md", sha256: "9".repeat(64)}]},
-          {record_id: "b".repeat(64), operation_id: "stale-output", status: "unavailable", recovery_required: null}];
-        await route.fulfill({json: {items, has_more: !body.cursor, next_cursor: body.cursor ? null : "b".repeat(64), page_readback_complete: Boolean(body.cursor)}});
+          ...(!current.fixturePlanTodoId || current.fixtureInventoryGap
+            ? [{record_id: "b".repeat(64), operation_id: "stale-output", status: "unavailable", recovery_required: null}]
+            : [])];
+        await route.fulfill({json: {items, has_more: !body.cursor, next_cursor: body.cursor ? null : "b".repeat(64),
+          page_readback_complete: Boolean(body.cursor || (current.fixturePlanTodoId && !current.fixtureInventoryGap))}});
         return;
       }
       if (body.operation === "inspect") {
-        await route.fulfill({json: {state: "runtime_unverified", turn_eligible: true, acceptance_ready: true,
-          turn_route: "ready_for_host", executor: {host: "generic-cli", available: null, reason: null, profile: null}}});
+        if (body.binding_id === "review") {
+          await route.fulfill({status: 503, json: {error: "Review runtime unavailable"}});
+          return;
+        }
+        await route.fulfill({json: {state: body.binding_id === "synthesis" ? "launchable" : "runtime_unverified",
+          turn_eligible: true, acceptance_ready: true, turn_route: "ready_for_host",
+          executor: {host: "generic-cli", available: body.binding_id === "synthesis" ? true : null, reason: null, profile: null}}});
         return;
       }
       if (body.operation !== "configure") {
@@ -1544,7 +1615,9 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
           ...body.settings,
           execution_config: current.settings.execution_config,
         },
-        members: [{id: "analysis", agent_id: "local-analyst", todo_id: "todo_analysis"}],
+        members: [{id: "analysis", agent_id: "local-analyst", todo_id: "todo_analysis"},
+          {id: "synthesis", agent_id: "synthesizer", todo_id: "todo_synthesis"},
+          {id: "review", agent_id: "cloud-reviewer", todo_id: "todo_review"}],
       };
       loopxModes.set(sessionId, configured);
       await route.fulfill({ contentType: "application/json", json: configured, status: 200 });
@@ -1588,7 +1661,8 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
       : operatorMessage === "请合并我刚才说的那个"
         ? { operation: "merge", target: "PR #999", summary: "模型错误补出了用户没有提供的目标。" }
       : null;
-    const answer = operatorMessage.startsWith("我现在该做什么？")
+    const scriptedAnswer = typeof state.answerForMessage === "function" ? state.answerForMessage(operatorMessage) : null;
+    const answer = scriptedAnswer || (operatorMessage.startsWith("我现在该做什么？")
       ? "管家已读取当前授权范围的 Goal 证据。"
       : operatorMessage === "请只回复：合并后真实回复已收到"
       ? "合并后真实回复已收到"
@@ -1600,7 +1674,7 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
             ? "这个指代不够明确，请提供具体 PR 或 MR。"
           : protectedAction
             ? "我识别到一个明确的合并请求。LoopX 会先展示受保护操作预览，不会直接执行。"
-            : "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
+            : "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。");
     await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(operatorMessage) ? 5000 : 1200));
     await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, protectedAction), status: 200 });
   });
@@ -1608,10 +1682,20 @@ export async function installApi(page, { goalSubagentConfigurationEnabled = true
     const url = new URL(route.request().url());
     const goalId = url.searchParams.get("goal_id");
     const contextKind = url.searchParams.get("context_kind");
-    const proposals = Array.from(actionProposals.values()).filter((proposal) => {
+    const matching = Array.from(actionProposals.values()).filter((proposal) => {
       if (proposal.status === "cancelled") return false;
       if (goalId && (proposal.context?.goal_id ?? proposal.normalized_parameters?.goal_id) !== goalId) return false;
       return !contextKind || proposal.context?.kind === contextKind;
+    });
+    // `ChatActionStore.list` sorts by (`updated_at`, `proposal_id`) newest first.
+    // Serving insertion order instead let a positional reader pass here and keep
+    // the wrong draft on the first screen of the real workspace.
+    const proposals = matching.sort((a, b) => {
+      const [aTime, aId] = [a.updated_at ?? "", a.proposal_id ?? ""];
+      const [bTime, bId] = [b.updated_at ?? "", b.proposal_id ?? ""];
+      if (aTime !== bTime) return aTime < bTime ? 1 : -1;
+      if (aId === bId) return 0;
+      return aId < bId ? 1 : -1;
     });
     await route.fulfill({ contentType: "application/json", json: { ok: true, schema_version: "loopx_chat_action_list_v1", proposals }, status: 200 });
   });

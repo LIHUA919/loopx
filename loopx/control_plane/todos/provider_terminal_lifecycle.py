@@ -22,7 +22,10 @@ from ..coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ..coordination.local_authority_shadow_adapter import effective_runtime_root
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import (
+    CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    effect_runtime_result,
+)
 from .completion_policy import (
     build_completion_policy_request,
     linked_successor_from_todo,
@@ -39,8 +42,9 @@ from ..coordination.authority_source_capture import authority_registry_source
 from .path_resolution import resolve_todo_state_path
 from .provider_projection import projection_delivery_requires_ack, settle_canonical_todo_projection
 from .successor_derivation import build_successor_intents
+from .completion_result import read_completion_result, store_completion_result
 
-_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v2"
+_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
 _ARCHIVE_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_request_v0"
 _ARCHIVE_ACK_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_ack_request_v0"
 _ACCEPTED = {"applied", "recovered", "replayed", "no_change", "planned"}
@@ -117,6 +121,7 @@ def _route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any
         authority_reason=call.get("authority_reason"),
         decision_outcome=call.get("decision_outcome") if complete else None,
         evidence=call.get("evidence") if complete else None,
+        completion_result_file=call.get("completion_result_file") if complete else None,
         note=call.get("note") if complete else "superseded",
         reason=None if complete else call.get("reason"),
         completion_turn_key=call.get("completion_turn_key") if complete else None,
@@ -178,6 +183,8 @@ def provider_first_terminal_lifecycle(command: str) -> Callable[[TodoMutation], 
             result = _route_terminal_call(command, bound.arguments)
             if result is None and bound.arguments.get("terminal_review_basis") is not None:
                 raise ValueError("Reviewed canonical completion cannot fall back to legacy authority; regenerate preview")
+            if result is None and bound.arguments.get("completion_result_file") is not None:
+                raise ValueError("Completion results require promoted canonical Todo authority")
             return result if result is not None else legacy(*args, **kwargs)
 
         return routed
@@ -250,6 +257,7 @@ def terminal_canonical_todo_if_promoted(
     authority_reason: str | None,
     decision_outcome: str | None,
     evidence: str | None,
+    completion_result_file: Path | None,
     note: str | None,
     reason: str | None,
     completion_turn_key: str | None,
@@ -303,6 +311,22 @@ def terminal_canonical_todo_if_promoted(
     # The canonical transaction owns missing/role/archive lifecycle decisions.
     # Keep only the optional local validation facts needed by the host adapter.
     target = _todo_by_id(todos, todo_id) or {}
+    result_descriptor = None
+    if completion_result_file is not None:
+        try:
+            result_descriptor = store_completion_result(
+                source=completion_result_file, runtime_root=runtime_root,
+                goal_id=goal_id, persist=False,
+            )
+        except FileNotFoundError:
+            if target.get("status") != "done":
+                raise
+            bound = read_completion_result(
+                registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=goal_id, todo_id=todo_id,
+            )["result"]
+            result_descriptor = {key: bound[key] for key in
+                                 ("provider", "sha256", "size_bytes", "content_type")}
     with authority_registry_source(registry_path) as registry_source:
         registered, grants = todo_lifecycle_facts(registry_path, goal_id)
         successor_intents = build_successor_intents(
@@ -339,6 +363,11 @@ def terminal_canonical_todo_if_promoted(
             if command == "complete"
             else None
         )
+        implicit_monitor_cycle = (
+            command == "complete"
+            and completion_turn_key is None
+            and target.get("task_class") == "continuous_monitor"
+        )
         request = {
             "schema_version": _TERMINAL_REQUEST_SCHEMA,
             **({"review_basis": dict(review_basis)} if review_basis is not None else {}),
@@ -354,7 +383,14 @@ def terminal_canonical_todo_if_promoted(
             "registry_source": registry_source,
             "authority_reason": authority_reason,
             "decision_outcome": decision_outcome,
-            "operation_id": None,
+            "operation_identity": (
+                {"kind": "current_monitor_cycle"}
+                if implicit_monitor_cycle
+                else {"kind": "explicit", "operation_id": _terminal_operation_id(
+                    command=command, goal_id=goal_id, todo_id=todo_id,
+                    completion_turn_key=completion_turn_key,
+                )}
+            ),
             "lease_idempotency_key": task_lease_idempotency_key,
             "lease_expected_version": task_lease_expected_version,
             "allow_user_gate_auto_acquire": command == "complete",
@@ -365,6 +401,7 @@ def terminal_canonical_todo_if_promoted(
             "successor_intents": successor_intents,
             "note": note,
             "evidence": evidence,
+            "completion_result": result_descriptor,
             "reason": reason,
             "clear_claim": clear_claim,
             "validation_declaration": None,
@@ -374,14 +411,9 @@ def terminal_canonical_todo_if_promoted(
             "dry_run": dry_run,
             "observed_at": now_local(),
         }
-        request["operation_id"] = _terminal_operation_id(
-            command=command,
-            goal_id=goal_id,
-            todo_id=todo_id,
-            completion_turn_key=completion_turn_key,
-        )
     result = effect_runtime_result(
-        "coordination.local_authority.todo_terminal", request
+        "coordination.local_authority.todo_terminal", request,
+        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     )
     if isinstance(result, Mapping) and result.get("status") == "resolve_validation":
         # Admission and receipt recovery precede host-local declaration IO.
@@ -395,7 +427,10 @@ def terminal_canonical_todo_if_promoted(
             registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
             persist_if_resolved=not dry_run,
         )
-        result = effect_runtime_result("coordination.local_authority.todo_terminal", request)
+        result = effect_runtime_result(
+            "coordination.local_authority.todo_terminal", request,
+            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+        )
     completion_validation_executed = False
     if isinstance(result, Mapping) and result.get("status") == "execute_validation":
         request["validation_source_provider_revision"] = result["provider_revision"]
@@ -404,10 +439,25 @@ def terminal_canonical_todo_if_promoted(
             delivery_workspace=completion_delivery_workspace,
             validation_workspace_path=completion_validation_workspace_path,
         ))
+        if completion_result_file is not None and not dry_run:
+            receipts = request.get("goal_acceptance_validation_receipts")
+            passed = (isinstance(receipts, list) and bool(receipts) and
+                      all(isinstance(row, Mapping) and isinstance(row.get("receipt"), Mapping) and
+                          row["receipt"].get("passed") is True for row in receipts))
+            caller_receipt = request.get("validation_receipt")
+            if passed and (caller_receipt is None or
+                           isinstance(caller_receipt, Mapping) and caller_receipt.get("passed") is True):
+                staged = store_completion_result(
+                    source=completion_result_file, runtime_root=runtime_root,
+                    goal_id=goal_id,
+                )
+                if staged != result_descriptor:
+                    raise ValueError("completion result changed during acceptance validation")
         completion_validation_executed = True
         request["observed_at"] = now_local()
         result = effect_runtime_result(
-            "coordination.local_authority.todo_terminal", request
+            "coordination.local_authority.todo_terminal", request,
+            timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
         )
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
@@ -523,6 +573,7 @@ def archive_canonical_todos_if_promoted(
             "dry_run": dry_run,
             "observed_at": now_local(),
         },
+        timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     )
     if not isinstance(result, Mapping) or result.get("status") not in _ACCEPTED:
         payload = dict(result) if isinstance(result, Mapping) else {}
@@ -561,6 +612,7 @@ def archive_canonical_todos_if_promoted(
                     "role": role,
                     "operation_id": response.get("operation_id"),
                 },
+                timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
             )
             response["archive_delivery_ack"] = (
                 dict(acknowledgement)

@@ -202,6 +202,7 @@ Do not mix marketing pills and application squares in the same control group.
 - Theme and language choices use the same two-column grid in every workspace theme.
 - Omit secondary descriptive lines under workspace page titles, navigation labels, and display choices. Preserve operational status, errors, and action outcomes.
 - Capability navigation shows the localized name and a compact Goal or machine scope badge; omit the secondary internal identifier. Configuration forms use shared spacing and a full-width switch row; optional capability and field explanations live in a collapsed configuration-help section. Keep activation consequences and read-only restrictions visible. Goal and machine editors share the enable-row JSON entry point. Goal JSON accepts only registered editable fields and invalidates the previous preview whenever edited; applying still requires a new reviewed preview.
+- Scope each settings catalog to its owner: Goal settings include only capabilities with Goal scope, including Goal-scoped read-only entries. Machine-only capabilities belong in machine or steward settings even when a shared API catalog also describes them.
 
 ### Forms
 

@@ -26,6 +26,8 @@ export function isProjectionDelivery(value: unknown): value is TodoProjectionDel
 export interface ProjectionReadback {
   provider_revision: string;
   changed: boolean;
+  attempt: number;
+  target: "pinned" | "latest";
 }
 
 export function decodeProjectionReadback(value: unknown): ProjectionReadback {
@@ -33,17 +35,41 @@ export function decodeProjectionReadback(value: unknown): ProjectionReadback {
     throw new TypeError("projection_readback must be an object");
   }
   const row = value as Record<string, unknown>;
-  if (Object.keys(row).length !== 2 || typeof row.provider_revision !== "string" ||
+  if (Object.keys(row).length !== 4 || typeof row.provider_revision !== "string" ||
       !row.provider_revision.trim() || row.provider_revision !== row.provider_revision.trim() ||
-      typeof row.changed !== "boolean") throw new TypeError("invalid projection_readback");
-  return {provider_revision: row.provider_revision, changed: row.changed};
+      typeof row.changed !== "boolean" ||
+      typeof row.attempt !== "number" || !Number.isSafeInteger(row.attempt) || row.attempt < 1 ||
+      row.attempt > 3 || (row.target !== "pinned" && row.target !== "latest")) throw new TypeError("invalid projection_readback");
+  return {provider_revision: row.provider_revision, changed: row.changed,
+    attempt: row.attempt, target: row.target};
 }
 
-export function confirmProjectionReadback(readback: ProjectionReadback, observedRevision: string) {
-  return {
-    provider_revision: readback.provider_revision,
-    observed_provider_revision: observedRevision,
-    status: readback.provider_revision === observedRevision
-      ? (readback.changed ? "delivered" : "current") : "pending",
-  } satisfies {provider_revision: string; observed_provider_revision: string; status: TodoProjectionDelivery};
+/** One policy for mutation delivery, refresh recovery and explicit projection.
+ * The display lock does not lock provider commits. Only a latest-head request
+ * may follow an overlap; exact-revision requests must remain pinned.
+ */
+export type ProjectionConfirmation = {
+  provider_revision: string;
+  observed_provider_revision: string;
+} & (
+  | {status: "delivered" | "current"; next_action: "finish"}
+  | {status: "pending"; next_action: "retry" | "finish";
+     reason_code: "todo_projection_revision_advanced"; retryable: true;
+     retry_business_mutation: false; recommended_action: string}
+);
+
+export function confirmProjectionReadback(
+  readback: ProjectionReadback, observedRevision: string,
+): ProjectionConfirmation {
+  const basis = {provider_revision: readback.provider_revision,
+    observed_provider_revision: observedRevision};
+  if (readback.provider_revision === observedRevision) {
+    return {...basis, status: readback.changed ? "delivered" : "current", next_action: "finish"};
+  }
+  return {...basis, status: "pending",
+    next_action: readback.target === "latest" && readback.attempt < 3 ? "retry" : "finish",
+    reason_code: "todo_projection_revision_advanced", retryable: true,
+    retry_business_mutation: false,
+    recommended_action: "Read the current provider revision with todo list, then retry todo project-markdown for that revision.",
+  };
 }

@@ -26,11 +26,11 @@ export function registerProjectionConfirmationConformance(name: string, factory:
     assert.equal(Object.hasOwn(plain, "projection_readback"), false);
     for (const changed of [false, true]) {
       const confirmed = await listLocalCoordinationTodos({...request,
-        projection_readback: {provider_revision: seeded.provider_revision, changed}}, dependencies);
+        projection_readback: {provider_revision: seeded.provider_revision, changed, attempt: 1, target: "latest"}}, dependencies);
       const {projection_readback, ...unchanged} = confirmed;
       assert.deepEqual(unchanged, plain, "confirmation cannot change full-source semantics");
       assert.deepEqual(projection_readback, {status: changed ? "delivered" : "current",
-        provider_revision: seeded.provider_revision, observed_provider_revision: seeded.provider_revision});
+        provider_revision: seeded.provider_revision, observed_provider_revision: seeded.provider_revision, next_action: "finish"});
     }
     const before = await contender.loadAuthority(); assert.equal(before.status, "loaded");
     if (before.status !== "loaded") return;
@@ -39,9 +39,20 @@ export function registerProjectionConfirmationConformance(name: string, factory:
     assert.equal(committed.status, "applied");
     const after = await store.loadAuthority();
     const stale = await listLocalCoordinationTodos({...request, include_leases: true,
-      projection_readback: {provider_revision: seeded.provider_revision, changed: true}}, dependencies);
-    assert.deepEqual(stale.projection_readback, {status: "pending", provider_revision: seeded.provider_revision,
-      observed_provider_revision: committed.provider_revision});
+      projection_readback: {provider_revision: seeded.provider_revision, changed: true, attempt: 1, target: "latest"}}, dependencies);
+    const confirmation = stale.projection_readback as Record<string, unknown>;
+    assert.equal(confirmation.status, "pending");
+    assert.equal(confirmation.provider_revision, seeded.provider_revision);
+    assert.equal(confirmation.observed_provider_revision, committed.provider_revision);
+    assert.equal(confirmation.next_action, "retry");
+    assert.equal(confirmation.retry_business_mutation, false);
+    for (const target of ["latest", "pinned"]) for (const attempt of [1, 3]) {
+      const result = await listLocalCoordinationTodos({...request,
+        projection_readback: {provider_revision: seeded.provider_revision, changed: true, attempt, target}}, dependencies);
+      const decision = result.projection_readback as Record<string, unknown>;
+      assert.equal(decision.next_action, target === "latest" && attempt === 1 ? "retry" : "finish");
+      assert.equal(decision.status, "pending");
+    }
     assert.equal((stale.todos as unknown[]).length, fixture.expected_initial_todo_count);
     assert.equal((stale.leases as unknown[]).length, fixture.expected_current_lease_count);
     assert.equal(stale.provider_revision, committed.provider_revision);

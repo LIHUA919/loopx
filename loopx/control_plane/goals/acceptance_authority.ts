@@ -98,7 +98,16 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
   const previous = readGoalAcceptance(head.head, String(request.goal_id));
   let state: AcceptanceState | null = previous;
   if (document) {
+    // Historical receipts above remain replayable; new configurations must make
+    // the blast radius explicit, including updates to legacy contracts.
+    if (document.scope === undefined) return source(store, failure("goal_acceptance_scope_required",
+      "Select selected_work with todo_ids or explicitly choose all_advancement before configuring acceptance."));
     const todos = acceptanceTodos(head.head, String(request.goal_id));
+    if (document.scope?.kind === "selected_work") for (const todoId of document.scope.todo_ids) {
+      const todo = todos.get(todoId);
+      acceptanceRequire(todo && todo.role === "agent" && (todo.task_class == null || todo.task_class === "advancement_task"),
+        "acceptance scope must reference existing Agent advancement work");
+    }
     const revision = (previous?.revision ?? 0) + 1;
     acceptanceRequire(Number.isSafeInteger(revision), "acceptance revision exhausted");
     const bindings = document.bindings.map(binding => {
@@ -143,7 +152,7 @@ export async function commitGoalAcceptanceVerification(store: AuthorityStore, va
   normalizeAcceptanceResults(results, criterionIds);
   const verification: AcceptanceVerification = {operation_id: String(request.operation_id),
     contract_revision: state.revision, contract_digest: state.digest, todo_id: todoId,
-    work_digest: goalAcceptanceWorkDigest(head.head, goalId), results};
+    work_digest: goalAcceptanceWorkDigest(head.head, goalId, state.document.scope), results};
   return commit(store, request, head, {...state, verification}, command, "verify");
 }
 
@@ -160,7 +169,8 @@ export async function inspectGoalAcceptance(store: AuthorityStore, goalId: strin
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state?.enabled ? state.document : null, tasks,
-    ...(todoId === undefined ? {} : {completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
+    ...(todoId === undefined ? {} : {todo: todos.get(todoId) ?? null,
+      completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
     goal_acceptance_contract: projectGoalAcceptance(head.head, goalId)});
 }
 
@@ -179,7 +189,13 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify"): 
     };
     return kind === "inspect" ? await run() : await withCanonicalWriter(root, goalId, request.dry_run === true, run);
   } catch (error) {
-    const result = {...failure(error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed",
+    // Preserve the canonical task guard's diagnosis on exact private reads.
+    // An unbound/stale task must never look like an absent contract eligible
+    // for independent validation, or an authority that needs re-promotion.
+    const taskReason = kind === "inspect" && error instanceof AuthorityStoreProtocolError
+      && ["goal_acceptance_unbound", "goal_acceptance_stale"].includes(error.message)
+      ? error.message : null;
+    const result = {...failure(taskReason ?? (error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed"),
       error instanceof Error ? error.message : "acceptance effect failed"),
       decision_read_from_provider: false, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
     return store ? {...result, source_authority: authorityStoreSourceAuthority(store)} : result;

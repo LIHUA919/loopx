@@ -13,7 +13,7 @@ ANSWERS = [
     {"action": "wait", "notify": True, "finish_goal": False},
     {"action": "wait", "notify": False, "finish_goal": False},
     {"action": "replan", "notify": False, "finish_goal": False},
-    {"action": "external_wait", "notify": False, "finish_goal": False},
+    {"action": "work", "notify": True, "finish_goal": False},
 ]
 
 
@@ -35,6 +35,11 @@ class ScriptedClient:
 
 
 def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
+    fallback = cases()[-1]
+    assert fallback["packet"]["selected_todo"]["todo_id"] == "todo_external_wait_fallback"
+    assert fallback["packet"]["execution_obligation"]["must_attempt_work"] is True
+    assert fallback["packet"]["interaction_contract"]["user_channel"]["notify"] == "NOTIFY"
+    assert "external_wait_observation" not in fallback["packet"]
     for mode in ("thin", "brief"):
         for case in cases():
             messages = probe_messages(mode, case["packet"])
@@ -44,7 +49,7 @@ def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
             assert (
                 "monitor_changed:<monitor>" in body
                 or "wait->monitor+successor/work" in body
-                or "外部等待须 open+monitor_changed+successor" in body
+                or "open + monitor_changed + successor" in body
             )
             assert "--codex-app" in body
             assert "LOOPX_TURN=<current_time_iso>" in body

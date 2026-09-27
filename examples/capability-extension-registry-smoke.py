@@ -81,6 +81,7 @@ next_real_step = "Keep explicit enablement bounded."
         "connector-registry",
         "external-evidence-research",
         "reliability-diagnostics",
+        "progress-review-sentinel",
     ]
     assert all(item["provider_id"] == "loopx-core" for item in builtin_capabilities)
     value_summary = next(

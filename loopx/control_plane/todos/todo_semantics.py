@@ -14,12 +14,15 @@ from ..scheduler.monitor_todo import (
     monitor_todo_next_due_at,
     monitor_todo_task_class,
 )
+from ..runtime.public_safety import public_safe_compact_text
 from ..coordination.coordination_state_contract_generated import (
     COORDINATION_STATE_CONTRACT,
 )
 from .contract import (
+    TODO_STATUS_BLOCKED,
     TODO_STATUS_DEFERRED,
     TODO_TASK_CLASS_ADVANCEMENT,
+    TODO_TASK_CLASS_BLOCKER,
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_excluded_agents,
@@ -42,6 +45,17 @@ TODO_LEGACY_ITEM_SCHEMA = str(
 TODO_NATIVE_ITEM_SCHEMA = str(
     COORDINATION_STATE_CONTRACT["todo_domain_record"]["item_schema_version"]
 )
+
+
+def todo_blocker_reason(item: dict[str, Any]) -> str | None:
+    """Project a bounded, public-safe cause for blocked work of any task class."""
+
+    if (
+        todo_item_task_class(item) != TODO_TASK_CLASS_BLOCKER
+        and normalize_todo_status(item.get("status")) != TODO_STATUS_BLOCKED
+    ):
+        return None
+    return public_safe_compact_text(item.get("reason"), limit=220)
 
 
 def todo_item_is_watch_only_monitor(item: dict[str, Any]) -> bool:
@@ -177,56 +191,6 @@ def todo_projection_sort_key(
 ) -> tuple[int, int]:
     return (todo_priority_rank(item, text_mode=text_mode), todo_index_rank(item))
 
-
-def todo_claimed_visibility_items(
-    items: list[dict[str, Any]],
-    *,
-    limit: int,
-) -> list[dict[str, Any]]:
-    if limit <= 0 or len(items) <= limit:
-        return items[:limit]
-    claim_order: list[str] = []
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for item in items:
-        claimed_by = normalize_todo_claimed_by(item.get("claimed_by"))
-        if not claimed_by:
-            continue
-        if claimed_by not in buckets:
-            buckets[claimed_by] = []
-            claim_order.append(claimed_by)
-        buckets[claimed_by].append(item)
-    if not buckets:
-        return items[:limit]
-
-    original_index = {id(item): index for index, item in enumerate(items)}
-    per_claimant_cap = max(1, limit // len(buckets))
-    selected: list[dict[str, Any]] = []
-    selected_ids: set[int] = set()
-    for claimed_by in claim_order:
-        taken = 0
-        for item in buckets[claimed_by]:
-            if taken >= per_claimant_cap:
-                break
-            if len(selected) >= limit:
-                break
-            selected.append(item)
-            selected_ids.add(id(item))
-            taken += 1
-        if len(selected) >= limit:
-            break
-
-    if len(selected) < limit:
-        for item in items:
-            if id(item) in selected_ids:
-                continue
-            selected.append(item)
-            selected_ids.add(id(item))
-            if len(selected) >= limit:
-                break
-
-    return sorted(
-        selected, key=lambda item: original_index.get(id(item), TODO_MISSING_INDEX)
-    )[:limit]
 
 
 def todo_item_task_text(

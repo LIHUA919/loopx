@@ -2,12 +2,17 @@
 
 import json
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 
 import pytest
 
+from loopx.control_plane.coordination.coordination_state_contract_generated import (
+    SHADOW_MANAGEMENT_STATE_SCHEMA,
+)
 from loopx.control_plane.coordination.shadow_management import (
+    SHADOW_CAPTURE_PROFILE,
     ShadowManagementError,
     read_shadow_management_state,
     require_shadow_primary_write_allowed,
@@ -135,3 +140,102 @@ def test_bound_source_path_never_accepts_or_repairs_a_damaged_manifest(tmp_path:
     with pytest.raises(ShadowManagementError, match="shadow_management_manifest_invalid"):
         management.read_shadow_bootstrap_source_path(w.runtime, w.goal, binding)
     assert {str(path.relative_to(w.runtime)): path.read_bytes() for path in w.runtime.rglob("*") if path.is_file()} == before
+
+
+def _root_digest(path: Path, *, canonical: bool) -> str:
+    spelling = os.path.realpath(path) if canonical else os.path.abspath(path)
+    return "sha256:" + hashlib.sha256(spelling.encode("utf-8")).hexdigest()
+
+
+def _active_journal(*, state_digest: str, binding_digest: str) -> dict:
+    """An active journal in the shape the TypeScript owner writes, with separately chosen root digests."""
+
+    return {
+        "schema_version": SHADOW_MANAGEMENT_STATE_SCHEMA,
+        "goal_id": "goal-a",
+        "source_root_digest": state_digest,
+        "status": "active",
+        "binding": {
+            "capture_profile": SHADOW_CAPTURE_PROFILE,
+            "capture_lineage_id": "lineage-a",
+            "source_root_digest": binding_digest,
+            "store_identity": "file:" + "a" * 32,
+            "bootstrap_operation_id": "bootstrap:guard",
+            "bootstrap_provider_revision": "file:1:" + "b" * 24,
+        },
+        "operation": {
+            "kind": "bootstrap",
+            "operation_id": "bootstrap:guard",
+            "request_digest": "sha256:" + "c" * 64,
+            "manifest_digest": "sha256:" + "d" * 64,
+            "phase": "complete",
+        },
+        "previous_operation_id": None,
+        "result": {},
+    }
+
+
+_TYPESCRIPT_READ = """
+import {readShadowManagementState} from './loopx/control_plane/coordination/shadow_management.ts';
+try {
+  const state = await readShadowManagementState(process.argv[1], 'goal-a');
+  process.stdout.write(JSON.stringify({accepted: state !== null}));
+} catch (error) {
+  process.stdout.write(JSON.stringify({accepted: false, code: error?.code ?? error?.reason_code ?? String(error)}));
+}
+"""
+
+
+def _typescript_reads(root: Path) -> dict:
+    result = subprocess.run(
+        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", _TYPESCRIPT_READ, str(root)],
+        check=True, capture_output=True, text=True,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    ("state_canonical", "binding_canonical"),
+    [(False, True), (True, False)],
+    ids=["lexical-journal-canonical-binding", "canonical-journal-lexical-binding"],
+)
+def test_mixed_root_digests_are_rejected_by_both_readers_without_touching_the_journal(
+    tmp_path: Path, state_canonical: bool, binding_canonical: bool,
+) -> None:
+    """Either spelling may identify the root, but journal and binding must agree exactly.
+
+    The TypeScript decoder requires `binding.source_root_digest === state.source_root_digest`;
+    the Python guard must hold the same line, or a journal Python keeps writing under is one
+    TypeScript refuses to read back after a restart (#4892 review).
+    """
+
+    real = tmp_path / "runtime"
+    real.mkdir()
+    alias = tmp_path / "runtime-alias"
+    try:
+        alias.symlink_to(real, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    assert _root_digest(alias, canonical=True) != _root_digest(alias, canonical=False)
+    path = shadow_management_state_path(alias, "goal-a")
+    path.parent.mkdir(parents=True)
+
+    # Positive control: an agreeing journal is accepted by both readers, so the
+    # rejections below are about the mixture, not about the fixture.
+    agreeing = _root_digest(alias, canonical=True)
+    path.write_text(json.dumps(_active_journal(state_digest=agreeing, binding_digest=agreeing)))
+    assert require_shadow_primary_write_allowed(alias, "goal-a") is not None
+    assert _typescript_reads(alias) == {"accepted": True}
+
+    mixed = _active_journal(
+        state_digest=_root_digest(alias, canonical=state_canonical),
+        binding_digest=_root_digest(alias, canonical=binding_canonical),
+    )
+    path.write_text(json.dumps(mixed))
+    before = path.read_bytes()
+    with pytest.raises(ShadowManagementError) as failure:
+        require_shadow_primary_write_allowed(alias, "goal-a")
+    assert failure.value.code == "shadow_management_state_invalid"
+    assert path.read_bytes() == before
+    assert _typescript_reads(alias) == {"accepted": False, "code": "shadow_management_state_invalid"}
+    assert path.read_bytes() == before

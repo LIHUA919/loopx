@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import tempfile
 import time
 import importlib
@@ -121,6 +122,28 @@ def _policy(value: LockAcquisitionPolicy | str) -> LockAcquisitionPolicy:
 
 def _lock_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.lock")
+
+
+def _open_lock_descriptor(path: Path, *, flags: int) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow and path.is_symlink():
+        raise OSError(errno.ELOOP, "lock path must not be a symlink", str(path))
+    descriptor = os.open(path, flags | no_follow, 0o600)
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        path_stat = os.lstat(path)
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or stat.S_ISLNK(path_stat.st_mode)
+            or descriptor_stat.st_dev != path_stat.st_dev
+            or descriptor_stat.st_ino != path_stat.st_ino
+            or getattr(descriptor_stat, "st_nlink", 1) != 1
+        ):
+            raise OSError(errno.EINVAL, "lock path must be a regular file", str(path))
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def lock_holder_path(path: Path) -> Path:
@@ -292,10 +315,9 @@ def _append_incident(path: Path, record: dict[str, object]) -> bool:
         + "\n"
     ).encode("utf-8")
     try:
-        descriptor = os.open(
+        descriptor = _open_lock_descriptor(
             incident_path,
-            os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-            0o600,
+            flags=os.O_APPEND | os.O_CREAT | os.O_WRONLY,
         )
         try:
             os.write(descriptor, encoded)
@@ -409,7 +431,10 @@ def exclusive_file_lock(
     lock_path = _lock_path(path)
     holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    descriptor = _open_lock_descriptor(
+        lock_path,
+        flags=os.O_CREAT | os.O_RDWR,
+    )
     with os.fdopen(descriptor, "r+", encoding="utf-8") as lock_file:
         started = time.monotonic()
         started_at = _utc_now_iso()
@@ -467,7 +492,10 @@ def try_exclusive_file_lock(
     lock_path = _lock_path(path)
     holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    descriptor = _open_lock_descriptor(
+        lock_path,
+        flags=os.O_CREAT | os.O_RDWR,
+    )
     with os.fdopen(descriptor, "r+", encoding="utf-8") as lock_file:
         if not _try_acquire_kernel_lock(lock_file):
             yield None
@@ -886,8 +914,20 @@ def release_cross_runtime_mutation_lock(path: Path, *, token: str) -> bool:
     )
 
 
+def cross_runtime_lock_witness(path: Path) -> dict[str, object]:
+    """Internal handoff of a lock held by this process, never an Agent token.
+
+    The native effect must claim and recheck it before using adapted facts.
+    Its final save owns release; Python's later release is token-checked.
+    """
+    owner = _read_effect_mutation_owner(_effect_mutation_lock_path(path))
+    if owner is None or owner.get("pid") != os.getpid():
+        raise RuntimeError("checkpoint handoff requires the caller's held mutation lock")
+    return {"target": str(path.resolve()), **owner}
+
+
 @contextmanager
-def exclusive_cross_runtime_file_lock(
+def exclusive_mutation_file_lock(
     path: Path,
     *,
     policy: LockAcquisitionPolicy | str = LockAcquisitionPolicy.MUTATION,
@@ -896,13 +936,7 @@ def exclusive_cross_runtime_file_lock(
     agent_id: str | None = None,
     operation: str | None = None,
 ) -> Iterator[Path]:
-    """Hold the TypeScript mutation lock, then the existing Python lock.
-
-    This is a bounded migration lock for state whose writers span both
-    runtimes. TypeScript coordinates through exclusive creation of
-    ``<target>.ts-effect.lock``; Python keeps its kernel lock underneath so
-    existing diagnostics and Python-to-Python exclusion remain unchanged.
-    """
+    """Hold the existing TypeScript mutation marker and its token/claim protocol."""
 
     selected_policy = _policy(policy)
     defaults = LOCK_POLICIES[selected_policy]
@@ -966,15 +1000,7 @@ def exclusive_cross_runtime_file_lock(
         break
 
     try:
-        with exclusive_file_lock(
-            path,
-            policy=selected_policy,
-            timeout_seconds=timeout,
-            poll_interval_seconds=poll_interval,
-            agent_id=agent_id,
-            operation=operation,
-        ) as lock_path:
-            yield lock_path
+        yield effect_lock_path
     finally:
         _release_effect_mutation_lock(
             effect_lock_path,
@@ -984,3 +1010,39 @@ def exclusive_cross_runtime_file_lock(
             # original exception; stale-owner recovery handles a later retry.
             suppress_errors=True,
         )
+
+
+@contextmanager
+def exclusive_cross_runtime_file_lock(
+    path: Path,
+    *,
+    policy: LockAcquisitionPolicy | str = LockAcquisitionPolicy.MUTATION,
+    timeout_seconds: float | None = None,
+    poll_interval_seconds: float | None = None,
+    agent_id: str | None = None,
+    operation: str | None = None,
+) -> Iterator[Path]:
+    """Source writers retain their existing order: mutation marker, then kernel."""
+    with exclusive_mutation_file_lock(
+        path, policy=policy, timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds, agent_id=agent_id, operation=operation,
+    ):
+        with exclusive_file_lock(
+            path, policy=policy, timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds, agent_id=agent_id, operation=operation,
+        ) as lock_path:
+            yield lock_path
+
+
+@contextmanager
+def exclusive_run_index_lock(path: Path, *, operation: str) -> Iterator[Path]:
+    """Goal indexes use kernel then marker, matching existing quota adapters.
+
+    Native writers take only the marker, never the kernel lock. Python callers
+    must enter here before any source lock; no index path may use the reverse
+    order from exclusive_cross_runtime_file_lock. A native checkpoint effect
+    claims the marker until append completes, including after caller exit.
+    """
+    with exclusive_file_lock(path, operation=operation) as lock_path:
+        with exclusive_mutation_file_lock(path, operation=operation):
+            yield lock_path

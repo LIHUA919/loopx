@@ -54,6 +54,8 @@ def _prepare_dashboard_runtime_fixture(tmp_path: Path) -> tuple[Path, Path, Path
     (dashboard_dir / "node_modules" / ".bin" / "vite").touch()
     fake_bin.mkdir()
     _copy_dashboard_launcher(scripts_dir)
+    # This fixture isolates service error propagation; bundle integrity has its own suite.
+    (scripts_dir / "chat_bundle.py").write_text("# frontend already qualified in fixture\n")
     for executable in (fake_bin / "node", fake_bin / "npm"):
         executable.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)

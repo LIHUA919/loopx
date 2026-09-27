@@ -11,7 +11,8 @@ import { engageLegacyCoordinationWriterFence, LEGACY_COORDINATION_WRITER_FENCE_E
   LEGACY_COORDINATION_WRITER_FENCE_SCHEMA } from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import { bootstrapCoordinationRuntimeShadow, COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_REQUEST_SCHEMA } from "../../loopx/control_plane/coordination/runtime_shadow.ts";
 import { projection as fileProjection, sourceRequest, pendingEntry, settleFiles } from "./shadow_file_fixture.ts";
-import { commitLocalAuthorityShadowEntry } from "../../loopx/control_plane/coordination/local_authority_shadow.ts";
+import {deliverShadowEntry} from "../../loopx/control_plane/coordination/shadow_entry_delivery.ts";
+import {entrySelection} from "./shadow_file_fixture.ts";
 
 function todoRecord(overrides: Record<string, unknown> = {}) {
   return {schema_version: "todo_item_v0", todo_id: "todo_a", role: "agent", status: "open",
@@ -41,7 +42,7 @@ export async function qualifiedShadow(root: string, handoffMode = "soft_claim", 
       })]},
       {writeClass: sequence === 1 ? "todo_claim" : "todo_update"},
     );
-    const mirrored = await commitLocalAuthorityShadowEntry(entry);
+    const mirrored = await deliverShadowEntry(entrySelection(entry));
     assert.equal(mirrored.outcome, "delivered", JSON.stringify(mirrored));
     await settleFiles(f, entry, mirrored);
   }

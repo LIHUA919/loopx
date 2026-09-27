@@ -14,8 +14,10 @@ import { outboxEntryIdentity, beginLeaseOutboxEntry } from "../../loopx/control_
 import { requireShadowCaptureBinding } from "../../loopx/control_plane/coordination/shadow_management.ts";
 import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import { fixture, pendingEntry, settleFiles, todo, sha } from "./shadow_file_fixture.ts";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 
 const execFileAsync = promisify(execFile);
+const PYTHON = resolveTestPython();
 
 test("one primary entry commits exactly once after a complete baseline", async (t) => {
   const f = await fixture(t);
@@ -266,7 +268,7 @@ test("prose bytes may change only while the canonical previous partition remains
 test("Python and TypeScript entry identity include the same root and lineage", async () => {
   const source = sha("source"); const root = sha("root");
   const script = "from loopx.control_plane.coordination.local_authority_shadow_outbox import entry_identity\nprint(entry_identity(goal_id='goal-a',partition='leases',seq=7,source_ref='" + source + "',capture_lineage_id='lineage-a',source_root_digest='" + root + "'))";
-  const result = await execFileAsync(process.env.LOOPX_TEST_PYTHON ?? "python3", ["-c", script],
+  const result = await execFileAsync(PYTHON, ["-c", script],
     { cwd: join(import.meta.dirname, "..", "..") });
   assert.equal(result.stdout.trim(), outboxEntryIdentity("goal-a", "leases", 7, source, "lineage-a", root));
   assert.notEqual(outboxEntryIdentity("goal-a", "leases", 7, source, "lineage-a", root),
@@ -291,7 +293,7 @@ test("Python and TypeScript share the stable Todo partition digest", async () =>
     "print(partition_digest(json.loads(sys.argv[1])))",
   ].join("\n");
   const result = await execFileAsync(
-    process.env.LOOPX_TEST_PYTHON ?? "python3",
+    PYTHON,
     ["-c", script, JSON.stringify(projection)],
     { cwd: join(import.meta.dirname, "..", "..") },
   );

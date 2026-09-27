@@ -222,6 +222,8 @@ else
 fi
 
 cd "${REPO_ROOT}"
+"${PYTHON_BIN}" "${REPO_ROOT}/scripts/chat_bundle.py" ensure || exit 1
+
 "${PYTHON_BIN}" -m loopx.cli serve-status \
   --global-registry \
   --host 127.0.0.1 \

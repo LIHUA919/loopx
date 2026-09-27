@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from .todo_semantics import todo_blocker_reason
+
 AGENT_LANE_TODO_LIST_PROJECTION_SCHEMA_VERSION = "agent_lane_todo_list_projection_v0"
 AGENT_LANE_TODO_LIST_SUMMARY_SCHEMA_VERSION = (
     "agent_lane_todo_list_summary_compaction_v0"
@@ -143,11 +145,16 @@ def _project_item_fields(
 
 
 def _compact_item(value: Any) -> Any:
-    return _project_item_fields(
+    compact = _project_item_fields(
         value,
         fields=_ITEM_FIELDS,
         text_fields=_COMPACT_ITEM_TEXT_FIELDS,
     )
+    if isinstance(value, dict) and isinstance(compact, dict):
+        reason = todo_blocker_reason(value)
+        if reason:
+            compact["reason"] = reason
+    return compact
 
 
 def _compact_thin_item(value: Any) -> Any:
@@ -340,20 +347,6 @@ def compact_thin_todo_list_payload(payload: dict[str, Any]) -> dict[str, Any]:
         compact["todo"] = matched
         compact["relations"] = todo_item_relations(matched) if matched else {}
 
-    overlay = compact.get("projection_overlay")
-    if isinstance(overlay, dict):
-        compact["projection_overlay"] = compact_todo_projection_overlay(
-            overlay,
-            full_detail_cold_path="todo list without --thin or active state",
-        )
-    state_event_projection = compact.get("state_event_projection")
-    if isinstance(state_event_projection, dict):
-        compact["state_event_projection"] = {
-            key: state_event_projection[key]
-            for key in ("schema_version", "source_event_count", "last_event_id")
-            if key in state_event_projection
-        }
-
     compact["thin"] = True
     compact["todo_list_field_projection"] = thin_todo_list_field_projection_contract(
         matched_todo_count=matched_todo_count,
@@ -491,31 +484,6 @@ def compact_explicit_limit_todo_summary(
         "omitted_nonempty_dict_count": omitted_nonempty_dict_count,
         "full_detail_cold_path": "todo list without --limit or active state",
     }
-    return compact
-
-
-AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH = (
-    "todo list without --agent-id or active state"
-)
-EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH = (
-    "todo list without --limit or active state"
-)
-
-
-def compact_todo_projection_overlay(
-    value: Any,
-    *,
-    full_detail_cold_path: str = AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH,
-) -> Any:
-    if not isinstance(value, dict):
-        return value
-    compact = {
-        key: child for key, child in value.items() if not isinstance(child, list)
-    }
-    for key, child in value.items():
-        if isinstance(child, list):
-            compact[f"{key.removesuffix('_todo_ids')}_count"] = len(child)
-    compact["full_detail_cold_path"] = full_detail_cold_path
     return compact
 
 

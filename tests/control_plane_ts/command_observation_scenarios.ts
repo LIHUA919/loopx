@@ -45,7 +45,7 @@ export async function commandObservationScenario(kind: CommandObservationCase, s
   const common = {goal_id: goal, actor_agent_id: "agent-a", registered_agents: agents,
     operation_id: `observe-${kind}`, dry_run: false, now};
   const expected_provider_revision = initial.provider_revision;
-  const document = {objective: "Deliver an independently verifiable result", non_goals: [],
+  const document = {scope: {kind: "all_advancement"}, objective: "Deliver an independently verifiable result", non_goals: [],
     criteria: [{id: "outcome", description: "The bounded validation passes",
       validation_argv: [process.execPath, "-e", "process.exit(0)"]}],
     bindings: [{todo_id: target, criterion_ids: ["outcome"]}]};
@@ -70,7 +70,9 @@ export async function commandObservationScenario(kind: CommandObservationCase, s
         expected_provider_revision});
       break;
     case "supersede":
-      run = backend => executeCoordinationTodoTerminalLifecycle(backend, {...common, todo_id: target,
+      const {operation_id: terminalId, ...terminalCommon} = common;
+      run = backend => executeCoordinationTodoTerminalLifecycle(backend, {...terminalCommon, todo_id: target,
+        operation_identity: {kind: "explicit", operation_id: terminalId},
         command: "supersede", expected_role: "agent", lifecycle_grants: [], authority_reason: null,
         decision_outcome: null, lease_idempotency_key: null, lease_expected_version: null,
         allow_user_gate_auto_acquire: false, requested_no_followup: false,

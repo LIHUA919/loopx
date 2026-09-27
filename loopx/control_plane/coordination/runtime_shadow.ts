@@ -1,3 +1,5 @@
+import {verifyShadowRegistrySource, withShadowRegistrySource} from "./shadow_registry_source.ts";
+import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA, currentGraphTodoIds} from "./source_projection.ts";
 import { createHash } from "node:crypto";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
@@ -76,7 +78,7 @@ export function decodeRuntimeShadowRequest(value: unknown, schema: string, extra
 /** Source preconditions are ephemeral. They never become an alternative state ledger. */
 function sourceSnapshot(request: ShadowRequest): JsonObject {
   const snapshot = request.source_snapshot;
-  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files"], "source_snapshot");
+  exact(snapshot, ["state_path", "registered_runtime_root", "registered_state_path", "state_bytes_sha256", "lease_inventory", "projection_sha256", "evidence_files", "registry_source"], "source_snapshot");
   if (!isAbsolute(text(snapshot.state_path, "state_path")) ||
       !isAbsolute(text(snapshot.registered_runtime_root, "registered_runtime_root")) ||
       !isAbsolute(text(snapshot.registered_state_path, "registered_state_path")) ||
@@ -87,7 +89,7 @@ function sourceSnapshot(request: ShadowRequest): JsonObject {
   }
   return snapshot;
 }
-export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+export async function withShadowSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   const snapshot = request.source_snapshot;
   if (!isAbsolute(text(snapshot.state_path, "state_path"))) throw new ShadowManagementError("source_snapshot_invalid");
   const root = request.runtime_root;
@@ -95,14 +97,14 @@ export async function withShadowSourceLocks<T>(request: ShadowRequest, operation
   return await withFileMutationLock(legacyCoordinationTodoLockPath(root, goal), () =>
     withFileMutationLock(String(snapshot.state_path), () =>
       withFileMutationLock(legacyCoordinationLeaseLockPath(root, goal), () =>
-        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), operation))));
+        withFileMutationLock(join(root, "goals", goal, "task-leases", ".task-leases"), () => registryMode === "current" ? withShadowRegistrySource(snapshot, operation) : operation()))));
 }
-async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>): Promise<T> {
+async function withPrePromotionSourceLocks<T>(request: ShadowRequest, operation: () => Promise<T>, registryMode: "current" | "retained" = "current"): Promise<T> {
   return await withShadowSourceLocks(request, async () => {
     const fence = await loadLegacyCoordinationWriterFence(request.runtime_root, request.goal_id);
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     return await operation();
-  });
+  }, registryMode);
 }
 function bytesDigest(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -115,6 +117,7 @@ async function optionalBytes(path: string): Promise<Buffer | null> {
 }
 export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promise<void> {
   const snapshot = sourceSnapshot(request);
+  await verifyShadowRegistrySource(snapshot);
   if (resolve(String(snapshot.state_path)) !== resolve(String(snapshot.registered_state_path))) {
     throw new ShadowManagementError("shadow_source_state_path_mismatch");
   }
@@ -125,11 +128,17 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     if (fence.status !== "missing") throw new ShadowManagementError(fence.status === "loaded" ? "legacy_authority_already_promoted" : fence.reason_code);
     throw new ShadowManagementError("shadow_source_runtime_root_mismatch");
   }
-  exact(request.projection, ["schema_version", "goal_id", "source_authority", "handoff_mode", "todos", "leases", "todo_read_model", "partitions"], "source projection");
-  if (request.projection.schema_version !== schemas.LOCAL_AUTHORITY_SHADOW_TRANSACTION_PROJECTION_SCHEMA ||
-      request.projection.goal_id !== request.goal_id || request.projection.source_authority !== "legacy_markdown_and_task_lease" ||
-      typeof request.projection.handoff_mode !== "string" ||
-      !canonicalAuthorityBytes(request.projection.partitions).equals(canonicalAuthorityBytes({ todos: null, leases: null }))) {
+  const rebuilt = projectCoordinationSource({
+    schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA, kind: "snapshot",
+    goal_id: request.goal_id, handoff_mode: request.projection.handoff_mode,
+    todos: request.projection.todos, leases: request.projection.leases,
+    read_model_schema: canonicalAuthorityObject(request.projection.todo_read_model, "source Todo read model").schema_version,
+  }).projection as JsonObject;
+  // Assembly publishes the current manifest. A persisted pre-extension
+  // manifest remains valid under the existing reader compatibility rule;
+  // verify it before retaining its exact bytes, never silently upgrade it.
+  rebuilt.todo_read_model = validateCoordinationTodoReadModel(request.projection, request.goal_id);
+  if (!canonicalAuthorityBytes(rebuilt).equals(canonicalAuthorityBytes(request.projection))) {
     throw new ShadowManagementError("source_projection_invalid");
   }
   const bytes = await optionalBytes(String(snapshot.state_path));
@@ -142,10 +151,7 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
   }
   const inventory: JsonObject[] = [];
   const leases: JsonObject[] = [];
-  const currentTodoIds = new Set(
-    (request.projection.todos as JsonObject[]).filter(todo => todo.archive_state === "active").map((todo) =>
-      String(canonicalAuthorityObject(todo, "source Todo").todo_id)),
-  );
+  const currentTodoIds = currentGraphTodoIds(request.projection.todos as JsonObject[]);
   // ASCII filenames must use the same ordinal order as Python's source snapshot.
   const leaseNames = names.filter((name) => /^[A-Za-z0-9_.-]+\.json$/.test(name)).sort((left, right) => {
     if (left < right) return -1;
@@ -174,7 +180,6 @@ export async function verifyShadowSourceSnapshot(request: ShadowRequest): Promis
     const data = await optionalBytes(path);
     if ((data === null ? null : bytesDigest(data)) !== evidence.bytes_sha256) throw new ShadowManagementError("source_changed_retry");
   }
-  validateCoordinationTodoReadModel(request.projection, request.goal_id);
 }
 
 export async function bootstrapCoordinationRuntimeShadow(value: unknown, _dependencies: RuntimeShadowDependencies = {}): Promise<JsonObject> {
@@ -198,7 +203,7 @@ export async function rollbackCoordinationRuntimeShadow(value: unknown, _depende
     const revision = request.expected_provider_revision;
     const bootstrap = request.expected_bootstrap_operation_id;
     if ((typeof revision === "string") === (typeof bootstrap === "string")) throw new Error("rollback requires exactly one revision or bootstrap operation selector");
-    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation) });
+    const result = await rollbackManagedShadow(request, { withPrimaryLocks: (operation) => withPrePromotionSourceLocks(request, operation, "retained") });
     return { schema_version: schema, ...result, primary_writeback_preserved: true, decision_read_from_shadow: false };
   } catch (error) { return failure(schema, error); }
 }

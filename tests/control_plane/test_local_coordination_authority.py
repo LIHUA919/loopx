@@ -8,7 +8,10 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import (
+    initialize_canonical_authority, single_snapshot_page,
+    promoted_create_fixture as _promoted_create_fixture,
+)
 
 from loopx.control_plane.coordination import local_authority as local_authority_module
 from loopx.control_plane.coordination.coordination_state_contract import (
@@ -150,7 +153,7 @@ def test_engaged_fence_reads_typescript_provider_result(
 
     def _read(method: str, _params: object, *, timeout: float) -> dict[str, object]:
         calls.append((method, timeout))
-        return {
+        return single_snapshot_page({
             "status": "loaded",
             "todos": [{"todo_id": "todo_a", "role": "agent", "status": "open"}],
             "todo_read_model": _todo_read_model(1),
@@ -159,7 +162,7 @@ def test_engaged_fence_reads_typescript_provider_result(
             "source_authority": "file_v0",
             "decision_read_from_provider": True,
             "legacy_fallback_used": False,
-        }
+        })
 
     monkeypatch.setattr(
         "loopx.control_plane.coordination.local_authority.effect_runtime_result",
@@ -171,7 +174,7 @@ def test_engaged_fence_reads_typescript_provider_result(
     )
     assert result is not None
     assert result["todos"][0]["todo_id"] == "todo_a"
-    assert calls == [("coordination.local_authority.todo_list", 15.0)]
+    assert calls == [("coordination.local_authority.todo_snapshot_page", 15.0)]
 
 
 def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
@@ -196,7 +199,8 @@ def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
     _engage_fence(tmp_path)
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _claim(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _claim(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "applied",
@@ -263,7 +267,8 @@ def test_promoted_add_invokes_native_create_without_markdown_state(
         lambda **_kwargs: {"todos": []},
     )
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         todo = params["todo"]
         assert isinstance(todo, dict)
@@ -329,7 +334,8 @@ def test_promoted_add_delegates_semantic_duplicate_to_typescript(
     )
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def _create(method: str, params: dict[str, object]) -> dict[str, object]:
+    def _create(method: str, params: dict[str, object], *, timeout: float) -> dict[str, object]:
+        assert timeout > 0
         calls.append((method, params))
         return {
             "status": "no_change",
@@ -370,47 +376,6 @@ def test_promoted_add_delegates_semantic_duplicate_to_typescript(
     assert result["todo_id"] == "todo_existing"
     assert calls[0][0] == "coordination.local_authority.todo_create"
 
-
-def _promoted_create_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
-    runtime_root = tmp_path / "runtime"
-    project = tmp_path / "project"
-    state_file = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
-    state_file.parent.mkdir(parents=True)
-    state_file.write_text(
-        "# Goal\n\n## User Todo / Owner Review Reading Queue\n\n"
-        "## Agent Todo\n\n## Completed Work Archive\n",
-        encoding="utf-8",
-    )
-    registry_path = tmp_path / "registry.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "common_runtime_root": str(runtime_root),
-                "goals": [
-                    {
-                        "id": "goal-a",
-                        "repo": str(project),
-                        "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
-                        "coordination": {"registered_agents": ["agent-a"]},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    projection = build_todo_runtime_shadow_projection(
-        goal_id="goal-a", todos=[], handoff_mode="soft_claim"
-    )
-    projection["todo_read_model"] = {
-        **projection["todo_read_model"],
-        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
-    }
-    initialize_canonical_authority(
-        runtime_root, "goal-a", projection, state_path=state_file
-    )
-    return registry_path, runtime_root, state_file
 
 
 def test_rejected_validated_create_publishes_no_private_sidecar(
@@ -1035,7 +1000,7 @@ def test_promoted_claim_protocol_failure_stays_infrastructure_outage(
     _engage_fence(tmp_path)
     monkeypatch.setattr(
         "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params: {
+        lambda method, params, **_kwargs: {
             "status": "failed",
             "reason_code": "invalid_local_coordination_todo_claim_request",
             "reason": "registered_agents must be a JSON array",
@@ -1149,7 +1114,7 @@ def test_todo_list_uses_provider_after_cutover_even_when_markdown_disagrees(
     state_file.unlink()
     monkeypatch.setattr(
         "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params, **_kwargs: {
+        lambda method, params, **_kwargs: single_snapshot_page({
             "status": "loaded",
             "todos": [
                 {
@@ -1165,7 +1130,7 @@ def test_todo_list_uses_provider_after_cutover_even_when_markdown_disagrees(
             "source_authority": "file_v0",
             "decision_read_from_provider": True,
             "legacy_fallback_used": False,
-        },
+        }),
     )
 
     result = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
@@ -1459,11 +1424,17 @@ Continue provider-first delivery.
     original_effect_runtime_result = provider_terminal_lifecycle.effect_runtime_result
     original_authority_runtime_result = local_authority_module.effect_runtime_result
 
-    def count_runtime_call(method: str, params: dict[str, object]) -> object:
+    def count_runtime_call(
+        method: str, params: dict[str, object], **kwargs: object
+    ) -> object:
         runtime_calls.append(method)
         if method == "coordination.local_authority.todo_archive":
             archive_operation_ids.append(str(params["operation_id"]))
-        result = original_effect_runtime_result(method, params)
+        if method == "coordination.local_authority.todo_terminal":
+            assert params["schema_version"] == "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
+            assert "operation_id" not in params
+            assert params["operation_identity"]["kind"] == "explicit"
+        result = original_effect_runtime_result(method, params, **kwargs)
         if method == "coordination.local_authority.todo_terminal":
             terminal_phases.append(str(result["status"]))
         return result
@@ -1510,12 +1481,12 @@ Continue provider-first delivery.
     # The extra bounded crossing admits/replays before resolving private argv.
     assert terminal_phases == ["resolve_validation", "execute_validation", "applied"]
     assert runtime_calls == [
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_list",
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot_page",
     ]
     successor_id = completed["generated_successor_todo_ids"][0]
 
@@ -1536,10 +1507,10 @@ Continue provider-first delivery.
     assert superseded["superseded"] is True
     assert superseded["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_list",
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot_page",
     ]
 
     canonical = read_canonical_todos_if_promoted(
@@ -1567,10 +1538,10 @@ Continue provider-first delivery.
     assert archived["moved_count"] == 2
     assert archived["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_archive",
-        "coordination.local_authority.todo_list",
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_archive_ack",
     ]
     canonical_after_archive = read_canonical_todos_if_promoted(
@@ -1600,10 +1571,10 @@ Continue provider-first delivery.
         assert no_change["moved_count"] == 0
         assert no_change["provider_revision"] == archive_revision
         assert runtime_calls == [
-            "coordination.local_authority.todo_list",
+            "coordination.local_authority.todo_snapshot_page",
             "coordination.local_authority.todo_archive",
-            "coordination.local_authority.todo_list",
-            "coordination.local_authority.todo_list",
+            "coordination.local_authority.todo_snapshot_page",
+            "coordination.local_authority.todo_snapshot_page",
         ]
         unchanged = read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
@@ -1993,9 +1964,11 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     original_effect_runtime_result = provider_terminal_lifecycle.effect_runtime_result
     original_authority_runtime_result = local_authority_module.effect_runtime_result
 
-    def count_runtime_call(method: str, params: dict[str, object]) -> object:
+    def count_runtime_call(
+        method: str, params: dict[str, object], **kwargs: object
+    ) -> object:
         runtime_calls.append(method)
-        return original_effect_runtime_result(method, params)
+        return original_effect_runtime_result(method, params, **kwargs)
 
     def count_authority_runtime_call(
         method: str, params: dict[str, object], **kwargs: object
@@ -2037,7 +2010,7 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     with pytest.raises(OSError, match="projection delivery crash"):
         complete_goal_todo(**request)
     assert runtime_calls == [
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_terminal",
     ]
 
@@ -2050,12 +2023,12 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     assert replay["provider_status"] == "replayed"
     assert replay["idempotent_replay"] is True
     assert runtime_calls == [
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_list",
-        "coordination.local_authority.todo_list",
+        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot_page",
     ]
     canonical = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id="goal-a"

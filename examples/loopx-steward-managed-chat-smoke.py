@@ -302,7 +302,7 @@ def _run_turn(args: argparse.Namespace) -> int:
         # without re-reading the text.
         answer_shape = response.get("answer_shape") or {}
         _assert(
-            answer_shape.get("schema_version") == "manager_answer_contract_v0"
+            answer_shape.get("schema_version") == "manager_answer_contract_v1"
             and isinstance(answer_shape.get("state"), str),
             f"the persisted steward answer must carry its contract shape ({answer_shape})",
         )

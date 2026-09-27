@@ -6,6 +6,7 @@ import queue
 from pathlib import Path
 
 import loopx.chat_agent as chat_agent
+import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
 import pytest
 
@@ -33,6 +34,92 @@ class _FakeAppServerProcess:
 
     def kill(self) -> None:
         self.returncode = -1
+
+
+class _FakeClaudeProcess:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = io.StringIO(stdout)
+
+    def wait(self) -> int:
+        return 0
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "",
+        "not-json\n[]\n",
+        json.dumps({"type": "result", "result": ""}) + "\n",
+    ],
+)
+def test_claude_code_rejects_successful_process_without_a_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stdout: str,
+) -> None:
+    monkeypatch.setattr(
+        chat_providers.subprocess,
+        "Popen",
+        lambda *args, **kwargs: _FakeClaudeProcess(stdout),
+    )
+    adapter = chat_providers.ClaudeCodeAdapter(
+        claude_bin="claude",
+        work_dir=tmp_path,
+        session_id="session-fixture",
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    with pytest.raises(chat_agent.CodexChatAgentError) as caught:
+        adapter.start_turn(
+            "Reply briefly.",
+            lambda kind, payload: events.append((kind, payload)),
+        )
+
+    assert caught.value.error_code == "provider_empty_response"
+    assert not any(kind == "answer.final" for kind, _ in events)
+    assert adapter.resumed is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "result", "result": "Completed."},
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "Completed."},
+            },
+        },
+    ],
+)
+def test_claude_code_accepts_a_nonempty_response_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> None:
+    stdout = json.dumps({**payload, "session_id": "upstream-session"})
+    monkeypatch.setattr(
+        chat_providers.subprocess,
+        "Popen",
+        lambda *args, **kwargs: _FakeClaudeProcess(stdout + "\n"),
+    )
+    adapter = chat_providers.ClaudeCodeAdapter(
+        claude_bin="claude",
+        work_dir=tmp_path,
+        session_id="session-fixture",
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    response = adapter.start_turn(
+        "Reply briefly.",
+        lambda kind, payload: events.append((kind, payload)),
+    )
+
+    assert response["message"] == "Completed."
+    assert sum(kind == "answer.final" for kind, _ in events) == 1
+    assert adapter.session_id == "upstream-session"
+    assert adapter.resumed is True
 
 
 def test_codex_chat_app_server_stdio_uses_utf8(
@@ -353,6 +440,37 @@ def test_typed_terminal_errors_preserve_category_without_promoting_partial_answe
     if expected in {"cyber_policy", "misalignment_policy_violation"}:
         assert caught.value.gate["kind"] == "policy_gate"
         assert "不会自动重放" in caught.value.gate["next_action"]
+
+
+def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> None:
+    error = chat_agent._terminal_turn_error(
+        {
+            "codexErrorInfo": "other",
+            "message": json.dumps(
+                {
+                    "type": "error",
+                    "status": 400,
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "private upstream model detail",
+                    },
+                }
+            ),
+        },
+        "generic fallback",
+    )
+    assert error.error_code == "upstream_invalid_request"
+    assert "private upstream" not in str(error) + json.dumps(error.gate)
+    assert "模型" in error.gate["next_action"]
+
+
+def test_unstructured_upstream_error_stays_generic() -> None:
+    error = chat_agent._terminal_turn_error(
+        {"codexErrorInfo": "other", "message": "private upstream error"},
+        "generic fallback",
+    )
+    assert error.error_code == "host_gate"
+    assert "private upstream" not in str(error) + json.dumps(error.gate)
 
 
 def test_retry_and_unrelated_policy_events_do_not_terminate_current_turn(

@@ -9,6 +9,7 @@ from .control_plane.coordination.runtime_shadow_writer_adapter import require_ru
 from .control_plane.projects.registry_codec import (
     load_project_registry,
     project_registry_transaction,
+    require_runtime_compatible_project_registry,
 )
 from typing import Any
 
@@ -70,7 +71,12 @@ def now_iso() -> str:
 def read_json_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return load_project_registry(path)
+    payload = load_project_registry(path)
+    require_runtime_compatible_project_registry(
+        payload,
+        operation="bootstrap",
+    )
+    return payload
 
 
 def resolve_project_path(project: Path, path: Path | None) -> Path | None:
@@ -546,8 +552,7 @@ def bootstrap_project(
             registry_transaction.commit(registry)
         if shadow_capture is not None:
             shadow_evidence = settle_todo_runtime_shadow_capture({}, registry_path=registry_path,
-                runtime_root=runtime_root, goal_id=goal_id, write_class="bootstrap_state",
-                capture=shadow_capture, observe_legacy=False, emit_disabled=False)
+                runtime_root=runtime_root, goal_id=goal_id, capture=shadow_capture, emit_disabled=False)
         if sync_global:
             global_sync = sync_project_registry_to_global(
                 registry_path=registry_path,

@@ -204,6 +204,8 @@ def read_remote(
     ]
     for gid in ([goal] if goal else (None if owner else before[host])) or []:
         argv += ["--goal-id", gid]
+    if args.get("view") == "agents":
+        argv += ["--query", args.get("query", "")]
     if args.get("include_stopped"):
         argv += ["--include-stopped"]
     command = (

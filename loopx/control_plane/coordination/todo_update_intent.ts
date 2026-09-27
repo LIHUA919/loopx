@@ -176,6 +176,15 @@ export function prepareUpdatedTodo(
       if (value === null || value === "") { delete next[field]; clearFields.add(field); }
       else next[field] = value;
     }
+    if (input.planning_intent?.clear_resume_when === true) {
+      // These are observations of the old condition, not independent resume
+      // authority. Keeping either after an explicit clear resurrects a stale
+      // wait in canonical readback even though resume_when is absent.
+      delete next.resume_condition;
+      delete next.resume_ready;
+      clearFields.add("resume_condition");
+      clearFields.add("resume_ready");
+    }
     next.done = next.status === "done" || next.status === "deferred";
   }
   // Derive text/title/priority together from the original record and caller intent.

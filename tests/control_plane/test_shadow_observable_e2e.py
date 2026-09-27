@@ -309,22 +309,16 @@ def test_monitor_successor_retains_caller_routing(caller: Caller) -> None:
     assert successor['action_kind'] == 'validate_release_head' and successor['required_capabilities'] == ['network']
 
 
-def test_observation_remains_independent_of_runtime_capture(caller: Caller) -> None:
+def test_retired_observation_request_preserves_runtime_capture(caller: Caller) -> None:
     w = caller
     before = w.primary()
-    args = ('configure-goal', '--local-authority-shadow-file')
-    assert w.call(*args)['ok'] is True
-    assert w.primary() == before
-    assert w.call(*args, '--execute')['ok'] is True
+    for extra in ((), ('--execute',)):
+        rejected = w.call('configure-goal', '--local-authority-shadow-file', *extra)
+        assert rejected['ok'] is False and 'local_authority_shadow_retired' in rejected['error'], rejected
+        assert w.primary() == before
+    assert not (w.root / 'authority-shadow' / 'file' / 'observable').exists()
     todo = w.add('Independent observation contract')
     assert w.read(todo)['text'] == 'Independent observation contract'
-    retained = sorted((w.root / 'authority-shadow' / 'file' / 'observable').glob('authority-store-*.json'))
-    assert len(retained) == 1
-    snapshot = retained[0].read_bytes()
-    assert w.call('configure-goal', '--clear-local-authority-shadow', '--execute')['ok'] is True
-    assert retained[0].read_bytes() == snapshot
-    if w.mode != 'enabled':
-        assert not (w.root / 'authority-shadow' / 'file-v0').exists()
 
 
 def test_turn_input_rejection_has_no_host_or_primary_effect(caller: Caller) -> None:

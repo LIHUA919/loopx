@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +39,21 @@ def _review(*, area="product_runtime"):
         )
         if "verdict_values" in requirement:
             row["verdict"] = requirement["verdict_values"][0]
+        if key == "problem_context":
+            row["outcome_impact"] = {
+                dimension: {"decision": "not_applicable",
+                            "reason": "Synthetic internal formatter fixture has no durable work or user journey.",
+                            "inspected_path": "Synthetic formatter and its sole internal caller."}
+                for dimension in ("long_horizon", "user_experience")
+            }
+        if key == "observable_semantics":
+            row["scope_coverage"] = {"decision": "not_applicable",
+                "reason": "Synthetic local formatter has no eligibility gate or covered subjects."}
+        if key == "code_volume":
+            row["compatibility_assessment"] = {
+                "decision": "not_applicable",
+                "reason": "Local formatting fixture; no protocol, adapter or persisted format change.",
+            }
         if key == "semantic_alignment":
             row.update(
                 checked_scope="Changed helper and its callers; no shared state writes.",
@@ -56,6 +72,8 @@ def _review(*, area="product_runtime"):
                     field: (
                         case_id
                         if field == "case_id"
+                        else "passed"
+                        if field == "status"
                         else True
                         if field == "required"
                         else "Synthetic consistency fixture, not a real review."
@@ -72,6 +90,7 @@ def _review(*, area="product_runtime"):
                     for field in fields
                 }
     result["verdict"] = "APPROVE"
+    result["review_body"] = (Path(__file__).parents[2] / "examples/fixtures/pr-review.body.md").read_text().replace("HEAD_OID", "a" * 40).replace("VERDICT", "APPROVE")
     return {"pull_requests": [item]}, result
 
 
@@ -82,6 +101,227 @@ def test_result_check_is_not_semantic_or_merge_authority():
     assert not checked["evidence_truth_verified"]
     assert not checked["remote_head_verified"]
     assert not checked["external_writes_performed"]
+
+
+def _required_red_review():
+    packet, result = _review()
+    row = next(item for item in result["evidence"]["validation_matrix"]["items"]
+               if item["case_id"] == "repository_required_checks")
+    row.update(status="failed", result="The same maintained-twin rule fails at base and head.",
+               skip_or_failure_reason="The same rule_a/rule_b pair remains over the 43 limit at both revisions.")
+    return packet, result, row
+
+
+def test_unrelated_baseline_red_check_does_not_force_request_changes():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The reviewed change edits a presentation helper, not the vocabulary scanner or its inputs.",
+        "affected_invariant_evidence": "Focused presentation tests pass at the exact head.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "head_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "baseline_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+        "head_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+    }
+    checked = check_review_result(packet, result)
+    assert checked["ok"] and checked["approval_consistent"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert "request_changes_without_blocker" in check_review_result(packet, result)["errors"]
+
+
+def test_required_red_check_needs_causal_attribution_and_unchanged_failure():
+    packet, result, row = _required_red_review()
+    checked = check_review_result(packet, result)
+    assert "validation_matrix:repository_required_checks:failure_attribution_missing" in checked["approval_blockers"]
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The changed code does not feed this check.",
+        "affected_invariant_evidence": "Focused affected-path test passes.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1 with failure A.",
+        "head_observation": "Exit 1 with failure B.",
+        "baseline_failure_signature": "failure A",
+        "head_failure_signature": "failure B",
+    }
+    assert "validation_matrix:repository_required_checks:failure_signature_changed" in check_review_result(packet, result)["approval_blockers"]
+    row["failure_attribution"]["disposition"] = "pr_regression"
+    assert "validation_matrix:repository_required_checks:attributable_or_unresolved_failure" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_equal_red_count_with_different_failure_identity_still_blocks_approval():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "pre_existing_unrelated",
+        "causal_scope_analysis": "The reviewed change does not edit the vocabulary scanner.",
+        "affected_invariant_evidence": "Focused changed-path tests pass.",
+        "base_revision": "b" * 40,
+        "head_revision": "a" * 40,
+        "same_command": "python examples/semantic-vocabulary-drift-smoke.py",
+        "baseline_observation": "Exit 1: maintained twin rule_a/rule_b, budget 44/43.",
+        "head_observation": "Exit 1: maintained twin rule_c/rule_d, budget 44/43.",
+        "baseline_failure_signature": "semantic-vocabulary-drift: rule_a/rule_b: maintained twin 44/43",
+        "head_failure_signature": "semantic-vocabulary-drift: rule_c/rule_d: maintained twin 44/43",
+    }
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "validation_matrix:repository_required_checks:failure_signature_changed" in checked["approval_blockers"]
+
+
+def test_malformed_required_validation_status_is_reported_not_raised():
+    packet, result, row = _required_red_review()
+    row["status"] = {"unexpected": "object"}
+    assert "validation_matrix:repository_required_checks:invalid_status" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_external_required_failure_is_review_only_when_independently_attributed():
+    packet, result, row = _required_red_review()
+    row["failure_attribution"] = {
+        "disposition": "external_unrelated",
+        "causal_scope_analysis": "The provider outage predates this head; changed behavior has separate coverage.",
+        "affected_invariant_evidence": "Focused real-path test passes at this head.",
+        "independent_evidence": "Provider status incident and retry on unchanged base fail identically.",
+        "retry_or_recovery_owner": "CI operator retries after provider recovery; merge remains held.",
+    }
+    assert check_review_result(packet, result)["approval_consistent"]
+    del row["failure_attribution"]["independent_evidence"]
+    assert not check_review_result(packet, result)["approval_consistent"]
+
+
+def _outcome_review(dimension):
+    packet, result = _review()
+    impact = result["evidence"]["problem_context"]["outcome_impact"][dimension]
+    impact.update(
+        decision="preserved",
+        reason="The accepted journey remains available across the changed boundary.",
+        inspected_path="Public command -> persisted checkpoint -> next invocation and user readback.",
+        before_after="A repeat invocation keeps completed work and offers the next authorized action.",
+        evidence_refs=["walkthroughs.positive", "validation_matrix:synthetic-continuation"],
+    )
+    return packet, result, impact
+
+
+@pytest.mark.parametrize("dimension", ["long_horizon", "user_experience"])
+@pytest.mark.parametrize("decision", ["regression", "not_yet_proven"])
+def test_local_goal_achievement_cannot_hide_material_outcome_impact(dimension, decision):
+    packet, result, impact = _outcome_review(dimension)
+    assert result["evidence"]["problem_context"]["verdict"] == "goal_achieved"
+    impact.update(decision=decision, minimum_repair="Prove the next authorized action through the affected entrypoint.")
+    checked = check_review_result(packet, result)
+    assert f"problem_context:outcome_impact:{dimension}:blocking_decision" in checked["approval_blockers"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_legitimate_wait_needs_acceptance_basis_and_bounded_recovery():
+    packet, result, impact = _outcome_review("long_horizon")
+    impact["decision"] = "accepted_tradeoff"
+    assert not check_review_result(packet, result)["ok"]
+    impact.update(
+        acceptance_basis="Existing owner policy requires confirmation before this destructive effect.",
+        bounded_cost_and_recovery="Only that effect waits; explicit confirmation resumes once or cancellation closes it safely.",
+    )
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_preserved_experience_needs_evidence_not_just_a_delivery_label():
+    packet, result, impact = _outcome_review("user_experience")
+    assert check_review_result(packet, result)["ok"]
+    impact["evidence_refs"] = []
+    assert not check_review_result(packet, result)["ok"]
+
+
+def test_docs_inapplicability_still_names_the_inspected_path():
+    packet, result = _review(area="public_docs")
+    del result["evidence"]["problem_context"]["outcome_impact"]["user_experience"]["inspected_path"]
+    assert not check_review_result(packet, result)["ok"]
+
+
+def _scoped_review():
+    packet, result = _review()
+    coverage = {
+        "decision": "verified", "reason": "The owner selected one existing job for this gate.",
+        "authorized_scope": "Only job A; unrelated job B and future job C are excluded.",
+        "scope_source": "Owner configuration selects the immutable job A id.",
+        "enforcement_selector": "Shared gate checks coverage before readiness; job A stays held if unbound.",
+        "recovery_owner": "Owner repairs the selected job binding; worker cannot edit acceptance scope.",
+        "cases": [
+            {"case_id": case_id, "status": "passed", "input_and_authority": source,
+             "expected_outcome": expected, "observed_outcome": expected,
+             "entrypoint_and_evidence": "Synthetic real-entrypoint receipt reference for checker fixture."}
+            for case_id, source, expected in [
+                ("covered_subject", "Selected A has no binding", "A is held"),
+                ("uncovered_same_container", "Existing B is not selected", "B retains baseline admission"),
+                ("new_subject_after_activation", "Create C after scope activation", "C retains baseline admission"),
+                ("scope_escape_attempt", "Change A's editable role", "A stays held"),
+                ("recovery_to_progress", "Owner fixes A's binding", "A resumes through its real command"),
+            ]
+        ],
+    }
+    result["evidence"]["observable_semantics"]["scope_coverage"] = coverage
+    return packet, result, coverage
+
+
+def test_enabled_but_uncovered_and_future_subjects_cannot_be_omitted():
+    packet, result, coverage = _scoped_review()
+    assert check_review_result(packet, result)["approval_consistent"]
+    coverage["cases"] = [case for case in coverage["cases"] if case["case_id"] != "new_subject_after_activation"]
+    checked = check_review_result(packet, result)
+    assert "observable_semantics:scope_coverage:missing_or_duplicate_case:new_subject_after_activation" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("decision", ["overbroad", "not_yet_proven"])
+def test_correct_implementation_cannot_approve_wrong_or_unproven_scope(decision):
+    packet, result, coverage = _scoped_review()
+    coverage["decision"] = decision
+    assert not check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("status", ["failed", "unverified"])
+def test_blocker_record_without_proven_recovery_cannot_approve(status):
+    packet, result, coverage = _scoped_review()
+    coverage["cases"][-1]["status"] = status
+    coverage["cases"][-1]["observed_outcome"] = "Blocker recorded but the affected work is still rejected."
+    assert "observable_semantics:scope_coverage:case_not_proven:recovery_to_progress" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_case_inapplicability_needs_a_reason():
+    packet, result, coverage = _scoped_review()
+    coverage["cases"][-1]["status"] = "not_applicable"
+    assert not check_review_result(packet, result)["approval_consistent"]
+    coverage["cases"][-1]["reason"] = "Read-only diagnostic change; recovery is unchanged and outside its accepted outcome."
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
+def test_verified_scope_needs_a_real_covered_subject():
+    packet, result, coverage = _scoped_review()
+    coverage["cases"][0]["status"] = "not_applicable"
+    coverage["cases"][0]["reason"] = "No selected job was exercised."
+    assert "observable_semantics:scope_coverage:covered_subject_not_proven" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_final_body_cannot_drop_the_risk_explanation_or_change_verdict():
+    packet, result = _review()
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert "review_body:verdict_mismatch" in check_review_result(packet, result)["errors"]
+    result["review_body"] = ""
+    assert "review_body:missing_section:对主干的风险" in check_review_result(packet, result)["errors"]
+
+
+def test_final_body_cannot_hide_the_entire_review_in_html_comment():
+    packet, result = _review()
+    result["review_body"] = "<!--\n" + result["review_body"] + "\n-->"
+    errors = check_review_result(packet, result)["errors"]
+    assert "review_body:missing_section:对主干的风险" in errors
+    assert "review_body:missing_exact_head" in errors
+    assert "review_body:missing_english_verdict" in errors
 
 
 @pytest.mark.parametrize(
@@ -169,6 +409,7 @@ def test_contract_blocker_requires_actionable_repair(verdict: str) -> None:
     )
     assert not check_review_result(packet, result)["approval_consistent"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
     del row["minimum_repair"]
     assert "semantic_alignment:missing_field:minimum_repair" in (
@@ -219,6 +460,7 @@ def test_approval_cannot_hide_missing_or_contradictory_evidence(kind):
     assert not checked["ok"]
     assert "approval_contradicts_evidence" in checked["errors"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -236,6 +478,7 @@ def test_old_or_invalid_policy_cannot_certify_current_approval(revision):
     assert "review_policy_revision:stale_or_missing" in checked["approval_blockers"]
     assert not checked["ok"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -253,6 +496,7 @@ def test_pinned_result_is_rejected_after_installed_policy_bump(monkeypatch):
     assert "review_policy_revision:stale_or_missing" in checked["approval_blockers"]
     assert not checked["ok"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -266,6 +510,7 @@ def test_verified_label_and_generic_prose_do_not_replace_rule_ownership():
     )
     assert not checked["ok"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -288,6 +533,7 @@ def test_generic_prose_cannot_replace_structured_evidence(evidence_id):
     )
     assert "approval_contradicts_evidence" in checked["errors"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -436,6 +682,7 @@ def test_green_review_cannot_approve_unjustified_delivery(area, verdict):
     assert not checked["approval_consistent"]
     assert "problem_context:blocking_verdict" in checked["approval_blockers"]
     result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
     assert check_review_result(packet, result)["ok"]
 
 
@@ -509,3 +756,109 @@ def test_cli_rejects_goal_incomplete_approval_without_mutating_packet(tmp_path, 
     assert "problem_context:blocking_verdict" in checked["approval_blockers"]
     assert not checked["external_writes_performed"]
     assert result_path.read_bytes() == before
+
+
+def _compatibility(*, decision="retain", boundary="independent"):
+    return {
+        "decision": decision,
+        "reason": "Keep the old reader until supported offline clients complete their upgrade window.",
+        "consumer_inventory": "cli/request.py and supported mobile client releases call server/decode.py.",
+        "deployment_boundary": boundary,
+        "persisted_contract": "Receipt ids and digests remain stable; requests are not stored.",
+        "simpler_alternative": "One live wire version cannot yet serve the deployed offline clients.",
+        "validation_evidence": "validation_matrix: old/new client and immutable receipt readback cases.",
+    }
+
+
+def test_receipt_compatibility_prose_alone_cannot_justify_parallel_wires():
+    packet, result = _review()
+    row = result["evidence"]["code_volume"]
+    row.pop("compatibility_assessment")
+    row["compatibility_or_migration_need"] = "Keep v2 so old receipts remain recoverable."
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "code_volume:compatibility_assessment:value_not_object" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("missing", [
+    "consumer_inventory", "deployment_boundary", "persisted_contract",
+    "simpler_alternative", "validation_evidence", "reason",
+])
+def test_compatibility_retention_needs_separate_evidence(missing):
+    packet, result = _review()
+    assessment = _compatibility()
+    del assessment[missing]
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert f"code_volume:compatibility_assessment:missing_field:{missing}" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("boundary", ["independent", "co_deployed", "persisted_only", "mixed"])
+def test_real_compatibility_obligations_may_be_retained(boundary):
+    packet, result = _review()
+    assessment = _compatibility(boundary=boundary)
+    if boundary != "independent":
+        assessment.update(
+            consumer_inventory="recovery/replay.py reads durable pending requests after restart.",
+            persisted_contract="Historical request bytes are stored, not just result receipts.",
+            simpler_alternative="Consolidate current writers but retain the durable request decoder.",
+            reason="Old pending requests must remain readable until explicit migration drains them.",
+        )
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
+def test_optional_simplification_can_approve_with_a_concrete_nonblocking_followup():
+    packet, result = _review()
+    assessment = _compatibility(decision="follow_up", boundary="co_deployed")
+    assessment.update(
+        simpler_alternative="Replace the two harmless local wrappers with one named intent argument.",
+        reason="P2: consolidate wrappers next time their owner changes; neither duplicates decision rules.",
+    )
+    result["evidence"]["code_volume"]["compatibility_assessment"] = assessment
+    result["findings"] = [{"severity": "P2", "blocking": False}]
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("decision", ["simplify_now", "not_yet_proven"])
+def test_required_simplification_or_material_unknown_cannot_claim_approval(decision):
+    packet, result = _review()
+    result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision=decision)
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "code_volume:compatibility_assessment:blocking_decision" in checked["approval_blockers"]
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("patch,blocker", [
+    ({"decision": "looks_good"}, "invalid_decision"),
+    ({"deployment_boundary": "maybe"}, "invalid_deployment_boundary"),
+    ({"deployment_boundary": "unknown"}, "unknown_boundary_cannot_justify_decision"),
+])
+def test_unknown_compatibility_cannot_be_relabelled_as_verified(patch, blocker):
+    packet, result = _review()
+    result["evidence"]["code_volume"]["compatibility_assessment"] = {**_compatibility(), **patch}
+    assert f"code_volume:compatibility_assessment:{blocker}" in check_review_result(packet, result)["approval_blockers"]
+
+
+def test_unrelated_change_needs_only_a_scoped_compatibility_reason():
+    packet, result = _review(area="public_docs")
+    assessment = result["evidence"]["code_volume"]["compatibility_assessment"]
+    assert set(assessment) == {"decision", "reason"}
+    assert check_review_result(packet, result)["approval_consistent"]
+    del assessment["reason"]
+    assert not check_review_result(packet, result)["approval_consistent"]
+
+
+def test_projected_compatibility_rules_cannot_mutate_the_checker():
+    packet, result = _review()
+    contract = build_review_execution_contract()
+    rule = next(row for row in contract["evidence_requirements"] if row["evidence_id"] == "code_volume")
+    rule["compatibility_assessment"]["blocking_decisions"].clear()
+    rule["compatibility_assessment"]["applicable_fields"].clear()
+    packet["agent_response_contract"] = {"review_execution_contract": contract}
+    result["evidence"]["code_volume"]["compatibility_assessment"] = _compatibility(decision="simplify_now")
+    assert not check_review_result(packet, result)["approval_consistent"]

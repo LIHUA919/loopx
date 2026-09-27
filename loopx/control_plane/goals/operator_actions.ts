@@ -4,11 +4,12 @@ import {
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
+import { projectGoalBindingMatch } from "./goal_instance_identity.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 
 export const GOAL_ACTION_PROJECTION_REQUEST_SCHEMA_VERSION =
-  "loopx_goal_action_projection_request_v2";
+  "loopx_goal_action_projection_request_v3";
 export const GOAL_ACTION_CATALOG_SCHEMA_VERSION =
   "loopx_goal_action_catalog_v1";
 export const GOAL_ACTION_SCHEMA_VERSION = "loopx_goal_action_v1";
@@ -110,6 +111,7 @@ export function projectGoalOperatorActions(value: unknown): JsonObject {
     );
   }
   const stateFingerprint = requireFingerprint(request.state_fingerprint);
+  const goalBinding = projectGoalBindingMatch(request.identity_observation);
   const actions: JsonObject[] = [];
   actions.push(
     lifecycleAction(
@@ -127,6 +129,7 @@ export function projectGoalOperatorActions(value: unknown): JsonObject {
     goal_id: goalId,
     activation_state: activationState,
     state_fingerprint: stateFingerprint,
+    goal_binding: goalBinding,
     actions,
   };
 }

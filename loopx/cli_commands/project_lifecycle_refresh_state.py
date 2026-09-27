@@ -75,6 +75,19 @@ def register_refresh_state_command(
     subparsers: argparse._SubParsersAction,
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
+    context_parser = subparsers.add_parser(
+        "checkpoint-context", help="Read a fresh decision basis for an existing Turn's missing checkpoint.",
+    )
+    add_subcommand_format(context_parser)
+    for option in ("goal-id", "agent-id", "turn-instance-id"):
+        context_parser.add_argument(f"--{option}", required=True)
+    binding = context_parser.add_mutually_exclusive_group(required=True)
+    binding.add_argument("--todo-id")
+    binding.add_argument("--replan-obligation-id")
+    context_parser.add_argument("--project")
+    context_parser.add_argument("--state-file")
+    context_parser.add_argument("--dependency-todo-id", action="append", default=[],
+        help="Additional upstream Todo result used in the judgment; declared dependencies are included automatically.")
     refresh_state_parser = subparsers.add_parser(
         "refresh-state",
         help="Append a read-only run from active goal state after state-only updates.",
@@ -281,6 +294,10 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument(
+        "--checkpoint-read-context", metavar="READ_CONTEXT_ID",
+        help="Echo the fresh checkpoint-context receipt when supplementing a missing checkpoint on the original Turn.",
+    )
+    refresh_state_parser.add_argument(
         "--agent-id",
         help=(
             "Registered agent id for agent-lane state refreshes. When set, the "
@@ -369,6 +386,23 @@ def handle_refresh_state_command(
     post_writeback_hooks: Sequence[PostWritebackHookRegistration] | None = None,
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int | None:
+    if args.command == "checkpoint-context":
+        from ..control_plane.goals.checkpoint_context_io import read_checkpoint_context, render_checkpoint_context
+        try:
+            payload = read_checkpoint_context(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+                turn_instance_id=args.turn_instance_id, replan_obligation_id=args.replan_obligation_id,
+                project=Path(args.project).expanduser() if args.project else None,
+                state_file=Path(args.state_file).expanduser() if args.state_file else None,
+                dependency_todo_ids=args.dependency_todo_id,
+            )
+        except Exception as exc:
+            payload = {"ok": False, "error": str(exc),
+                **({"error_code": exc.code, **getattr(exc, "payload", {})}
+                   if isinstance(getattr(exc, "code", None), str) else {})}
+        print_payload(payload, output_format(args), render_checkpoint_context)
+        return 0 if payload.get("ok") else 1
     if args.command != "refresh-state":
         return None
     fmt = output_format(args)
@@ -461,6 +495,7 @@ def handle_refresh_state_command(
             agent_vision_packet=agent_vision_packet,
             merge_agent_vision_patch=merge_agent_vision_patch,
             vision_unchanged_reason=args.vision_unchanged_reason,
+            checkpoint_read_context_id=getattr(args, "checkpoint_read_context", None),
             progress_observation=progress_observation,
             usage_measurement=usage_measurement,
             usage_codex_session=(

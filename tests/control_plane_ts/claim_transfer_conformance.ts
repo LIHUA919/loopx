@@ -41,7 +41,7 @@ export function registerClaimTransferConformance(provider: string, factory: Auth
   }
 
   for (const schema of ["native", "legacy"] as const) {
-    test(`${provider} ${schema} atomic claimed lease transfer preserves the complete work graph`, async t => {
+    test(`${provider} ${schema} atomic claimed lease transfer preserves current context and the complete work graph`, async t => {
       const {store, contender, seed, request} = await setup(t, schema);
       const result = await execute(store, request);
       assert.equal(result.status, "applied", JSON.stringify(result));
@@ -50,8 +50,10 @@ export function registerClaimTransferConformance(provider: string, factory: Auth
       assert.equal(head.cursor, "2");
       const current = (head.head.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
       const original = (seed.todos as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
-      assert.equal(validateContinuationNote(current.note, computeContinuationTodoFacts(current)).valid, false);
-      assert.deepEqual(current, {...original, claimed_by: "agent-b", last_actor_agent_id: "agent-a", updated_at: "2026-09-13T10:05:00Z"});
+      assert.equal(validateContinuationNote(current.note, computeContinuationTodoFacts(current)).valid, true);
+      assert.deepEqual(JSON.parse(String(current.note)), {...JSON.parse(String(original.note)),
+        todo_facts: computeContinuationTodoFacts({...original, claimed_by: "agent-b"})});
+      assert.deepEqual(current, {...original, note: current.note, claimed_by: "agent-b", last_actor_agent_id: "agent-a", updated_at: "2026-09-13T10:05:00Z"});
       const originalLease = (seed.leases as JsonObject[]).find(row => row.todo_id === request.todo_id)!;
       assert.deepEqual(result.lease, {...originalLease, owner: "agent-b", idempotency_key: "lifecycle-b",
         version: 4, lease_epoch: 8, updated_at: "2026-09-13T10:05:00Z", expires_at: "2026-09-13T10:15:00Z"});

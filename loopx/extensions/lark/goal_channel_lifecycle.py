@@ -197,6 +197,10 @@ def sync_human_gate_after_refresh(
             scan_roots=[registry_project_root(source_registry_path)],
             limit=20,
             goal_id=goal_id,
+            # Gate delivery needs current Goal/quota state, not a repository-wide
+            # publication audit on every committed refresh. Keep that audit in
+            # explicit check/premerge flows, as the local status APIs do.
+            include_public_boundary_scan=False,
         )
         quota_packet = build_quota_should_run(
             status,

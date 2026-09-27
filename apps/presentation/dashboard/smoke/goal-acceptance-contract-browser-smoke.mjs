@@ -7,10 +7,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupBrowserSmoke, launchBrowser, startViteDashboardServer, waitForHttp } from "../../../../examples/dashboard-browser-smoke-support.mjs";
 import { acceptance, contract, snapshot, verifiedContract } from "./goal-acceptance-contract-fixture.mjs";
+import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 
 const dashboardDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(dashboardDir, "../../..");
-const python = process.env.LOOPX_PYTHON ?? "python3";
+const python = resolveTestPython();
 const port = Number(process.env.LOOPX_ACCEPTANCE_CONTRACT_PORT ?? 5297);
 const packaged = process.env.LOOPX_ACCEPTANCE_CONTRACT_PACKAGED === "1";
 const payload = JSON.parse(execFileSync(python, ["-c", `
@@ -89,6 +90,11 @@ try {
       await section.getByText(locale === "en" ? en : zh, { exact: true }).waitFor();
       assert.ok((await section.innerText()).includes(locale === "en" ? "neither automatically approves or completes the Goal" : "均不会自动批准或完成 Goal"));
     }
+    await refreshSnapshot({ ...contract, scope: { kind: "selected_work", todo_ids: contract.tasks.map(task => task.todo_id) } });
+    await section.getByText(locale === "en" ? "Only explicitly selected tasks" : "仅明确选定的任务", { exact: true }).waitFor();
+    await section.locator("dl").first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: process.env.LOOPX_ACCEPTANCE_SCOPE_SCREENSHOT_DIR
+      ? `${process.env.LOOPX_ACCEPTANCE_SCOPE_SCREENSHOT_DIR}/${locale}.png` : `/tmp/loopx-acceptance-scope-${locale}.png` });
     const next = { ...verifiedContract("stale"), revision: 8, digest: "b".repeat(64) };
     await refreshSnapshot(next);
     await section.getByText(next.digest, { exact: true }).waitFor();

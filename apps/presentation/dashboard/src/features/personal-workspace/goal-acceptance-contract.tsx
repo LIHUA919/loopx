@@ -14,6 +14,7 @@ export function GoalAcceptanceContractSection({ goalId, contract, copy, current 
       {!current ? <p role="status" className="delivery-notice">{copy.retained}</p> : null}
       <dl className="delivery-acceptance-source">
         <div><dt>{copy.source}</dt><dd><code>{goalId}</code></dd></div>
+        <div><dt>{copy.scope}</dt><dd>{contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}</dd></div>
         <div><dt>{copy.revision}</dt><dd>{contract.revision}</dd></div>
         <div><dt>{copy.digest}</dt><dd><code>{contract.digest}</code></dd></div>
       </dl>

@@ -17,13 +17,31 @@ test("vision refresh shares the original delivery command and identity without a
   const authored = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
     vision_path: "fixture-vision.json"};
   const first = prepare(authored);
-  const recovery = evaluateHostTodoCompletion(request("prepare", {...authored, phase: "vision_refresh"}));
+  const recovery = evaluateHostTodoCompletion(request("prepare", {...authored, phase: "vision_refresh",
+    checkpoint_read_context_id: "receipt-a"}));
   const steps = (first.provider_effect as {steps: {step_kind: string; args: string[]}[]}).steps;
-  assert.deepEqual(recovery.args, steps.find(step => step.step_kind === "durable_writeback")!.args);
+  assert.deepEqual(recovery.args, [...steps.find(step => step.step_kind === "durable_writeback")!.args,
+    "--checkpoint-read-context", "receipt-a"]);
   assert.deepEqual(recovery.identity, first.identity);
   assert.equal(recovery.provider_effect, undefined);
   assert.equal((recovery.args as string[]).includes("spend-slot"), false);
   assert.equal((recovery.args as string[]).includes("--next-action"), false);
+});
+
+test("host context read uses the original identity and cannot carry a decision", () => {
+  const input = {schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION, phase: "vision_context"};
+  const context = evaluateHostTodoCompletion(request("prepare", input));
+  const identity = prepare().identity as Record<string, unknown>;
+  assert.deepEqual(context.identity, identity);
+  assert.deepEqual(context.args, ["checkpoint-context", "--goal-id", "goal",
+    "--agent-id", "agent", "--todo-id", todoId, "--turn-instance-id", identity.turn_instance_id]);
+  assert.equal(context.provider_effect, undefined);
+  for (const field of ["vision_path", "vision_unchanged_reason", "checkpoint_read_context_id"]) {
+    assert.throws(() => evaluateHostTodoCompletion(request("prepare", {...input, [field]: "value"})),
+      /cannot submit/);
+  }
+  assert.throws(() => prepare({schema_version: HOST_TODO_VISION_TRANSACTION_SCHEMA_VERSION,
+    checkpoint_read_context_id: "receipt-a"}), /only to vision recovery/);
 });
 
 test("vision decisions require v1 and cannot combine patch with unchanged", () => {

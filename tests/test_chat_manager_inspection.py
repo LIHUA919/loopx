@@ -87,7 +87,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
         ({"view": "portfolio", "path": "/unknown"}, ["unknown_argument:path"]),
         (
             {"view": "shell"},
-            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs"],
+            ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"],
         ),
         ({"view": "portfolio", "offset": True}, ["offset:must_be_an_integer_at_least_0"]),
         (
@@ -104,7 +104,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
         ),
         (
             {"view": "todos", "goal_id": "alpha", "include_stopped": True},
-            ["include_stopped:only_for_view_portfolio"],
+            ["include_stopped:only_for_view_portfolio_or_agents"],
         ),
         ({"view": "todos", "goal_id": "alpha", "days": 7}, ["days:only_for_view_deliveries"]),
         (
@@ -115,7 +115,7 @@ def test_invalid_or_out_of_scope_reads_do_not_touch_core(monkeypatch, tmp_path, 
             {"view": "todos", "goal_id": "alpha", "source_id": 3},
             ["source_id:must_be_a_string"],
         ),
-        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs"]),
+        ({"goal_id": "alpha"}, ["view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents"]),
     ],
 )
 def test_a_refused_read_names_the_argument_that_must_change(tmp_path, args, expected):
@@ -146,7 +146,7 @@ def test_a_refused_read_names_every_bad_argument_and_the_called_tool(tmp_path):
     )
     assert result["rejected_arguments"] == [
         "unknown_argument:path",
-        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs",
+        "view:must_be_one_of_sources,portfolio,todos,deliveries,handoffs,agents",
         "limit:must_be_an_integer_between_1_and_12",
         "days:only_for_view_deliveries",
     ]
@@ -284,8 +284,9 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
+@pytest.mark.parametrize("read_view", ["todos", "agents"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, read_view
 ):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
@@ -323,12 +324,20 @@ for line in sys.stdin:
         continue
     print(json.dumps({'id':r['id'],'result':result}), flush=True)
 """)
+    if read_view == "agents":
+        fake.write_text(fake.read_text().replace(
+            "'view':'todos','goal_id':'alpha'", "'view':'agents','query':'review'").replace(
+            "evidence['rows'][0]['title'] == 'Check the sample result'",
+            "evidence['rows'][0]['agent_id'] == 'review-worker' and evidence['rows'][0]['execution_readiness'] == 'not_checked'"))
+        (tmp_path / "registry.json").write_text(json.dumps({"goals": [
+            {"id": "alpha", "registered_agents": ["review-worker"]}
+        ]}))
     fake.chmod(0o755)
     collected = []
 
     def collect(*args, **kwargs):
         collected.append(kwargs)
-        return {"goals": [{"goal_id": "alpha"}], "snapshot_id": "fixture"}
+        return {"scope": "owner_global", "goals": [{"goal_id": "alpha"}], "snapshot_id": "fixture"}
 
     monkeypatch.setattr(context, "collect_manager_turn_context", collect)
     monkeypatch.setattr(
@@ -386,7 +395,7 @@ for line in sys.stdin:
         reads = [e for e in events if e["kind"] == "manager.evidence_read"]
         assert (
             len(reads) == 1
-            and reads[0]["payload"]["rows"][0]["todo_id"] == "todo_sample"
+            and reads[0]["payload"]["rows"][0]["todo_id" if read_view == "todos" else "agent_id"] == ("todo_sample" if read_view == "todos" else "review-worker")
         )
     finally:
         runtime.close()

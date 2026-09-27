@@ -7,6 +7,7 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupBrowserSmoke, launchBrowser, loadPlaywright, waitForHttp } from "./dashboard-browser-smoke-support.mjs";
+import { resolveTestPython } from "../scripts/test-python.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 process.env.LOOPX_PLAYWRIGHT_PACKAGE ??= resolve(root, "apps/presentation/dashboard/node_modules/playwright");
 const require = createRequire(import.meta.url);
@@ -18,10 +19,20 @@ function snapshot(id) {
   const payload = structuredClone(require(resolve(root, "examples/status.example.json")));
   payload.run_history.goals = [{ ...payload.run_history.goals[0], id, display_name: `${id} project`, activation_state: id === "archived" ? "stopped" : "active", registry_member: true }];
   for (const item of payload.attention_queue.items) item.goal_id = id;
+  if (id === "ready") {
+    const native = { done: false, text: "Review public evidence", todo_id: "todo_native_ready" };
+    payload.attention_queue.items[0].agent_todos.items.unshift(native);
+    payload.attention_queue.items[0].project_asset = {
+      owner: "agent", gate: "none", next_action: "review", stop_condition: "accepted",
+      agent_todos: { items: [{ ...native, index: null }],
+        recent_completed_advancement_items: [{ ...native, todo_id: "todo_native_done", done: true }] },
+    };
+    payload.todo_index.items.unshift({ ...native, index: null, goal_id: id });
+  }
   payload.workspace_registry_revision = directory.registry_revision;
   return payload;
 }
-const server = spawn(process.env.LOOPX_PYTHON_BIN ?? "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" });
+const server = spawn(resolveTestPython(), ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" });
 let browser;
 let releaseSlow;
 const slowGate = new Promise((done) => { releaseSlow = done; });

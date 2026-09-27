@@ -56,7 +56,7 @@ MANAGER_AGENT_GOAL_ID = "loopx-manager"
 # and their own transcript, so they are never measured by this contract.
 MANAGER_CHANNEL_ID = "manager"
 MANAGER_AGENT_OBJECTIVE = (
-    "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer only the current user message in concise Chinese. "
+    "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
     + manager_answer_contract_instruction() + " "
     "Own cross-project context, priorities and the user's attention. Investigate directly within the effective host grant; "
     "leave sustained project delivery with its responsible registered Agent. A project coordinator remains an ordinary Agent "
@@ -91,6 +91,9 @@ MANAGER_AGENT_OBJECTIVE = (
     "A checkpoint reason is an Agent's explanation, not independent proof. Respect field_coverage and evidence_coverage; hashed evidence refs are lineage, not fetchable artifacts. "
     "When artifact_read_status is not_read, distinguish the useful recorded finding from verification still missing instead of discarding the finding. "
     "Prefer short paragraphs or bullets to large tables. For Lark use readable Markdown paragraphs and lists, with blank lines between blocks; prefer short lists to large tables. "
+    "Before choosing a worker or claiming none exists, use loopx_manager_read view=agents, search responsibilities and paginate the permitted registry; inspect relevant declared remote sources too. "
+    "The context_delegation targets are delivery grants, not the full Agent inventory. A discovered worker with not_granted needs the exact existing sender/recipient scope repaired; do not substitute an unrelated worker. "
+    "Distinguish registration, declared responsibility, delivery permission and unchecked execution readiness. Unknown presence is not offline. "
     "Default to intent delegation: for an explicit request to pass context, objectives or constraints to another Agent, use context_handoff "
     "with the exact goal_id and agent_id from the supplied context_delegation catalog and a collaboration_brief_v0 brief preserving the relevant conversation, corrections, rejected approaches, constraints, inputs, acceptance and return requirement. Do not reduce a multi-message request to the last sentence. This is already authorized "
     "context delivery, not a Todo proposal: do not ask for another confirmation, set priority, change a plan, "
@@ -135,12 +138,11 @@ def manager_agent_objective(runtime_profile: str = "restricted") -> str:
 
 
 def manager_answer_readback(response: Mapping[str, Any], *, channel: str) -> dict[str, Any]:
-    """Attach the contract shape of one steward answer, for owner readback.
+    """Attach presentation structure of one steward answer, for owner readback.
 
     The owner channel is the one this contract is written for; an external
-    audience keeps its own transcript and is left untouched. The shape is a
-    structural report (which contract sections the answer carried, in which
-    order), not a rewrite of the answer.
+    audience keeps its own transcript and is left untouched. The description
+    makes no claim about the answer's factual quality and never rewrites it.
     """
 
     if channel != MANAGER_CHANNEL_ID:
@@ -889,7 +891,9 @@ def open_manager_session(
 #     the manager session-invalidation token, so a second row-shape change must
 #     take the next unused value: reusing 14 would leave a session issued under
 #     the answer-contract shape serving the new rows.
-MANAGER_CONTEXT_VERSION = 15
+# 16: the steward answer contract now follows the task instead of requiring
+#     four fixed labelled sections. Existing sessions must receive the new rule.
+MANAGER_CONTEXT_VERSION = 17
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any
@@ -897,8 +901,9 @@ MANAGER_CONTEXT_VERSION = 15
 # existing workspace instead of only new ones.
 MANAGED_SKILL_MARKER_V1 = "<!-- loopx-managed-manager-skill:v1 -->"
 MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V2
+MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V3
 
 
 def manager_skill_text() -> str:

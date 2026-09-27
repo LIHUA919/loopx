@@ -19,7 +19,9 @@ from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
 from ..control_plane.effect_runtime import EffectRuntimeStartupError
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import (
+    CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
     QuotaActionSelectionConflictError,
     QuotaCommandValidationError,
@@ -112,7 +114,8 @@ def quota_failure_payload(
     public_reason = (
         str(error)
         if isinstance(
-            error, (HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError)
+            error,
+            (CloseoutQueryUnavailableError, HeartbeatReceiptIdentityConflictError, EffectRuntimeStartupError),
         )
         else "quota collection failed"
     )
@@ -134,21 +137,53 @@ def quota_failure_payload(
         **verbose_debug,
         **lock_timeout_fields,
     }
+    if isinstance(error, CloseoutQueryUnavailableError):
+        payload.update({
+            "status": error.diagnostic_code,
+            "effective_action": EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR.value,
+            "recommended_action": (
+                "check runtime health, then retry quota should-run with the same "
+                "Turn identity to read the closeout state; do not infer settlement "
+                "or replay work from a missing query response"
+            ),
+        })
     if isinstance(error, QuotaActionSelectionConflictError):
         # The requested Todo could not be reconciled with the projection. Report
         # the real conflict and the next read to make, rather than the generic
         # "quota collection failed" and a pointer at receipt writeback.
+        selection_conflict: dict[str, object] = {
+            "kind": error.kind.value,
+            "requested_todo_id": error.requested_todo_id,
+            "selected_todo_id": error.selected_todo_id,
+            "qualification_state": error.qualification_state,
+        }
+        if error.unsettled_prior_turn_instance_id:
+            selection_conflict["unsettled_prior_turn_instance_id"] = (
+                error.unsettled_prior_turn_instance_id
+            )
+        if error.unsettled_repair:
+            selection_conflict["unsettled_repair"] = error.unsettled_repair
+        if (
+            error.admission_must_attempt is not None
+            or error.admission_delivery_allowed is not None
+        ):
+            selection_conflict["admission"] = {
+                "agent_must_attempt": error.admission_must_attempt,
+                "delivery_allowed": error.admission_delivery_allowed,
+            }
+        if error.retained_selection:
+            selection_conflict["retained_selection"] = True
+            selection_conflict["retained_selection_todo_id"] = error.selected_todo_id
+        if error.receipt_replan_obligation_id:
+            selection_conflict["receipt_replan_obligation_id"] = (
+                error.receipt_replan_obligation_id
+            )
         payload.update(
             {
                 "reason": str(error),
                 "status": "quota_action_selection_conflict",
                 "recommended_action": error.recommended_action,
-                "action_selection_conflict": {
-                    "kind": error.kind.value,
-                    "requested_todo_id": error.requested_todo_id,
-                    "selected_todo_id": error.selected_todo_id,
-                    "qualification_state": error.qualification_state,
-                },
+                "action_selection_conflict": selection_conflict,
             }
         )
     if isinstance(error, QuotaIdentityPreconditionError):

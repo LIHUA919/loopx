@@ -129,10 +129,10 @@ def merged_lifecycle() -> dict[str, object]:
         "ok": True,
         "schema_version": "issue_fix_pr_lifecycle_monitor_v0",
         "observation": {
-            "repo": "huangruiteng/loopx",
+            "repo": "loopx-project/loopx",
             "pr_ref": "pull_8",
             "number": 8,
-            "permalink": "https://github.com/huangruiteng/loopx/pull/8",
+            "permalink": "https://github.com/loopx-project/loopx/pull/8",
             "state": "MERGED",
             "is_draft": False,
             "checks": {
@@ -159,7 +159,7 @@ def outcome_packet(
     commit_ref: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     feasibility = build_issue_fix_feasibility_packet(
-        url="https://github.com/huangruiteng/loopx/issues/7",
+        url="https://github.com/loopx-project/loopx/issues/7",
         reproduction_status="confirmed",
         reproduction_label="focused worker reproduction",
         scope_class="bounded",
@@ -176,7 +176,7 @@ def outcome_packet(
         "repository_commit_evidence": {
             "schema_version": "issue_fix_repository_commit_evidence_v0",
             "status": "verified",
-            "repo": "huangruiteng/loopx",
+            "repo": "loopx-project/loopx",
             "repository_fingerprint": "sha256:" + "a" * 64,
             "repository_revision": revision,
             "declared_commit_ref": commit_ref or revision,
@@ -192,7 +192,7 @@ def outcome_packet(
         "outputs": [
             {
                 "kind": "pull_request",
-                "url": "https://github.com/huangruiteng/loopx/pull/8",
+                "url": "https://github.com/loopx-project/loopx/pull/8",
             }
         ],
         "risks": ["broader integration validation was not run"],
@@ -711,7 +711,7 @@ def main() -> int:
             "--goal-id",
             "public-issue-fix-goal",
             "--repo",
-            "huangruiteng/loopx",
+            "loopx-project/loopx",
             "--issue-ref",
             str(feasibility["observation"]["issue_ref"]),
             "--feasibility-json",

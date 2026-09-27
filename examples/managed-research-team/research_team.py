@@ -115,6 +115,7 @@ def prepare(root: Path, provider: str = "file", topology: str = "cloud-led",
                          "validation_timeout_seconds": 5, "validation_files": pins})
         bindings.append({"todo_id": identity, "criterion_ids": [actor + "-" + revision]})
     write(root / "bootstrap.json", {"tasks": tasks, "document": {
+        "scope": {"kind": "all_advancement"},
         "objective": "Deliver a revision-aware synthetic research report with every configured dependency completed",
         "non_goals": ["Trading", "External research", "Owner approval of the whole Goal"],
         "criteria": criteria, "bindings": bindings,
@@ -133,6 +134,7 @@ def complete(root: Path, actor: str, revision: str) -> dict:
     result = cli(root, "todo", "complete", "--goal-id", GOAL, "--agent-id", actor,
                  "--todo-id", todo_id(actor, revision), "--no-follow-up",
                  "--note", "Bounded artifact task; synthesis consumes dependencies through its separately bound task.",
+                 *(["--result-file", str(root / "lead" / "report.json")] if actor == "lead" else []),
                  workspace=root / "project")
     require_completed(canonical_tasks(root), actor, revision)
     return result

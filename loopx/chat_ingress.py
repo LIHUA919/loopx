@@ -15,6 +15,7 @@ class ChatIngressStore:
         client_ingress_id: str,
         mode: str,
         message: str,
+        expected_turn_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Reserve one idempotent external ingress before provider delivery."""
 
@@ -30,10 +31,13 @@ class ChatIngressStore:
         ):
             existing = _read_json(path)
             if existing.get("schema_version") == CHAT_INGRESS_SCHEMA_VERSION:
+                request = {"mode": _opaque_id(mode, field="mode"), "message": str(message)}
+                if expected_turn_id is not None or "expected_turn_id" in existing:
+                    request["expected_turn_id"] = expected_turn_id
                 require_matching_replay(
                     existing,
                     identity="client_ingress_id",
-                    request={"mode": _opaque_id(mode, field="mode"), "message": str(message)},
+                    request=request,
                 )
                 return existing, False
             now = utc_now()
@@ -48,6 +52,8 @@ class ChatIngressStore:
                 "status": "pending",
                 "message": str(message),
                 "active_turn_id": None,
+                **({"expected_turn_id": _opaque_id(expected_turn_id, field="expected_turn_id")}
+                   if expected_turn_id is not None else {}),
                 "error_code": None,
                 "created_at": now,
                 "updated_at": now,

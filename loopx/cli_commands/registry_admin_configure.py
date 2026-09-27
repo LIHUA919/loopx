@@ -108,6 +108,38 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         ),
     )
     configure_goal_parser.add_argument(
+        "--progress-review-mode",
+        choices=["off", "shadow", "assist"],
+        help=(
+            "Optional scoped progress-review sentinel: shadow records typed drift "
+            "receipts; assist lets consecutive drift receipts raise the existing "
+            "autonomous replan obligation. Grants no pause or gate authority."
+        ),
+    )
+    configure_goal_parser.add_argument(
+        "--progress-review-signal",
+        choices=["noul", "choice"],
+        help="Which receipt judgment pair counts as drift for this goal.",
+    )
+    configure_goal_parser.add_argument(
+        "--progress-review-drift-threshold",
+        type=int,
+        help="Consecutive completed drift receipts required before an obligation (2-20).",
+    )
+    configure_goal_parser.add_argument(
+        "--progress-review-contract-revision",
+        help=(
+            "sha256 of the observer basis that receipts must be bound to, as printed "
+            "by `loopx-jev drift init`; assist raises nothing without it. Pass an "
+            "empty string to remove the pin."
+        ),
+    )
+    configure_goal_parser.add_argument(
+        "--clear-progress-review-configuration",
+        action="store_true",
+        help="Remove the Goal progress-review policy and return to the default off.",
+    )
+    configure_goal_parser.add_argument(
         "--multi-subagent-feature",
         choices=["off", "enabled"],
         help=(
@@ -317,8 +349,8 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--local-authority-shadow-file",
         action="store_true",
         help=(
-            "Enable default-off, one-way capture of post-commit local snapshots "
-            "in FileAuthorityStore. This does not compare source and candidate."
+            "Retired; rejected without writing. Use --coordination-runtime-shadow-file "
+            "and explicit coordination-shadow bootstrap for transaction-bound capture."
         ),
     )
     configure_goal_parser.add_argument(

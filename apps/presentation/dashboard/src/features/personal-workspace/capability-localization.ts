@@ -13,17 +13,21 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string }
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
     manager_runtime: {
-      displayName: "Manager runtime",
+      displayName: "Runtime",
       description: "Selects the persistent host-tool profile used by owner manager conversations.",
     },
     steward_executor: {
-      displayName: "Steward executor",
+      displayName: "Model and executor",
       description: "Guides the steward executor, model, and selection boundary for this machine. A pinned route blocks substitution; a flexible pool permits only authorized fallback.",
     },
     todo_replan_cadence: { displayName: "Goal review cadence", description: "Configures the Goal review cadence." },
     change_quality_qualification: {
       displayName: "Change quality qualification",
       description: "Prepares a provider-neutral review packet, allows at most one policy-authorized safe-fix pass, and can require an exact-diff receipt.",
+    },
+    progress_review: {
+      displayName: "Progress-review sentinel",
+      description: "Records typed drift receipts from an external bounded review of scoped file deltas; assist may raise the existing autonomous replan obligation.",
     },
     explore_graph: {
       displayName: "Explore Graph",
@@ -43,8 +47,9 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       description: "Synchronizes accepted LoopX work state to the configured Lark Kanban heartbeat surface.",
     },
     local_authority_shadow: {
-      displayName: "Local authority shadow",
-      description: "Observes post-commit Todo and task-lease state through the shared authority contract without taking write authority.",
+      displayName: "Retired authority observation",
+      description: "No longer writes observations. Retained records are read-only, not promotion evidence.",
+      readOnlyReason: "Clear the old setting with configure-goal --clear-local-authority-shadow. Runtime shadow requires separate configuration and bootstrap.",
     },
     coordination_runtime_shadow: {
       displayName: "Coordination runtime shadow",
@@ -73,17 +78,21 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   },
   "zh-CN": {
     manager_runtime: {
-      displayName: "管家 Runtime",
+      displayName: "运行环境",
       description: "选择管家会话持续生效的宿主工具模式。",
     },
     steward_executor: {
-      displayName: "管家执行器",
+      displayName: "模型与执行器",
       description: "配置本机管家的执行器、模型与选择边界；锁定路径禁止替代，灵活池只允许在已授权范围内回退。",
     },
     todo_replan_cadence: { displayName: "Goal 复核周期", description: "配置 Goal 的复核周期。" },
     change_quality_qualification: {
       displayName: "变更质量验证",
       description: "生成与 Provider 无关的审阅包，最多允许一次策略授权的安全修复，并可要求精确 diff 回执。",
+    },
+    progress_review: {
+      displayName: "进展评估哨兵",
+      description: "记录外部有界评估对限定文件变化给出的类型化漂移回执；assist 模式可触发已有的自主重规划义务。",
     },
     explore_graph: {
       displayName: "探索图谱",
@@ -103,8 +112,9 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       description: "把 LoopX 已接受的工作状态同步到配置好的飞书看板心跳界面。",
     },
     local_authority_shadow: {
-      displayName: "本地 Authority 影子观测",
-      description: "通过共享 Authority contract 观测提交后的 Todo 与 task lease 状态，但不取得写入权。",
+      displayName: "已退役的 Authority 观测",
+      description: "不再写入观测。保留记录只读，不能作为晋升证据。",
+      readOnlyReason: "通过 configure-goal --clear-local-authority-shadow 清理旧设置；Runtime shadow 需要另行配置与 bootstrap。",
     },
     coordination_runtime_shadow: {
       displayName: "协调 Runtime 影子",

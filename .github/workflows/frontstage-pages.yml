@@ -10,7 +10,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -27,6 +29,7 @@ on:
       - "examples/export-frontstage-share-bundle.mjs"
       - "examples/blog-bilingual-index-smoke.mjs"
       - "examples/frontstage-share-bundle-smoke.mjs"
+      - "examples/dashboard-frontstage-browser-smoke.mjs"
       - "examples/dev-book-browser-smoke.mjs"
       - "examples/readme-star-history-smoke.py"
       - "examples/frontstage-stargazer-fetch-smoke.py"
@@ -46,7 +49,9 @@ on:
       - "README.md"
       - "README.zh-CN.md"
       - "apps/presentation/dashboard/**"
-      - "loopx/web/chat/**"
+      - "scripts/chat_bundle.py"
+      - "scripts/chat_bundle_launcher.mjs"
+      - "loopx/presentation/chat_bundle.py"
       - "apps/presentation/site/**"
       - "benchmark/deepswe/behavior-discovery/**"
       - "docs/**"
@@ -63,6 +68,7 @@ on:
       - "examples/export-frontstage-share-bundle.mjs"
       - "examples/blog-bilingual-index-smoke.mjs"
       - "examples/frontstage-share-bundle-smoke.mjs"
+      - "examples/dashboard-frontstage-browser-smoke.mjs"
       - "examples/dev-book-browser-smoke.mjs"
       - "examples/readme-star-history-smoke.py"
       - "examples/frontstage-stargazer-fetch-smoke.py"
@@ -125,13 +131,16 @@ jobs:
         working-directory: apps/presentation/dashboard
         run: |
           npm run build:chat
-          if [[ -n "$(git -C ../../.. status --short --untracked-files=all -- loopx/web/chat)" ]]; then
-            git -C ../../.. status --short --untracked-files=all -- loopx/web/chat
-            echo "Tracked packaged Dashboard assets differ from a clean source build." >&2
-            exit 1
-          fi
+          python ../../../scripts/chat_bundle.py verify --source
           ./node_modules/.bin/playwright install --with-deps chromium
           npm run smoke:personal-workspace-packaged
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontstage-chat-bundle-${{ github.sha }}
+          path: loopx/web/chat/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install docs dependencies
         run: |
@@ -215,6 +224,19 @@ jobs:
       # MkDocs cleans site/docs and intentionally excludes standalone case HTML.
       - name: Restore public case pages after documentation builds
         run: node examples/export-frontstage-share-bundle.mjs --restore-case-pages --out-dir output/frontstage-pages
+
+      - name: Validate analytics opt-in and event boundaries
+        run: node apps/presentation/site/scripts/analytics-smoke.mjs output/frontstage-pages/site
+
+      - name: Configure public website analytics
+        env:
+          # Repository variable: public GA4 stream identifier, not an API secret.
+          # PR previews never send production analytics.
+          LOOPX_GA_MEASUREMENT_ID: ${{ github.event_name != 'pull_request' && vars.LOOPX_GA_MEASUREMENT_ID || '' }}
+        run: node apps/presentation/site/scripts/add-analytics.mjs output/frontstage-pages/site
+
+      - name: Validate search publication
+        run: node apps/presentation/site/scripts/seo-smoke.mjs output/frontstage-pages/site --with-docs
 
       - name: Validate homepage navigation and retired links in the published site
         run: LOOPX_PUBLIC_SITE_DIR="$PWD/output/frontstage-pages/site" npm --prefix apps/presentation/dashboard run smoke:frontstage-browser

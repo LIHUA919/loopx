@@ -11,6 +11,7 @@ TODO_OPTION_FIELDS = (
     ("--priority", "priority"),
     ("--clear-priority", "clear_priority"),
     ("--todo-id", "todo_id"),
+    ("--operation-id", "operation_id"),
     ("--claim-operation-id", "claim_operation_id"),
     ("--update-operation-id", "update_operation_id"),
     ("--update-expected-provider-revision", "update_expected_provider_revision"),
@@ -300,6 +301,24 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
     )
 
 
+def validate_todo_receipt_options(args: argparse.Namespace) -> None:
+    _validate_todo_option_subset(
+        args, {"operation_id"},
+        "todo receipt only accepts --goal-id, --operation-id, and --format; unsupported: ",
+    )
+    if not args.operation_id:
+        raise ValueError("todo receipt requires --operation-id")
+
+
+def validate_todo_result_read_options(args: argparse.Namespace) -> None:
+    if not args.todo_id:
+        raise ValueError("todo result-read requires --todo-id")
+    _validate_todo_option_subset(
+        args, {"todo_id"},
+        "todo result-read only accepts --goal-id, --todo-id, and --format; unsupported: ",
+    )
+
+
 def validate_todo_plan_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
         args, {"text", "agent_id"},
@@ -414,6 +433,8 @@ def validate_todo_update_options(args: argparse.Namespace) -> None:
 def validate_todo_complete_options(args: argparse.Namespace) -> None:
     if not args.todo_id:
         raise ValueError("todo complete requires --todo-id")
+    if args.result_file and args.role == "user":
+        raise ValueError("--result-file requires an Agent Todo")
     if args.explore_result_node_refs or args.clear_explore_result_node_refs:
         raise ValueError("todo complete does not update --explore-result-node-ref; use todo update first")
     if args.claimed_by and args.clear_claim:
@@ -493,6 +514,10 @@ def validate_todo_archive_completed_options(args: argparse.Namespace) -> None:
 
 
 def validate_shared_todo_options(args: argparse.Namespace) -> None:
+    if getattr(args, "operation_id", None) and args.todo_command not in {"receipt", "add"}:
+        raise ValueError("--operation-id is supported only by todo receipt and canonical todo add")
+    if args.result_file and args.todo_command != "complete":
+        raise ValueError("--result-file is supported only by todo complete")
     agent_id_allowed_for_user_authoring = (
         args.todo_command == "add"
         and args.role == "user"

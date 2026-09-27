@@ -4,8 +4,9 @@ import test from "node:test";
 import type {AuthorityStoreConformanceFactory} from "./authority_store_conformance.ts";
 import {productionScaleSuccessionFixture} from "./production_scale_coordination_fixture.ts";
 import {validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 
-const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
+const PYTHON = resolveTestPython();
 
 // Exercise the shipped Python consumer → typed policy, not a second test reducer.
 const CONSUMER = `

@@ -6,6 +6,10 @@ const goalAcceptanceContractSchema = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(false) }),
   z.object({
     enabled: z.literal(true), revision: z.number().int().positive(), digest: z.string().min(1), objective: z.string(),
+    scope: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("all_advancement") }).strict(),
+      z.object({ kind: z.literal("selected_work"), todo_ids: z.array(z.string().min(1)).min(1) }).strict(),
+    ]).optional(),
     non_goals: z.array(z.string()), held_todo_ids: z.array(z.string()),
     status: z.enum(["unverified", "stale", "failed", "partial", "accepted", "held"]),
     criteria: z.array(z.object({ id: z.string(), description: z.string() })),

@@ -174,6 +174,64 @@ def test_reward_memory_outcome_prompt_budget_is_one_time_bounded_and_prompt_only
     assert _compare_row(other, {**current, "row_id": other["row_id"]})["failures"]
 
 
+@pytest.mark.parametrize(
+    ("mode", "row_kind", "limit"),
+    [
+        ("thin", "surface", 400),
+        ("brief", "variant", 720),
+        ("compact", "variant", 288),
+        ("full", "variant", 288),
+    ],
+)
+def test_user_language_prompt_budget_is_one_time_and_mode_scoped(
+    mode: str, row_kind: str, limit: int
+) -> None:
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import (
+        heartbeat_user_language_prompt_revision,
+    )
+
+    rendered_rule = (
+        "Lang=user; default=en; mix=asked/scoped."
+        if mode in {"thin", "brief"}
+        else "Language=user; fallback=English; mix only if asked/scoped-bilingual."
+    )
+    assert heartbeat_user_language_prompt_revision(rendered_rule) == (
+        "heartbeat_user_language_v1"
+    )
+    assert heartbeat_user_language_prompt_revision(rendered_rule.replace("mix", "omit")) is None
+
+    base = _row(
+        row_id=f"{row_kind}/heartbeat_prompt_{mode}/small/json",
+        qualification_policy=(
+            "absolute_hot_path" if mode == "thin" else "explicit_opt_in_cold_path"
+        ),
+        chars=1_000,
+        utf8_bytes=1_000,
+        lines=20,
+        compact_payload_chars=1_000,
+    )
+    candidate = {
+        **base,
+        "chars": 1_000 + limit,
+        "compact_payload_chars": 1_000 + limit,
+        "heartbeat_user_language_prompt_revision": "heartbeat_user_language_v1",
+    }
+    assert not _compare_row(base, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "chars": 1_001 + limit})["failures"]
+    assert _compare_row(candidate, {**candidate, "chars": 1_000 + 2 * limit})[
+        "failures"
+    ]
+    assert _compare_row(base, {**candidate, "heartbeat_user_language_prompt_revision": None})[
+        "failures"
+    ]
+    other = {**base, "row_id": "surface/status/small/json"}
+    assert _compare_row(other, {**candidate, "row_id": other["row_id"]})["failures"]
+    if mode == "brief":
+        assert not _compare_row(base, {**candidate, "lines": 26})["failures"]
+        assert _compare_row(base, {**candidate, "lines": 27})["failures"]
+
+
 def test_managed_executor_binding_budget_is_one_time_bounded_and_turn_only() -> None:
     from loopx.control_plane.testing.cli_output_differential import (
         _TURN_HOST_AND_MANAGED_EXECUTOR_BINDING_V0_GROWTH_ALLOWANCE as ALLOWANCE,
@@ -1018,3 +1076,36 @@ def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None
             semantic_json_keys=("required",),
             markdown_anchor=None,
         )
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_projection_envelope_migration_is_status_only_bounded_and_one_time(output_format):
+    from loopx.control_plane.testing.cli_output_semantics import projection_envelope_schema_versions
+
+    assert projection_envelope_schema_versions({"projection_envelope": {
+        "schema_version": "loopx_projection_envelope_v0"}}) == ["loopx_projection_envelope_v0"]
+    assert projection_envelope_schema_versions("- projection: envelope=`loopx_projection_envelope_v0` observed_at=`today`") == ["loopx_projection_envelope_v0"]
+    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": 2048}
+              if output_format == "json" else {"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0})
+    base = _row(format=output_format, row_id=f"surface/status/small/{output_format}")
+    candidate = {**base, "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
+                 **{metric: base[metric] + limit for metric, limit in limits.items()}}
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result["ok"] and result["review_required"]
+    # JSON fixtures are large enough for ordinary ratio allowances; use their
+    # smaller real scale when checking bounded Markdown growth.
+    if output_format == "markdown":
+        base.update(chars=1000, utf8_bytes=1000, lines=30)
+        candidate.update(**{metric: base[metric] + limit for metric, limit in limits.items()})
+    for metric in ("chars", "utf8_bytes", "lines"):
+        too_large = {**candidate, metric: candidate[metric] + 1}
+        assert not compare_cli_output_receipts(_receipt(base), _receipt(too_large))["ok"]
+    grown = {**candidate, "chars": candidate["chars"] + limits["chars"]}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
+    for versions in ([], ["loopx_projection_envelope_v1"]):
+        unknown = {**candidate, "projection_envelope_schema_versions": versions}
+        assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unknown))["ok"]
+    for surface in ("quota_should_run", "todo_list", "status_unrelated"):
+        outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
+        outside = {**candidate, "row_id": outside_base["row_id"]}
+        assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]

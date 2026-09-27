@@ -14,9 +14,11 @@ fencing and receipt proof; Python only loads the file and transports the request
 
 Use an explicitly enabled, bootstrapped and qualified runtime shadow. Its
 qualification must cover real mutations and required event classes; an empty
-shadow or a saved JSON file cannot substitute for that evidence. Existing v0
-promotion still requires `hard_lease`. Provider selection and migration approval
-remain separate from these commands.
+shadow or a saved JSON file cannot substitute for that evidence. Without an explicit migration, v0
+promotion still requires `hard_lease`. Use `--handoff-mode-migration preserve`
+to retain the current mode, or `hard_lease` to review a claim-preserving mode
+transition. Saved execution retains that choice and does not accept overrides.
+Neither strategy weakens source, capture or transaction qualification.
 
 ```bash
 loopx --format json coordination-shadow promote \
@@ -47,6 +49,32 @@ the computed plan digest differs, it returns
 new preview after legitimate source changes; do not edit the old digest to force
 acceptance. The digest detects changed intent; the durable fence and provider
 state establish whether that intent may proceed.
+
+## Registration changes and retry
+
+The Python source adapter binds the current Goal, paths and registered Agent
+facts to one registry byte digest. TS rechecks it under the existing cross-runtime
+lock and retains that lock through admission/commit. Stale sources return
+`source_registry_changed_retry`; changed Agent facts in a saved plan return
+`promotion_registration_changed_retry`. Refresh the source and review a new
+preview, never edit the digest. A held registry lock returns
+`source_registry_busy_retry`, releasing source locks before retry so registry-first
+configuration writers cannot deadlock. Ordinary Todo writes gain no new lock.
+Project and global registry mutations share the existing marker-plus-kernel lock
+protocol, including global sync, Goal activation and deletion. This registry
+interoperability applies even without shadow opt-in; read-only previews still
+take no mutation lock. A timeout inside the protected operation retains its
+original cause instead of being relabeled as registry contention.
+
+This is local source consistency, not an authority grant or cross-host database
+transaction. Unrelated registry edits may conservatively require a retry.
+Existing persisted receipts/fences remain recoverable without the new witness;
+fresh bootstrap, inspect, qualify and promote must recapture it. Pre-promotion
+rollback can still quarantine a shadow whose current registration is damaged.
+
+On failure, `legacy_writer_fenced=true` reports an actual retained fence, not
+proof this invocation created it. Unknown presence is `null`, never permission
+to use legacy writes. Recover with the original plan; do not delete the fence.
 
 ## Recover the original cutover
 
@@ -114,11 +142,9 @@ File and SQLite use their existing local stores. PostgreSQL follows the same
 transaction/readback contract through its service-owned factory; a local CLI
 selector alone does not provide a PostgreSQL connection or tenant authority.
 
-The claim-preserving migration work in PR #4870 is a complementary prerequisite
-for Goals that need explicit `preserve` or a claim-preserving `hard_lease`
-transition. The two changes overlap the promotion orchestration and must be
-integrated and tested together; this saved-plan feature alone does not enable
-that policy conversion on a v0-only checkout.
+The merged claim-preserving migration and saved-plan paths are now exercised
+together: default, `preserve` and `hard_lease` strategies on File/SQLite share
+the same qualification and recovery owners.
 
 Default-on promotion, SQLite long-duration qualification, post-promotion export
 or rollback, and retirement of remaining Python callers retain their RFC gates.

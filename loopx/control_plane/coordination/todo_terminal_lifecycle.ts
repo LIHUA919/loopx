@@ -4,7 +4,7 @@ import {normalizeTodoUpdateInput, prepareUpdatedTodo, type CoordinationTodoUpdat
 import {todoUpdateAdmissionRejection} from "./todo_update_admission.ts";
 import { createHash } from "node:crypto";
 import {acceptanceWorkGuard, acceptanceCompletionRequirements, validateAcceptanceCompletion,
-  acceptanceRequire, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
+  acceptanceRequire, acceptanceValidationEffects, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -74,7 +74,7 @@ type TerminalCommand = typeof TERMINAL_COMMANDS[number];
 type TodoRole = typeof TODO_ROLES[number];
 type CompletionIdentitySource = typeof COMPLETION_IDENTITY_SOURCES[number];
 
-export interface CoordinationTodoTerminalLifecycleInput {
+interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly review_basis?: {readonly provider_revision: string; readonly registry_sha256: string};
   /** Presence selects source-bound validation; null means no effect issued yet. */
   readonly validation_source_provider_revision?: string | null;
@@ -84,18 +84,15 @@ export interface CoordinationTodoTerminalLifecycleInput {
   readonly goal_id: string;
   readonly todo_id: string;
   readonly expected_role: TodoRole | null;
-  readonly command: TerminalCommand;
   readonly actor_agent_id: string | null;
   readonly registered_agents: readonly string[];
   readonly lifecycle_grants: readonly JsonObject[];
   readonly authority_reason: string | null;
   readonly decision_outcome: typeof DECISION_OUTCOMES[number] | null;
-  readonly operation_id: string;
   readonly lease_idempotency_key: string | null;
   readonly lease_expected_version: number | null;
   readonly allow_user_gate_auto_acquire: boolean;
   readonly requested_no_followup: boolean;
-  readonly requested_completion_turn_key: string | null;
   readonly requested_completion_identity_source: CompletionIdentitySource | null;
   readonly linked_successor_todo_ids: readonly string[];
   readonly successor_intents: readonly JsonObject[];
@@ -107,10 +104,67 @@ export interface CoordinationTodoTerminalLifecycleInput {
   readonly validation_receipt: JsonObject | null;
   readonly goal_acceptance_source_binding?: JsonObject | null;
   readonly goal_acceptance_validation_receipts?: unknown;
+  readonly completion_result?: JsonObject | null;
   readonly completion_policy_request: JsonObject | null;
   readonly dry_run: boolean;
   readonly now: Date;
 }
+
+/** Caller intent; durable receipts continue to use the resolved operation id. */
+export type TerminalOperationIdentity =
+  | {readonly kind: "explicit"; readonly operation_id: string}
+  | {readonly kind: "current_monitor_cycle"};
+
+type TerminalOperationIntent =
+  | {
+      readonly command: TerminalCommand;
+      readonly operation_identity: Extract<TerminalOperationIdentity, {kind: "explicit"}>;
+      readonly requested_completion_turn_key: string | null;
+    }
+  | {
+      readonly command: "complete";
+      readonly operation_identity: Extract<TerminalOperationIdentity, {kind: "current_monitor_cycle"}>;
+      readonly requested_completion_turn_key: null;
+    };
+export type CoordinationTodoTerminalLifecycleInput = CoordinationTodoTerminalLifecycleBaseInput & TerminalOperationIntent;
+type ResolvedCoordinationTodoTerminalLifecycleInput = CoordinationTodoTerminalLifecycleInput & {
+  readonly operation_id: string;
+};
+
+/** Shared intent decoder for the wire adapter and direct typed callers. */
+export function decodeTerminalOperationIntent(value: {
+  readonly command?: unknown;
+  readonly operation_identity?: unknown;
+  readonly requested_completion_turn_key?: unknown;
+}): TerminalOperationIntent {
+  if (Object.hasOwn(value, "operation_id")) {
+    throw new AuthorityStoreProtocolError("use operation_identity instead of top-level operation_id");
+  }
+  const identity = canonicalAuthorityObject(value.operation_identity, "terminal operation identity");
+  const command = requireLiteral(value.command, TERMINAL_COMMANDS, "command");
+  const turnKey = optionalString(value.requested_completion_turn_key, "requested_completion_turn_key");
+  if (value.requested_completion_turn_key != null && (turnKey === null || turnKey.trim().length === 0)) {
+    throw new AuthorityStoreProtocolError("requested_completion_turn_key must be a non-empty string or null");
+  }
+  if (identity.kind === "explicit" &&
+      Object.keys(identity).every(key => key === "kind" || key === "operation_id")) {
+    return {command, operation_identity: {kind: "explicit",
+      operation_id: requireAuthorityStoreId(identity.operation_id, "operation id")},
+      requested_completion_turn_key: turnKey};
+  }
+  if (identity.kind === "current_monitor_cycle" && Object.keys(identity).length === 1) {
+    if (command !== "complete" || turnKey !== null) {
+      throw new AuthorityStoreProtocolError("current Monitor cycle identity requires an unkeyed completion");
+    }
+    return {command: "complete", operation_identity: {kind: "current_monitor_cycle"},
+      requested_completion_turn_key: null};
+  }
+  throw new AuthorityStoreProtocolError("invalid terminal operation identity: expected explicit or current_monitor_cycle");
+}
+type LoadedAuthority = Extract<
+  Awaited<ReturnType<AuthorityStore["loadAuthority"]>>,
+  {status: "loaded"}
+>;
 
 export type CoordinationTodoTerminalLifecycleResult = JsonObject & {
   readonly schema_version: typeof COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA;
@@ -306,15 +360,15 @@ function normalizeTerminalInput(
   }
   const successorIntents = raw.successor_intents.map((intent, index) =>
     canonicalAuthorityObject(intent, `successor_intents[${index}]`));
-  return {
+  const operationIntent = decodeTerminalOperationIntent(raw);
+  const normalized = {
     ...raw,
     ...(raw.review_basis === undefined ? {} : {review_basis: {...raw.review_basis}}),
     goal_id: requireAuthorityStoreId(raw.goal_id, "goal id"),
     todo_id: requireAuthorityStoreId(raw.todo_id, "todo id"),
-    operation_id: requireAuthorityStoreId(raw.operation_id, "operation id"),
     expected_role: raw.expected_role === null
       ? null : requireLiteral(raw.expected_role, TODO_ROLES, "expected_role"),
-    command: requireLiteral(raw.command, TERMINAL_COMMANDS, "command"),
+    ...operationIntent,
     actor_agent_id: optionalAgent(raw.actor_agent_id, "actor_agent_id"),
     registered_agents: registeredAgents,
     lifecycle_grants: lifecycleGrants(raw.lifecycle_grants),
@@ -331,10 +385,6 @@ function normalizeTerminalInput(
       "allow_user_gate_auto_acquire",
     ),
     requested_no_followup: requireBoolean(raw.requested_no_followup, "requested_no_followup"),
-    requested_completion_turn_key: optionalString(
-      raw.requested_completion_turn_key,
-      "requested_completion_turn_key",
-    ),
     requested_completion_identity_source:
       raw.requested_completion_identity_source === null
         ? null
@@ -365,6 +415,7 @@ function normalizeTerminalInput(
     dry_run: requireBoolean(raw.dry_run, "dry_run"),
     now: requireDate(raw.now, "now"),
   };
+  return normalized;
 }
 
 function terminalFailure(
@@ -426,6 +477,7 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     successor_intents: input.successor_intents,
     clear_claim: input.clear_claim,
     completion_policy_request: completionPolicyIdentity,
+    ...(input.completion_result == null ? {} : {completion_result: input.completion_result}),
     validation_declaration_sha256: input.user_update !== undefined ? null :
       input.validation_declaration_sha256 ?? (input.validation_declaration === null
         ? null : canonicalAuthoritySha256(input.validation_declaration)),
@@ -433,7 +485,38 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
   });
 }
 
-function terminalReceipt(input: CoordinationTodoTerminalLifecycleInput, requestSha: string) {
+function monitorCycleTerminalOperationId(
+  input: Pick<CoordinationTodoTerminalLifecycleInput, "goal_id" | "todo_id">,
+  generation: number,
+): string {
+  const digest = createHash("sha256").update(
+    "loopx-provider-terminal-operation-v1\0" +
+      `complete\0${input.goal_id}\0${input.todo_id}\0${generation}`,
+    "utf8",
+  ).digest("hex");
+  return `todo-terminal:${digest.slice(0, 32)}`;
+}
+
+function monitorCycleGeneration(todo: JsonObject): number {
+  const raw = todo.material_change_generation;
+  if (raw === null || raw === undefined || raw === "") return 0;
+  const generation = typeof raw === "number"
+    ? raw
+    : typeof raw === "string" && /^\d+$/u.test(raw)
+    ? Number(raw)
+    : Number.NaN;
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new AuthorityStoreProtocolError(
+      "Monitor material_change_generation must be a non-negative safe integer",
+    );
+  }
+  return generation;
+}
+
+function terminalReceipt(
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  requestSha: string,
+) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, todo_id: input.todo_id,
@@ -443,25 +526,118 @@ function terminalReceipt(input: CoordinationTodoTerminalLifecycleInput, requestS
     decode: commandReceiptResult});
 }
 
-function acceptanceSourceBinding(input: CoordinationTodoTerminalLifecycleInput,
+type ImplicitMonitorAttemptObservation =
+  | {
+      readonly kind: "result";
+      readonly result: CoordinationTodoTerminalLifecycleResult;
+    }
+  | {
+      readonly kind: "admit";
+      readonly input: ResolvedCoordinationTodoTerminalLifecycleInput;
+      readonly authority: LoadedAuthority;
+    };
+
+function implicitMonitorTarget(
+  authority: LoadedAuthority,
+  input: CoordinationTodoTerminalLifecycleInput,
+): {readonly todo: JsonObject; readonly generation: number} |
+    CoordinationTodoTerminalLifecycleResult {
+  try {
+    const projection = indexCoordinationProjection(authority.head, input.goal_id);
+    const todo = projection.todos.get(input.todo_id);
+    if (todo === undefined) {
+      return terminalFailure("todo_not_found", "Todo is missing from the canonical provider head", {
+        todo_id: input.todo_id,
+      }, "decision_rejection");
+    }
+    if (todo.task_class !== "continuous_monitor") {
+      return terminalFailure(
+        "implicit_monitor_completion_required",
+        "implicit Monitor cycle identity requires a continuous Monitor",
+        {},
+        "decision_rejection",
+      );
+    }
+    return {todo, generation: monitorCycleGeneration(todo)};
+  } catch (error) {
+    return terminalFailure(
+      "invalid_coordination_projection",
+      error instanceof Error ? error.message : "invalid coordination projection",
+    );
+  }
+}
+
+async function observeImplicitMonitorCompletion(
+  store: AuthorityStore,
+  input: CoordinationTodoTerminalLifecycleInput,
+  requestSha: string,
+): Promise<ImplicitMonitorAttemptObservation> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const authority = await store.loadAuthority();
+    if (authority.status !== "loaded") {
+      return {
+        kind: "result",
+        result: {
+          schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
+          ...authority,
+          changed: false,
+        },
+      };
+    }
+    const target = implicitMonitorTarget(authority, input);
+    if ("schema_version" in target) return {kind: "result", result: target};
+    const cycleOperationId = monitorCycleTerminalOperationId(input, target.generation);
+    const resolved: ResolvedCoordinationTodoTerminalLifecycleInput = {
+      ...input,
+      operation_id: cycleOperationId,
+    };
+    const replay = await terminalReceipt(resolved, requestSha).read(store);
+    if (replay === null) {
+      return {
+        kind: "admit",
+        input: resolved,
+        authority,
+      };
+    }
+    const current = await store.loadAuthority();
+    if (current.status !== "loaded") {
+      return {
+        kind: "result",
+        result: {
+          schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
+          ...current,
+          changed: false,
+        },
+      };
+    }
+    const currentTarget = implicitMonitorTarget(current, input);
+    if ("schema_version" in currentTarget) {
+      return {kind: "result", result: currentTarget};
+    }
+    if (currentTarget.todo.status === "done" &&
+        currentTarget.generation === target.generation) {
+      return {kind: "result", result: replay};
+    }
+  }
+  return {
+    kind: "result",
+    result: terminalFailure(
+      "monitor_completion_cycle_unstable",
+      "Monitor completion cycle changed repeatedly while resolving operation identity",
+    ),
+  };
+}
+
+function acceptanceSourceBinding(input: ResolvedCoordinationTodoTerminalLifecycleInput,
   requirements: AcceptanceCompletionRequirements, providerRevision: string): JsonObject {
   return {goal_id: input.goal_id, todo_id: input.todo_id, operation_id: input.operation_id,
     provider_revision: providerRevision, contract_revision: requirements.contract_revision,
     contract_digest: requirements.contract_digest, todo_semantic_digest: requirements.todo_semantic_digest};
 }
 
-function acceptanceValidationEffects(requirements: AcceptanceCompletionRequirements, todo: JsonObject): JsonObject[] {
-  return requirements.criteria.map(criterion => ({criterion_id: criterion.id, effect: {
-    kind: "caller_validation", validation_command: null, validation_argv: criterion.validation_argv,
-    validation_label: criterion.id, validation_timeout_seconds: criterion.validation_timeout_seconds,
-    ...(criterion.validation_files == null ? {} : {validation_files: criterion.validation_files}),
-    task_repository: todo.task_repository ?? null,
-  }}));
-}
-
 /** Only the trusted execution adapter supplies these fresh, structured runner
  * receipts. Save the public-safe criterion results, never command output. */
-function acceptanceCompletionEvidence(head: JsonObject, input: CoordinationTodoTerminalLifecycleInput,
+function acceptanceCompletionEvidence(head: JsonObject, input: ResolvedCoordinationTodoTerminalLifecycleInput,
   requirements: AcceptanceCompletionRequirements, binding: JsonObject): JsonObject {
   acceptanceRequire(input.goal_acceptance_source_binding != null &&
     canonicalAuthoritySha256(input.goal_acceptance_source_binding) === canonicalAuthoritySha256(binding),
@@ -493,9 +669,67 @@ function acceptanceCompletionEvidence(head: JsonObject, input: CoordinationTodoT
   return {source_binding: binding, ...evidence, validation_receipts: validationReceipts};
 }
 
+function acceptedCompletionResult(input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject, acceptanceEvidence: JsonObject | null): JsonObject | null {
+  if (input.completion_result == null) return null;
+  const row = canonicalAuthorityObject(input.completion_result, "completion result");
+  acceptanceRequire(input.command === "complete" && todo.role === "agent" &&
+    acceptanceEvidence !== null && input.actor_agent_id === todo.claimed_by,
+    "A result requires an independently accepted Agent Todo owned by its producer.");
+  const fields = ["content_type", "provider", "sha256", "size_bytes"];
+  acceptanceRequire(Object.keys(row).length === fields.length && fields.every(field => Object.hasOwn(row, field)) &&
+    row.provider === "local_runtime_v0" &&
+    ["application/json", "text/markdown", "text/plain"].includes(String(row.content_type)) &&
+    typeof row.sha256 === "string" && /^[a-f0-9]{64}$/.test(row.sha256) &&
+    Number.isSafeInteger(row.size_bytes) && Number(row.size_bytes) > 0 && Number(row.size_bytes) <= 128000,
+    "Completion result must be a bounded local content-addressed object.");
+  return {...row, schema_version: "loopx_completion_result_v0",
+    producer_agent_id: input.actor_agent_id, todo_id: input.todo_id,
+    completion_operation_id: input.operation_id,
+    acceptance_contract_digest: acceptanceEvidence.contract_digest,
+    acceptance_contract_revision: acceptanceEvidence.contract_revision};
+}
+
+/** Keep the runner's typed failure at the public boundary without exposing its
+ * command, output, workspace path, or caller-controlled summary. */
+function acceptanceCriterionFailure(receipts: unknown): JsonObject | null {
+  if (!Array.isArray(receipts)) return null;
+  for (const value of receipts) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    const receipt = row.receipt;
+    if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) continue;
+    const result = receipt as Record<string, unknown>;
+    if (result.passed !== false || typeof row.criterion_id !== "string") continue;
+    const status = typeof result.status === "string" ? result.status : "command_failed";
+    const nextActions: Record<string, string> = {
+      workspace_dirty: "Preserve unrelated Git-visible files in ignored private storage or outside the worktree, then retry completion from that clean worktree with the same Turn identity.",
+      workspace_unverified: "Re-enter a verifiable independent delivery worktree and retry with the same Turn identity.",
+      workspace_receipt_unavailable: "Recover the recorded delivery workspace receipt before retrying completion.",
+      workspace_receipt_invalid: "Inspect the recorded delivery workspace receipt before retrying completion.",
+      workspace_receipt_mismatch: "Re-enter the recorded delivery worktree before retrying completion.",
+      workspace_repository_mismatch: "Re-enter the recorded delivery repository and revision before retrying completion.",
+      workspace_unavailable: "Restore the declared validation workspace before retrying completion.",
+      validation_basis_changed: "Inspect the changed verifier files and ask the contract owner to review the acceptance basis.",
+      timeout: "Inspect the validator runtime and retry the same criterion without changing the acceptance binding.",
+      command_not_run: "Restore the configured validation executable and retry completion.",
+      command_malformed: "Ask the contract owner to repair the configured validation command.",
+      command_failed: "Inspect the configured criterion's evidence and validator, then retry completion without rebinding acceptance.",
+    };
+    const validationStatus = Object.hasOwn(nextActions, status) ? status : "unknown_failure";
+    const exitCode = typeof result.exit_code === "number" && Number.isInteger(result.exit_code)
+      ? result.exit_code : null;
+    return {schema_version: "goal_acceptance_validation_failure_v0",
+      criterion_id: row.criterion_id, validation_status: validationStatus,
+      exit_code: exitCode,
+      next_action: nextActions[validationStatus] ?? "Inspect the privacy-safe runner receipt and configured criterion before retrying completion."};
+  }
+  return null;
+}
+
 async function commitTerminalResult(
   store: AuthorityStore,
-  input: CoordinationTodoTerminalLifecycleInput,
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
   requestSha: string,
   head: Extract<Awaited<ReturnType<AuthorityStore["loadAuthority"]>>, {status: "loaded"}>,
   result: JsonObject,
@@ -544,6 +778,7 @@ async function commitTerminalResult(
 function todoFact(todo: JsonObject): JsonObject {
   return {
     todo_id: todo.todo_id,
+    task_repository: todo.task_repository ?? null,
     status: todo.status,
     role: todo.role,
     task_class: todo.task_class ?? null,
@@ -577,6 +812,7 @@ function leaseFact(lease: JsonObject | undefined, now: Date): JsonObject | null 
     version: leaseInteger(lease, "version") ?? 0,
     lease_epoch: leaseEpoch(lease),
     write_scopes: normalizeWriteScopes(lease.write_scopes),
+    ...(lease.write_repository == null ? {} : {write_repository: lease.write_repository}),
     acquire_ttl_seconds: leaseInteger(lease, "acquire_ttl_seconds"),
   };
 }
@@ -584,7 +820,7 @@ function leaseFact(lease: JsonObject | undefined, now: Date): JsonObject | null 
 function releasedLease(
   current: JsonObject | undefined,
   decision: CoordinationTodoTerminalDecisionResult,
-  input: CoordinationTodoTerminalLifecycleInput,
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
 ): JsonObject | null {
   if (decision.next_lease === null) return null;
   const observedAt = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");
@@ -687,9 +923,10 @@ function materializeSuccessorProposals(
 
 function terminalTarget(
   todo: JsonObject,
-  input: CoordinationTodoTerminalLifecycleInput,
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
   completion: ReturnType<typeof reduceTodoCompletionTransaction> | null,
   successorIds: readonly string[],
+  acceptedResult: JsonObject | null,
 ): { todo: JsonObject; clear_fields: string[] } {
   const updatedAt = input.now.toISOString().replace(/\.\d{3}Z$/u, "Z");
   const next: JsonObject = {
@@ -705,6 +942,7 @@ function terminalTarget(
     ...(input.decision_outcome === null ? {} : {decision_outcome: input.decision_outcome}),
     ...(input.requested_no_followup ? {no_followup: true} : {}),
     ...(successorIds.length === 0 ? {} : {successor_todo_ids: successorIds}),
+    ...(acceptedResult === null ? {} : {completion_result: acceptedResult}),
   };
   if (input.command === "supersede") {
     next.note = input.note ?? "superseded";
@@ -755,14 +993,45 @@ export async function executeCoordinationTodoTerminalLifecycle(
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
-  let input: CoordinationTodoTerminalLifecycleInput;
+  let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
-    input = normalizeTerminalInput(rawInput);
+    normalized = normalizeTerminalInput(rawInput);
   } catch (error) {
     return terminalFailure(
       "invalid_coordination_todo_terminal_lifecycle",
       error instanceof Error ? error.message : "invalid Todo terminal lifecycle request",
     );
+  }
+  const requestSha = terminalRequestSha(normalized);
+  let input: ResolvedCoordinationTodoTerminalLifecycleInput;
+  let head: LoadedAuthority;
+  if (normalized.operation_identity.kind === "current_monitor_cycle") {
+    const initial = await observeImplicitMonitorCompletion(store, normalized, requestSha);
+    if (initial.kind === "result") return initial.result;
+    if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
+      AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
+    const observation = await observeImplicitMonitorCompletion(store, normalized, requestSha);
+    if (observation.kind === "result") return observation.result;
+    input = observation.input;
+    head = observation.authority;
+  } else {
+    input = {...normalized, operation_id: normalized.operation_identity.operation_id};
+    // Named operation recovery reports history, not present execution authority.
+    const receipt = terminalReceipt(input, requestSha);
+    const replay = await receipt.read(store);
+    if (replay !== null) return replay;
+    if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
+      AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
+    const observation = await receipt.observe(store);
+    if (observation.kind === "receipt") return observation.result;
+    if (observation.authority.status !== "loaded") {
+      return {
+        schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
+        ...observation.authority,
+        changed: false,
+      };
+    }
+    head = observation.authority;
   }
   let update: CoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
@@ -786,25 +1055,6 @@ export async function executeCoordinationTodoTerminalLifecycle(
     } catch (error) {
       return terminalFailure("invalid_coordination_todo_update", error instanceof Error ? error.message : "Invalid User completion edit");
     }
-  }
-  const requestSha = terminalRequestSha(input);
-  // Terminal recovery reports history, not present execution authority. It
-  // precedes review/validation freshness even if a Monitor has since reopened.
-  const receipt = terminalReceipt(input, requestSha);
-  const replay = await receipt.read(store);
-  if (replay !== null) return replay;
-
-  if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
-    AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
-  const observation = await receipt.observe(store);
-  if (observation.kind === "receipt") return observation.result;
-  const head = observation.authority;
-  if (head.status !== "loaded") {
-    return {
-      schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
-      ...head,
-      changed: false,
-    };
   }
   const reviewedRevision = input.review_basis?.provider_revision ?? update?.expected_provider_revision;
   const validationRevision = input.user_update?.validation_source_provider_revision ?? input.validation_source_provider_revision;
@@ -909,6 +1159,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "decision_rejection",
     );
   }
+  const implicitMonitorNoChange =
+    normalized.operation_identity.kind === "current_monitor_cycle" && authority.outcome === "no_change";
 
   // Acceptance constrains a state transition, not a verb. Every TERMINAL_COMMANDS
   // entry reaches `terminalTarget`, which writes `status: "done", done: true`,
@@ -932,8 +1184,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
     try {
       acceptanceEvidence = acceptanceCompletionEvidence(completionHead, input, acceptanceRequirements, acceptanceBinding);
     } catch (error) {
+      const criterionFailure = error instanceof Error && error.message === "acceptance completion criteria failed"
+        ? acceptanceCriterionFailure(input.goal_acceptance_validation_receipts) : null;
       return terminalFailure("goal_acceptance_validation_rejected",
-        error instanceof Error ? error.message : "Acceptance completion validation failed.", {}, "decision_rejection");
+        criterionFailure === null
+          ? error instanceof Error ? error.message : "Acceptance completion validation failed."
+          : `Goal acceptance criterion ${String(criterionFailure.criterion_id)} failed (${String(criterionFailure.validation_status)}). ${String(criterionFailure.next_action)}`,
+        criterionFailure === null ? {} : {goal_acceptance_validation_failure: criterionFailure}, "decision_rejection");
     }
   } else if (input.goal_acceptance_source_binding != null || input.goal_acceptance_validation_receipts != null) {
     return terminalFailure("goal_acceptance_validation_unexpected",
@@ -958,7 +1215,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
   if (input.command === "complete") {
     const validationRequired = todo.completion_validation_required === true;
     const validationSha256 = todo.completion_validation_sha256;
-    if (validationRequired && (update === undefined || authorityTodo.status !== "done")) {
+    if (validationRequired && !implicitMonitorNoChange &&
+        (update === undefined || authorityTodo.status !== "done")) {
       if (typeof validationSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(validationSha256)) {
         return terminalFailure(
           "completion_validation_identity_missing",
@@ -1006,7 +1264,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
         requested_has_successor:
           input.successor_intents.length > 0 || input.linked_successor_todo_ids.length > 0,
         dry_run: input.dry_run,
-        validation_receipt: input.validation_receipt,
+        validation_receipt: implicitMonitorNoChange ? null : input.validation_receipt,
         completion_policy_request: input.completion_policy_request,
       });
     } catch (error) {
@@ -1205,7 +1463,14 @@ export async function executeCoordinationTodoTerminalLifecycle(
 
   const currentLease = projection.leases.get(input.todo_id);
   const released = releasedLease(currentLease, authority, input);
-  const target = terminalTarget(todo, input, completion, successorIds);
+  let completionResult: JsonObject | null;
+  try {
+    completionResult = acceptedCompletionResult(input, todo, acceptanceEvidence);
+  } catch (error) {
+    return terminalFailure("completion_result_rejected",
+      error instanceof Error ? error.message : "Completion result rejected", {}, "decision_rejection");
+  }
+  const target = terminalTarget(todo, input, completion, successorIds, completionResult);
   if (edit !== null) target.clear_fields = [...new Set([...edit.clearFields, ...target.clear_fields])];
   const followthrough = input.command === "complete" && todo.role === "user"
     ? planUserCompletion(todo, [...projection.todos.values()], input.decision_outcome) : null;
@@ -1231,6 +1496,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completion_identity_source:
       completion === null ? null : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
+    ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     // A preview that omits this would show an unconditional close for work the
     // real call still gates. Name the criteria the real call must run; never

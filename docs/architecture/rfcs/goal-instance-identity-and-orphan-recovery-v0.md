@@ -1,6 +1,7 @@
 # Goal Instance Identity and Orphan Recovery (v0)
 
-- **RFC status:** Draft
+- **RFC status:** Accepted
+- **Supersedes / closes:** none
 - **Delivery maturity:** Identity/recovery proposal; codec prerequisite shipped in #4917
 - **Authors / owners:** LoopX contributors
 - **Created:** 2026-09-23
@@ -729,9 +730,10 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
 1. **Supported package/profile matrix:** release and host owners pin all supported
    object-only, codec-only and enforcement packages and exclusion evidence before
    M2 activation. v2 names are proposed; protocol support requires semantics.
-2. **Exact commit guard:** Goal lifecycle and TS transaction owners must choose
-   and prove the local retirement/commit lock and external-effect drain contract
-   before M2. A digest recheck alone cannot discharge this hold.
+2. **Exact commit guard:** The M2 source-session candidate uses one
+   alias-scoped cross-runtime lock around the project-registry transaction.
+   M3 must still prove the external-effect drain contract before activation.
+   A digest recheck alone cannot discharge that hold.
 3. **Canonical destination/provider import:** reuse the current path owner; follow
    #4915 without assuming merge. Provider-state adoption needs its own reviewed
    import contract; the first file-only slice rejects it.
@@ -754,6 +756,33 @@ promotion retain their own acceptance. No new paid cohort or soak is authorized.
 - **Known gaps:** No instance enforcement, activation or resolution fixture has shipped.
 - **Effect on normative design:** Align with roadmap/TS/shared authority; separate codec
   compatibility from enforcement, specify commit fencing and legacy cleanup.
+
+### 2026-09-23: M2 source-session implementation candidate
+
+- **Baseline:** `cbbdd837f65c8ba28161115cc4ce39093bfa2951`
+- **Proposed:** A fresh-project-only `source_session_v1` profile, exact bind and
+  unbind receipts, journaled A-to-B recreation, and read-only exact resolution.
+- **Evidence:** Real CLI tests cover ABA ordering, pre-publication retry,
+  post-publication forward repair, exact-byte replacement rollback, operation
+  ID conflicts, capacity rejection, and replay at capacity.
+- **Remaining hold:** Every result has `execution_authority: false`. M3 must
+  qualify the remaining effect owners before existing-project activation or
+  global routing can open.
+
+### 2026-09-27: first-party Host runtime partial enforcement
+
+- **Baseline:** `fd96e5e2574272262b9ea604a96581a0d20e94d1`
+- **Delivered:** A TypeScript-owned exact GoalRef decision and alias-scoped
+  lifecycle guard for source-profile Turn journals, Codex descriptors, DSH
+  session identity, and the Kunlun native runtime journal.
+- **Evidence:** Negative tests cover Goal A results returning after same-alias
+  Goal B publication, cached Turn-result recovery, legacy Host state,
+  cross-instance session selection, and serialized result/recreation commits.
+  Non-source plans, paths, schemas, and persisted bytes retain legacy behavior.
+- **Remaining hold:** This is partial M3 enforcement. Accepted-before-retirement
+  downstream drain, unsupported/warm binaries, and the remaining inventory
+  owners are not qualified. `execution_authority: false` and the M3 activation
+  hold remain unchanged.
 
 ## Appendix B: Decision log
 

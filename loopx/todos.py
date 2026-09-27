@@ -69,9 +69,6 @@ from .control_plane.todos.completion_transaction import (
     user_todo_completion_metadata_updates,
 )
 from .control_plane.todos import completion_validation as completion_validation_module
-from .control_plane.todos.event_writeback import (
-    complete_event_projected_goal_todo,
-)
 from .control_plane.todos.line_update import (
     apply_todo_update_to_lines,
     link_generated_successor_todo_ids,
@@ -80,11 +77,8 @@ from .control_plane.todos.line_update import (
 )
 from .control_plane.todos.next_action_runtime import apply_added_todo_next_action, settle_completed_todo_next_action
 from .control_plane.todos.list_projection import (
-    AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH,
-    EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH,
     compact_agent_lane_todo_summary,
     compact_thin_todo_list_payload,
-    compact_todo_projection_overlay,
     todo_item_relations,
     todo_list_projection_contract,
 )
@@ -229,8 +223,6 @@ def list_goal_todos(
                 goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
             ),
             source="file_authority",
-            projection_fields={},
-            projection_overlay=None,
             rollout_events=rollout_events,
             roles=roles,
             status=status,
@@ -269,8 +261,6 @@ def list_goal_todos(
         archived_projection = exact_archived_todo_summaries(
             archived_items=archived_items,
             source=projected.source,
-            projection_fields=projected.projection_fields,
-            projection_overlay=projected.projection_overlay,
             rollout_events=rollout_events,
             roles=roles,
             status=status,
@@ -281,8 +271,6 @@ def list_goal_todos(
         if archived_projection is not None:
             projected = archived_projection
     source = projected.source
-    projection_fields = projected.projection_fields
-    projection_overlay = projected.projection_overlay
     summaries = projected.summaries
     todos = projected.todos
     unfiltered_count = projected.unfiltered_count
@@ -372,27 +360,7 @@ def list_goal_todos(
         if not todos:
             payload["not_found"] = True
     payload.update(summaries)
-    if source == "event_projection" and projection_fields.get("state_event_projection"):
-        payload["state_event_projection"] = projection_fields["state_event_projection"]
-    if source == "event_projection_with_markdown_overlay":
-        if projection_fields.get("state_event_projection"):
-            payload["state_event_projection"] = projection_fields["state_event_projection"]
-        payload["projection_overlay"] = (
-            compact_todo_projection_overlay(
-                projection_overlay,
-                full_detail_cold_path=(
-                    EXPLICIT_LIMIT_OVERLAY_FULL_DETAIL_COLD_PATH
-                    if limit is not None
-                    else AGENT_LANE_OVERLAY_FULL_DETAIL_COLD_PATH
-                ),
-            )
-            if agent_lane_hot_path or limit is not None
-            else projection_overlay
-        )
-    if projection_fields.get("state_event_projection_warning"):
-        payload["state_event_projection_warning"] = projection_fields["state_event_projection_warning"]
     return compact_thin_todo_list_payload(payload) if thin else payload
-
 
 def add_todo_to_lines(
     lines: list[str],
@@ -739,6 +707,7 @@ def add_goal_todo(
     project: Path | None = None,
     state_file: Path | None = None,
     dry_run: bool = False,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     shadow_runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
     if role not in TODO_SECTION_HEADINGS:
@@ -852,6 +821,7 @@ def add_goal_todo(
         enforce_boundedness=True,
     )
     canonical_create = create_canonical_todo_if_promoted(
+        operation_id=operation_id,
         registry_path=registry_path,
         runtime_root=shadow_runtime_root,
         goal_id=goal_id,
@@ -897,6 +867,8 @@ def add_goal_todo(
     )
     if canonical_create is not None:
         return canonical_create
+    if operation_id is not None:
+        raise ValueError("todo add --operation-id requires promoted canonical authority")
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -1027,7 +999,7 @@ def add_goal_todo(
     )
     return settle_todo_runtime_shadow_capture(
         payload, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_add", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -1541,7 +1513,7 @@ def update_goal_todo(
     )
     return settle_todo_runtime_shadow_capture(
         payload, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class=write_class, capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -1555,6 +1527,7 @@ def complete_goal_todo(
     role: str | None = None,
     decision_outcome: str | None = None,
     evidence: str | None = None,
+    completion_result_file: Path | None = None,
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
@@ -1643,7 +1616,7 @@ def complete_goal_todo(
         )
         lines = original.splitlines()
         updated_at = now_local()
-        completion_match, completion_todo, event_context = (
+        completion_match, completion_todo = (
             completion_validation_module.locked_todo_completion_source(
                 lines=lines,
                 state_file=resolved_state_file,
@@ -1670,7 +1643,6 @@ def complete_goal_todo(
                 goal_id=goal_id,
                 lines=lines,
                 successor_todo_ids=normalized_successor_todo_ids,
-                event_fields=event_context.get("fields") if event_context else None,
                 facts=completion_policy_facts,
             )
         )
@@ -1737,7 +1709,6 @@ def complete_goal_todo(
                 runtime_root=shadow_runtime_root,
             )
         )
-        completion_fence = completion_transaction["fence"]
         completion_state = completion_transaction.get("completion_state")
         completion_policy = completion_policy_from_transaction(completion_transaction)
         effective_claimed_by = completion_policy.effective_claimed_by
@@ -1747,58 +1718,6 @@ def complete_goal_todo(
             completion_policy.effective_next_excluded_agents
         )
         effective_self_merged = completion_policy.self_merged
-        if not completion_match:
-            if event_context:
-                event_result = complete_event_projected_goal_todo(
-                    goal_id=goal_id,
-                    context=event_context,
-                    runtime_root=shadow_runtime_root,
-                    primary_lock_held=True,
-                    evidence=evidence,
-                    completion_turn_key=completion_turn_key,
-                    completion_identity_source=completion_identity_source,
-                    note=note,
-                    no_followup=no_followup,
-                    successor_todo_ids=normalized_successor_todo_ids,
-                    claimed_by=effective_claimed_by,
-                    clear_claim=clear_claim,
-                    next_agent_todo=next_agent_todo,
-                    next_user_todo=next_user_todo,
-                    next_user_task_class=effective_next_user_task_class,
-                    next_claimed_by=effective_next_claimed_by,
-                    next_task_class=next_task_class,
-                    next_action_kind=next_action_kind,
-                    next_task_repository=next_task_repository,
-                    next_required_capabilities=next_required_capabilities,
-                    next_continuation_policy=next_continuation_policy,
-                    self_merged=effective_self_merged,
-                    next_excluded_agents=effective_next_excluded_agents,
-                    registered_agents=registered_agents,
-                    updated_at=updated_at,
-                    dry_run=dry_run,
-                    actor_agent_id=mutation_authority.get("actor_agent_id"),
-                    completion_fence=completion_fence,
-                    completion_state=completion_state,
-                    completion_validation_source_authority=validation_gate.get("source_authority"),
-                )
-                event_result["linked_successor_id"] = completion_policy.linked_successor_id
-                event_result["mutation_authority"] = mutation_authority
-                event_result["task_lease_fence"] = task_lease_fence
-                event_result.update(completion_handoff)
-                release_verified_task_lease_fence(
-                    task_lease_fence,
-                    committed=bool(event_result.get("changed")) and not dry_run,
-                )
-                # This branch can append multiple state-log events inside the
-                # event writer. Capturing after that call would be observation,
-                # not a transaction-bound prepare/commit pair. Keep the gap
-                # explicit until the event writer owns the outbox boundary.
-                shadow_capture.skip("event_log_writer_not_bound")
-                return settle_todo_runtime_shadow_capture(
-                    event_result, registry_path=registry_path,
-                    runtime_root=shadow_runtime_root, goal_id=goal_id,
-                    write_class="todo_complete_event_projection", capture=shadow_capture,
-                )
         if not isinstance(completion_state, dict):
             raise RuntimeError(
                 "TypeScript Todo completion transaction did not authorize a commit"
@@ -1930,7 +1849,7 @@ def complete_goal_todo(
     result["self_merged"] = effective_self_merged
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_complete", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 @provider_first_terminal_lifecycle("supersede")
@@ -2090,7 +2009,7 @@ def supersede_goal_todo(
     }
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_supersede", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )
 
 
@@ -2156,5 +2075,5 @@ def archive_completed_todos(
     }
     return settle_todo_runtime_shadow_capture(
         result, registry_path=registry_path, runtime_root=shadow_runtime_root,
-        goal_id=goal_id, write_class="todo_archive_completed", capture=shadow_capture,
+        goal_id=goal_id, capture=shadow_capture,
     )

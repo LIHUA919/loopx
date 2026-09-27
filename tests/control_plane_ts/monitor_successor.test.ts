@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
 import { monitorSuccessorIntent, planMonitorSuccessor, MONITOR_SUCCESSOR_REQUEST_SCHEMA } from "../../loopx/control_plane/scheduler/monitor_successor.ts";
 
@@ -57,10 +58,10 @@ test("repository transport codecs agree with explicit scheme-specific port expec
     ["https://GITHUB.com/example/repo.git", "git:github.com/example/repo"],
   ];
   const inputs = cases.map(([input]) => input);
-  const python = spawnSync("python", ["-c", "import json,sys; from loopx.repository_identity import normalize_repository_identity; print(json.dumps([normalize_repository_identity(x) for x in json.load(sys.stdin)]))"],
+  const oracle = spawnSync(resolveTestPython(), ["-c", "import json,sys; from loopx.repository_identity import normalize_repository_identity; print(json.dumps([normalize_repository_identity(x) for x in json.load(sys.stdin)]))"],
     {input: JSON.stringify(inputs), encoding: "utf8"});
-  assert.equal(python.status, 0, python.stderr);
-  assert.deepEqual(JSON.parse(python.stdout), cases.map(([, expected]) => expected));
+  assert.equal(oracle.status, 0, oracle.stderr);
+  assert.deepEqual(JSON.parse(oracle.stdout), cases.map(([, expected]) => expected));
   for (const [input, expected] of cases) {
     const actual = monitorSuccessorIntent({...intent, next_task_repository: input}).next_task_repository;
     assert.equal(actual, expected, input);

@@ -159,6 +159,12 @@ requires the caller to place the fresh observation digest in
 `LOOPX_MONITOR_RESULT_HASH` and exposes separate unchanged and material-change
 commands; omitting either the Turn binding or result digest fails closed before
 monitor writeback.
+The generated command transports an existing hard-lease proof with
+`--use-current-task-lease`. It reads the canonical provider's active lease for
+the exact Monitor and agent, or reuses the same Turn's durable transaction
+proof during recovery; it never acquires or renews a lease. Missing, expired,
+or foreign leases fail before creating a provider-pending receipt. The
+canonical TypeScript transaction still checks the proof atomically.
 The canonical watch-only/ordinary-due partition is produced inside the existing
 TypeScript Todo summary and quota-planning owners after Agent scope and
 capability admission; Python compatibility code only adapts legacy facts and
@@ -172,6 +178,10 @@ replan 压力，也不会抢占 runnable advancement；二者同时存在时，
 该 CLI 路由仅在绑定当前 Turn 时可用；调用方必须把本次新鲜 observation digest
 写入 `LOOPX_MONITOR_RESULT_HASH`，并在 unchanged 与 material-change 两条命令中
 明确选择。缺少 Turn 绑定或 result digest 时，monitor writeback 会在写入前失败关闭。
+生成命令使用 `--use-current-task-lease` 传递已有的 hard-lease 证明：从
+canonical provider 读取该 Monitor 与 Agent 的有效租约；若是同一 Turn 的恢复，
+则复用持久交易回执中的原证明。该入口不会获取或续租；租约缺失、过期或归属不符
+会在形成 provider-pending 回执前失败，最终仍由 TypeScript 权威事务原子校验。
 watch-only／普通 due 的权威分区由既有 TypeScript Todo summary 与 quota-planning
 owner 在 Agent scope 和 capability admission 之后生成；Python 兼容层只适配旧事实并
 渲染已选中的 CLI／Lark 路由。
@@ -1186,6 +1196,30 @@ loopx todo list --goal-id <goal>
 Preview with `--dry-run` before the real attempt. A cleared resume condition also
 clears its generation fence; an omitted condition is retained. Empty successor
 arrays and explicit `no_followup=false` in API intent remain meaningful values.
+For a promoted hard-lease Agent Todo that the owner has paused, use a narrow
+nonterminal lifecycle edit after its execution lease has been released or has
+expired:
+
+```bash
+loopx todo update --goal-id <goal> --todo-id <todo> --agent-id <owner-or-granted-controller> \
+  --status blocked --clear-resume-when --reason '<public-safe pause reason>' \
+  --update-operation-id <stable-pause-id> --update-expected-provider-revision <readback-revision>
+loopx todo list --goal-id <goal> --todo-id <todo> --role agent
+```
+
+The same provider CAS blocks the Todo and retires only an inactive retained
+lease. An active lease must be released first. The edit grants no execution,
+does not complete validation or spend quota, and preserves claim and successor
+links. Reopening requires another explicit `--status open --clear-resume-when
+--reason ...` operation and a fresh execution lease. Do not combine this
+transition with text, ownership, work requirements or a lease proof.
+
+已晋升的 hard-lease Agent Todo 如被 owner 暂停，应先确认旧执行租约已释放或到期，
+再以稳定操作 ID、读回的 provider revision 和明确原因执行上述窄范围状态更新。
+同一次 CAS 会把 Todo 标为 `blocked` 并退休非活跃租约，同时清除旧等待条件及其派生观察；
+它不会完成验收、扣额或授予新的执行权。活跃租约须先释放；恢复执行要明确改回 `open`
+并重新领取租约，不能把阻塞记录当作交付完成。
+
 Dependency validation sees the complete canonical inventory, not a hot-path
 summary or a Markdown buffer. A satisfied Monitor wait is not silently re-armed
 by an evidence edit; changing its topology requires clearing that old condition.

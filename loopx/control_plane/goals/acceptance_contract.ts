@@ -13,7 +13,11 @@ export interface AcceptanceCriterion extends JsonObject {
   validation_timeout_seconds: number;
   validation_files: {path: string; sha256: string}[];
 }
+export type AcceptanceScope =
+  | {kind: "all_advancement"}
+  | {kind: "selected_work"; todo_ids: string[]};
 export interface AcceptanceDocument extends JsonObject {
+  scope?: AcceptanceScope;
   objective: string;
   non_goals: string[];
   criteria: AcceptanceCriterion[];
@@ -66,6 +70,16 @@ export interface AcceptanceCompletionRequirements extends JsonObject {
   criteria: AcceptanceCriterion[];
 }
 
+/** Shared by terminal completion and read-only delegation validation. */
+export function acceptanceValidationEffects(requirements: AcceptanceCompletionRequirements, todo: JsonObject): JsonObject[] {
+  return requirements.criteria.map(criterion => ({criterion_id: criterion.id, effect: {
+    kind: "caller_validation", validation_command: null, validation_argv: criterion.validation_argv,
+    validation_label: criterion.id, validation_timeout_seconds: criterion.validation_timeout_seconds,
+    ...(criterion.validation_files == null ? {} : {validation_files: criterion.validation_files}),
+    task_repository: todo.task_repository ?? null,
+  }}));
+}
+
 export function acceptanceRequire(condition: unknown, message: string): asserts condition {
   if (!condition) throw new AuthorityStoreProtocolError(message);
 }
@@ -110,9 +124,28 @@ function validationFiles(value: unknown): {path: string; sha256: string}[] {
   return files.sort((left, right) => authorityUnicodeCompare(left.path, right.path));
 }
 
+/** Scope is owner-authored identity, never inferred from prose, bindings or
+ * mutable Todo role/class. Omission preserves the original Goal-wide contract
+ * and its canonical bytes; an explicit subset may still contain unbound work. */
+function normalizeAcceptanceScope(value: unknown): AcceptanceScope {
+  const scope = canonicalAuthorityObject(value, "acceptance scope");
+  if (scope.kind === "all_advancement") {
+    acceptanceKeys(scope, ["kind"]);
+    return {kind: "all_advancement"};
+  }
+  acceptanceRequire(scope.kind === "selected_work", "unknown acceptance scope kind");
+  acceptanceKeys(scope, ["kind", "todo_ids"]);
+  return {kind: "selected_work", todo_ids: unique(
+    list(scope.todo_ids, "acceptance scope Todos", 4096, 1).map(id), "acceptance scope Todos")};
+}
+function acceptanceIncludes(scope: AcceptanceScope | undefined, todoId: string): boolean {
+  return scope?.kind !== "selected_work" || scope.todo_ids.includes(todoId);
+}
+
 export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocument {
   const raw = canonicalAuthorityObject(value, "acceptance document");
-  acceptanceKeys(raw, ["objective", "non_goals", "criteria", "bindings"]);
+  acceptanceKeys(raw, ["objective", "non_goals", "criteria", "bindings"], ["scope"]);
+  const scope = raw.scope === undefined ? undefined : normalizeAcceptanceScope(raw.scope);
   acceptanceRequire(canonicalAuthorityBytes(raw).length <= 262144, "acceptance document exceeds byte limit");
   const criteria = list(raw.criteria, "acceptance criteria", 64, 1).map(value => {
     const item = canonicalAuthorityObject(value, "acceptance criterion");
@@ -139,7 +172,9 @@ export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocum
     return {todo_id: id(item.todo_id), criterion_ids};
   }).sort((a, b) => authorityUnicodeCompare(a.todo_id, b.todo_id));
   unique(bindings.map(item => item.todo_id), "bindings");
-  return {objective: acceptanceText(raw.objective, "acceptance objective"),
+  acceptanceRequire(bindings.every(binding => acceptanceIncludes(scope, binding.todo_id)),
+    "acceptance binding is outside the declared scope");
+  return {...(scope === undefined ? {} : {scope}), objective: acceptanceText(raw.objective, "acceptance objective"),
     non_goals: list(raw.non_goals, "non-goals", 64).map(item => acceptanceText(item, "non-goal", 2048)), criteria, bindings};
 }
 
@@ -150,12 +185,78 @@ const NON_WORK_FIELDS = new Set([
   "schema_version", "source_section", "index", "title", "priority", "status", "done", "archive_state",
   "claimed_by", "created_by", "last_actor_agent_id", "updated_at", "completed_at", "completion_turn_key",
   "completion_validation_sha256", "completion_recovery", "completion_continuation", "no_followup", "decision_outcome",
+  "completion_result",
   "decision_scope_outcomes", "note", "evidence", "reason", "handoff_note", "resume_ready",
   "resume_monitor_generation", "last_checked_at", "result_hash", "consecutive_no_change",
   "material_change", "material_change_generation", "monitor_effect_id",
 ]);
 export function goalAcceptanceTodoDigest(todo: JsonObject): string {
   return canonicalAuthoritySha256(Object.fromEntries(Object.entries(todo).filter(([key]) => !NON_WORK_FIELDS.has(key))));
+}
+/** Existing owner bindings persist the v0 digest, including fields later used
+ * for validator revision bookkeeping and successor links. Keep that digest
+ * format so previously ready bindings stay ready. When it differs, check only
+ * historical states that the current append-only metadata can reconstruct;
+ * changing the Todo's work declaration still requires owner confirmation. */
+function acceptanceBindingMatches(todo: JsonObject, boundDigest: string): boolean {
+  if (goalAcceptanceTodoDigest(todo) === boundDigest) return true;
+
+  // Adding a wait condition changes when existing work can resume, not which
+  // owner-confirmed Goal criterion it serves. Only the absent -> present case
+  // is reconstructible from the current Todo; changing an existing condition
+  // remains stale because its previous value cannot be proven here.
+  const scheduleVariants: JsonObject[] = [todo];
+  if (Object.hasOwn(todo, "resume_when")) {
+    const withoutResume = {...todo};
+    delete withoutResume.resume_when;
+    scheduleVariants.push(withoutResume);
+  }
+
+  const revision = todo.completion_validation_revision;
+  const history = todo.completion_validation_revision_history;
+  let revisionPrefixes: number[] = [];
+  if (Number.isSafeInteger(revision) && Number(revision) >= 1 && Number(revision) <= 32 &&
+      Array.isArray(history) && history.length === revision &&
+      history.every((entry, index) => entry !== null && typeof entry === "object" && !Array.isArray(entry) &&
+        (entry as JsonObject).schema_version === "loopx_todo_completion_validation_revision_receipt_v0" &&
+        (entry as JsonObject).revision === index + 1 &&
+        typeof (entry as JsonObject).previous_declaration_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test((entry as JsonObject).previous_declaration_sha256 as string) &&
+        typeof (entry as JsonObject).declaration_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test((entry as JsonObject).declaration_sha256 as string)) &&
+      history.every((entry, index) => index === 0 ||
+        (entry as JsonObject).previous_declaration_sha256 === (history[index - 1] as JsonObject).declaration_sha256) &&
+      (history.at(-1) as JsonObject).declaration_sha256 === todo.completion_validation_sha256) {
+    revisionPrefixes = Array.from({length: Number(revision)}, (_, index) => index);
+  }
+
+  for (const scheduleVariant of scheduleVariants) {
+    const successors = scheduleVariant.successor_todo_ids;
+    const successorVariants: JsonObject[] = [scheduleVariant];
+    if (Array.isArray(successors) && successors.length <= 32 &&
+        successors.every(value => typeof value === "string")) {
+      for (let count = successors.length - 1; count >= 0; count--) {
+        successorVariants.push({...scheduleVariant, successor_todo_ids: successors.slice(0, count)});
+      }
+      const withoutSuccessors = {...scheduleVariant};
+      delete withoutSuccessors.successor_todo_ids;
+      successorVariants.push(withoutSuccessors);
+    }
+    for (const successorVariant of successorVariants) {
+      if (successorVariant !== todo && goalAcceptanceTodoDigest(successorVariant) === boundDigest) return true;
+      for (const priorRevision of revisionPrefixes) {
+        const previous: JsonObject = {...successorVariant, completion_validation_revision: priorRevision,
+          completion_validation_revision_history: (history as JsonObject[]).slice(0, priorRevision)};
+        if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+        if (priorRevision === 0) {
+          delete previous.completion_validation_revision;
+          delete previous.completion_validation_revision_history;
+          if (goalAcceptanceTodoDigest(previous) === boundDigest) return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 function advancement(todo: JsonObject): boolean {
   return todo.role === "agent" && (todo.task_class == null || todo.task_class === "advancement_task");
@@ -168,10 +269,14 @@ export function acceptanceTodos(head: JsonObject, goalId: string): ReadonlyMap<s
   validateCoordinationTodoReadModel(head, goalId);
   return indexCoordinationProjectionTodos(head, goalId).todos;
 }
-export function goalAcceptanceWorkDigest(head: JsonObject, goalId: string): string {
+export function goalAcceptanceWorkDigest(head: JsonObject, goalId: string, scope?: AcceptanceScope): string {
   // This semantic fingerprint is independent of provider row representation.
   // Projection and mutation callers separately validate the canonical read model.
-  return canonicalAuthoritySha256([...indexCoordinationProjectionTodos(head, goalId).todos.values()].filter(advancement)
+  const todos = indexCoordinationProjectionTodos(head, goalId).todos;
+  if (scope?.kind === "selected_work") return canonicalAuthoritySha256(scope.todo_ids.map(todo_id => ({
+    todo_id, digest: todos.has(todo_id) ? goalAcceptanceTodoDigest(todos.get(todo_id)!) : null,
+  })));
+  return canonicalAuthoritySha256([...todos.values()].filter(advancement)
     .sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)))
     .map(todo => ({todo_id: todo.todo_id, digest: goalAcceptanceTodoDigest(todo)})));
 }
@@ -225,14 +330,17 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
 
 export function acceptanceTask(todoId: string, todo: JsonObject | undefined, state: AcceptanceState): AcceptanceTask {
   const binding = state.bindings.find(item => item.todo_id === todoId);
-  const reason_code = !binding ? "goal_acceptance_unbound" : !todo || binding.todo_semantic_digest !== goalAcceptanceTodoDigest(todo)
+  const reason_code = !binding ? "goal_acceptance_unbound" : !todo || !acceptanceBindingMatches(todo, binding.todo_semantic_digest)
     ? "goal_acceptance_stale" : "goal_acceptance_ready";
   return {todo_id: todoId, state: !binding ? "unbound" : reason_code === "goal_acceptance_stale" ? "stale" : "ready",
     criterion_ids: binding?.criterion_ids ?? [], reason_code,
     reason: !binding ? "Owner confirmation is required for this work's acceptance association."
       : reason_code === "goal_acceptance_stale" ? "Work changed after owner confirmation; confirm its current acceptance association."
       : "The owner confirmed this work's current acceptance association.",
-    applicable: todo !== undefined && acceptanceApplies(todo)};
+    applicable: acceptanceIncludes(state.document.scope, todoId) && (state.document.scope?.kind === "selected_work"
+      ? todo === undefined || (todo.archive_state === "active" && todo.done === false &&
+        (todo.status === "open" || todo.status === "blocked"))
+      : todo !== undefined && acceptanceApplies(todo))};
 }
 
 export function normalizeAcceptanceResults(value: unknown, expectedIds?: readonly string[]): AcceptanceResult[] {
@@ -260,7 +368,8 @@ export function projectGoalAcceptance(head: JsonObject, goalId: string): JsonObj
   const state = readGoalAcceptance(head, goalId);
   if (!state?.enabled) return {enabled: false};
   const todos = acceptanceTodos(head, goalId);
-  const taskIds = new Set([...todos.values()].filter(advancement).map(todo => String(todo.todo_id)));
+  const taskIds = new Set(state.document.scope?.kind === "selected_work" ? state.document.scope.todo_ids
+    : [...todos.values()].filter(advancement).map(todo => String(todo.todo_id)));
   for (const binding of state.bindings) taskIds.add(binding.todo_id);
   const tasks = [...taskIds].sort(authorityUnicodeCompare).map(key => acceptanceTask(key, todos.get(key), state));
   const held = tasks.filter(task => task.applicable && task.state !== "ready");
@@ -268,24 +377,25 @@ export function projectGoalAcceptance(head: JsonObject, goalId: string): JsonObj
   let status = "unverified";
   if (receipt) {
     if (receipt.contract_revision !== state.revision || receipt.contract_digest !== state.digest ||
-        receipt.work_digest !== goalAcceptanceWorkDigest(head, goalId)) status = "stale";
+        receipt.work_digest !== goalAcceptanceWorkDigest(head, goalId, state.document.scope)) status = "stale";
     else if (receipt.results.some(item => !item.passed)) status = "failed";
     else if (receipt.todo_id !== null) status = "partial";
     else status = "accepted";
   }
   if (held.length) status = "held";
-  return {enabled: true, revision: state.revision, digest: state.digest, objective: state.document.objective,
+  return {...(state.document.scope === undefined ? {} : {scope: state.document.scope}), enabled: true, revision: state.revision, digest: state.digest, objective: state.document.objective,
     non_goals: state.document.non_goals, criteria: state.document.criteria.map(({id, description}) => ({id, description})),
     tasks, held_todo_ids: held.map(task => task.todo_id), status,
     verification: receipt ? {operation_id: receipt.operation_id, contract_revision: receipt.contract_revision,
       contract_digest: receipt.contract_digest, todo_id: receipt.todo_id, results: receipt.results} : null};
 }
 
-/** An owner-confirmed binding governs its work until the owner changes it.
- * Mutable Todo fields can make a binding stale; they must not make it
- * inapplicable, or the guarded party could edit its way out of the guard. */
-function acceptanceBound(state: AcceptanceState, todoId: string): boolean {
-  return state.bindings.some(binding => binding.todo_id === todoId);
+/** Explicit selection and confirmed bindings survive mutable work fields.
+ * The guarded Agent cannot escape acceptance by changing role/class/status. */
+function acceptanceRequired(state: AcceptanceState, todoId: string, todo: JsonObject | undefined): boolean {
+  return acceptanceIncludes(state.document.scope, todoId) &&
+    (state.document.scope?.kind === "selected_work" || state.bindings.some(binding => binding.todo_id === todoId) ||
+      todo === undefined || acceptanceApplies(todo));
 }
 
 export function acceptanceWorkGuard(head: JsonObject, goalId: string, todoId: string): JsonObject | null {
@@ -305,7 +415,7 @@ export function projectGoalAcceptanceWorkGuards(
   const todos = acceptanceTodos(head, goalId);
   return Object.fromEntries(todoIds.flatMap(todoId => {
     const todo = todos.get(todoId);
-    if (todo && !acceptanceApplies(todo) && !acceptanceBound(state, todoId)) return [];
+    if (!acceptanceRequired(state, todoId, todo)) return [];
     const task = acceptanceTask(todoId, todo, state);
     return [[todoId, {allowed: task.state === "ready", ...task,
       revision: state.revision, digest: state.digest}]];
@@ -323,7 +433,7 @@ export function acceptanceCompletionRequirements(head: JsonObject, goalId: strin
   // `acceptanceApplies` reads task_class and status, which the guarded party
   // may rewrite. Its remaining job is to decide which *unbound* work must be
   // held, so it stays as the fallback for Todos the owner never bound.
-  if (!acceptanceApplies(todo) && !acceptanceBound(state, todoId)) return null;
+  if (!acceptanceRequired(state, todoId, todo)) return null;
   const task = acceptanceTask(todoId, todo, state);
   acceptanceRequire(task.state === "ready", task.reason_code);
   return {contract_revision: state.revision, contract_digest: state.digest, todo_id: todoId,

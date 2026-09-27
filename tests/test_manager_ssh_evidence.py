@@ -788,3 +788,15 @@ def test_every_failed_read_declares_a_bounded_typed_limitation(
     # Exactly one code per cause: the summary teaches the repair without letting
     # a reader mistake an unread source for a remote Goal with no progress.
     assert packet["limitations"] == [expected_limitation]
+
+
+def test_remote_agent_search_keeps_source_and_audience_scope(remote):
+    tool, calls, records, _, _ = remote
+    result = tool.read(TOOL_NAME, {"view": "agents", "source_id": "ssh:research-host", "query": "review; $(noop)", "offset": 12})
+    assert result["ok"]
+    argv = shlex.split(calls[0][0][-1])
+    assert argv[argv.index("--manager-view") + 1] == "agents"
+    assert argv[argv.index("--query") + 1] == "review; $(noop)"
+    assert argv[argv.index("--goal-id") + 1] == "remote-goal"
+    assert argv[argv.index("--offset") + 1] == "12"
+    assert records[-1]["source_id"] == "ssh:research-host"

@@ -24,6 +24,7 @@ from ..agents.agent_scope import (
     _agent_scope_deferred_resume_candidates,
     _agent_scope_frontier_action,
     _agent_scope_no_candidate_frontier,
+    _selected_candidate_priority_frontier,
     _attach_agent_identity_contracts,
 )
 from ..agents.capability_gate import missing_required_capabilities
@@ -84,6 +85,7 @@ from ..scheduler.state import (
 )
 from ..todos.contract import (
     normalize_todo_claimed_by,
+    normalize_todo_id,
 )
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
@@ -122,10 +124,12 @@ from ..work_items.user_action_frontier import (
     user_action_owns_empty_agent_lane_from_summaries as _user_action_owns_empty_agent_lane,
 )
 from ..work_items.work_lane import (
+    WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION,
     work_lane_contract_is_due_monitor_attempt,
     work_lane_contract_is_receipt_bound_monitor_settled,
 )
 from .settlement_precedence import (
+    deferred_receipt_bound_skip_fields,
     settled_replay_fields,
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
@@ -441,6 +445,22 @@ def _delivery_preemptions_for_route(
         preemptions.append("control_repair")
     if not normal_delivery_allowed:
         preemptions.append("delivery_not_allowed")
+    requested_candidate = prepared.requested_action_candidate
+    agent_id = normalize_todo_claimed_by(
+        (prepared.agent_identity or {}).get("agent_id")
+    )
+    if (
+        not preemptions
+        and agent_id
+        and isinstance(prepared.agent_todo_summary, dict)
+        and isinstance(requested_candidate, dict)
+        and _selected_candidate_priority_frontier(
+            agent_id=agent_id,
+            summary=prepared.agent_todo_summary,
+            selected=requested_candidate,
+        )
+    ):
+        preemptions.append("ready_deferred_successor_priority_preemption")
     return preemptions
 
 
@@ -515,6 +535,15 @@ def _resolve_agent_lane_delivery_route(
         # The replan obligation is the immutable settlement authority for this
         # decision. A newly runnable Todo remains visible in summaries, but it
         # cannot become the selected settlement target in the same packet.
+        fallback = None
+    if (
+        prepared.receipt_bound_todo_id
+        and isinstance(fallback, dict)
+        and normalize_todo_id(fallback.get("todo_id"))
+        != prepared.receipt_bound_todo_id
+    ):
+        # Feed only the committed identity into the TS delivery router.  The
+        # independent successor remains discoverable on a fresh Turn.
         fallback = None
 
     delivery_agent_id = normalize_todo_claimed_by(
@@ -600,6 +629,17 @@ def _resolve_agent_lane_delivery_route(
     else:
         selected_action = None
 
+    if (
+        prepared.receipt_bound_todo_id
+        and isinstance(selected_action, dict)
+        and normalize_todo_id(selected_action.get("todo_id"))
+        != prepared.receipt_bound_todo_id
+    ):
+        # The router may find an independent successor after the bound Todo
+        # becomes unavailable.  That successor cannot replace an already
+        # committed settlement identity inside the same heartbeat Turn.
+        return None
+
     boundary = delivery_route.get("boundary")
     if (
         isinstance(selected_action, dict)
@@ -678,6 +718,37 @@ def _planning_projections(
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
     )
+
+
+def _resolve_external_evidence_observation(
+    prepared: _QuotaDecisionPreparation,
+    *,
+    state: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Suppress unchanged or premature polls before choosing a delivery route."""
+
+    external_evidence_observation = build_external_evidence_observation_obligation(
+        prepared.item,
+        state=state,
+        agent_todo_summary=prepared.agent_todo_summary,
+        work_lane_contract=prepared.work_lane_contract,
+    )
+    external_evidence_observation_recent = None
+    if external_evidence_observation:
+        external_evidence_observation_recent = _recent_external_monitor_observation_unchanged(
+            prepared.status_payload,
+            goal_id=prepared.safe_goal_id,
+            agent_id=(
+                normalize_todo_claimed_by(prepared.agent_identity.get("agent_id"))
+                if isinstance(prepared.agent_identity, dict)
+                else None
+            ),
+        )
+        if external_evidence_observation_recent or (
+            external_evidence_observation.get("poll_window_status") == "before_next_due"
+        ):
+            external_evidence_observation = None
+    return external_evidence_observation, external_evidence_observation_recent
 
 
 def _resolve_quota_should_run_route(
@@ -777,27 +848,10 @@ def _resolve_quota_should_run_route(
         automation_prompt_upgrade_required=prepared.automation_prompt_upgrade_required,
         blocked_priority_fallback=prepared.blocked_priority_fallback,
     )
-    external_evidence_observation = build_external_evidence_observation_obligation(
-        item,
-        state=state,
-        agent_todo_summary=prepared.agent_todo_summary,
-        work_lane_contract=prepared.work_lane_contract,
-    )
-    external_evidence_observation_recent = None
-    if external_evidence_observation:
-        external_evidence_observation_recent = _recent_external_monitor_observation_unchanged(
-            prepared.status_payload,
-            goal_id=prepared.safe_goal_id,
-            agent_id=(
-                normalize_todo_claimed_by(prepared.agent_identity.get("agent_id"))
-                if isinstance(prepared.agent_identity, dict)
-                else None
-            ),
-        )
-        if external_evidence_observation_recent or (
-            external_evidence_observation.get("poll_window_status") == "before_next_due"
-        ):
-            external_evidence_observation = None
+    (
+        external_evidence_observation,
+        external_evidence_observation_recent,
+    ) = _resolve_external_evidence_observation(prepared, state=state)
     ready_deferred_resume_candidates: list[dict[str, Any]] = []
     if isinstance(prepared.agent_identity, dict) and isinstance(
         prepared.agent_todo_summary, dict
@@ -850,6 +904,33 @@ def _resolve_quota_should_run_route(
             "reason": reason,
             "spend_policy": "no quota spend for an already-settled heartbeat turn",
         }
+    receipt_bound_deferred = (
+        prepared.receipt_bound_todo_id
+        and isinstance(prepared.work_lane_contract, dict)
+        and prepared.work_lane_contract.get("obligation")
+        == WORK_LANE_RECEIPT_BOUND_DEFERRED_OBLIGATION
+    )
+    if receipt_bound_deferred:
+        # Every action path is closed for this immutable, deferred receipt.
+        (
+            normal_delivery_allowed,
+            recovery_allowed,
+            self_repair_allowed,
+            capability_repair_allowed,
+            workspace_repair_allowed,
+            replan_decision_allowed,
+            receipt_bound_replan_decision,
+            should_run,
+        ) = (False,) * 8
+        (
+            reason,
+            quota,
+            heartbeat_recommendation,
+        ) = deferred_receipt_bound_skip_fields(
+            quota,
+            heartbeat_recommendation,
+        )
+        effective_action = EffectiveAction.QUOTA_SKIP.value
     monitor_quiet_skip = (
         not replan_decision_allowed
         and normal_delivery_allowed
@@ -917,7 +998,11 @@ def _resolve_quota_should_run_route(
     )
     agent_scope_frontier = None
     agent_lane_frontier_hint = None
-    if not replan_decision_allowed and not receipt_bound_monitor_settled:
+    if receipt_bound_deferred:
+        # The no-spend route and its public next action must describe the
+        # same committed binding, even when summaries offer independent work.
+        selected_recommended_action = prepared.work_lane_contract["action"]
+    elif not replan_decision_allowed and not receipt_bound_monitor_settled:
         selected_recommended_action = selected_action_with_agent_lane(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
@@ -1218,13 +1303,13 @@ def _build_active_quota_payload(
         if route.receipt_bound_replan_decision
         else _selected_todo_projection(
             agent_lane_next_action=route.agent_lane_next_action,
-            work_lane_contract=route.payload_work_lane_contract,
+            work_lane_contract=(None if route.replan_decision_allowed else route.payload_work_lane_contract),
             agent_scope_frontier=route.agent_scope_frontier,
         )
     )
     if selected_todo_projection:
         payload["selected_todo"] = selected_todo_projection
-    elif route.receipt_bound_replan_decision:
+    elif route.replan_decision_allowed:
         payload["selected_todo"] = None
     payload.update(
         _planning_projections(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,8 +14,10 @@ import loopx.control_plane.quota.unsettled_host_turn as unsettled_host_turn
 from loopx.cli_commands.quota_failure_report import quota_failure_payload
 from loopx.control_plane.effect_runtime import (
     EffectRuntimeRejected,
+    EffectRuntimeResponseAmbiguous,
     EffectRuntimeStartupError,
 )
+from loopx.control_plane.quota.error_codes import CloseoutQueryUnavailableError
 from loopx.control_plane.quota.unsettled_host_turn import (
     PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD,
     PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
@@ -76,6 +79,54 @@ def test_the_identity_conflict_diagnostic_keeps_its_typed_error():
             _preflight()
 
     assert type(raised.value).__name__ == "HeartbeatReceiptIdentityConflictError"
+
+
+def test_a_lost_preflight_response_is_an_unknown_query_not_an_ambiguous_write():
+    with patch.object(
+        unsettled_host_turn, "effect_runtime_result",
+        side_effect=EffectRuntimeResponseAmbiguous(
+            PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_METHOD, timeout=5,
+        ),
+    ) as request:
+        with pytest.raises(CloseoutQueryUnavailableError) as raised:
+            _preflight()
+    assert request.call_count == 1
+    assert raised.value.diagnostic_code == "closeout_query_unavailable"
+    assert "closeout state is unknown" in str(raised.value)
+    assert "may have committed" not in str(raised.value)
+    assert isinstance(raised.value.__cause__, EffectRuntimeResponseAmbiguous)
+
+
+def test_native_preflight_carries_monitor_evidence_through_python_adapter(tmp_path):
+    """Real files and RPC; Python only supplies the exact current Todo fact."""
+    goal, agent, turn, todo = "goal-fixture", "agent-fixture", "old-turn", "todo_monitor"
+    goal_root = tmp_path / "goals" / goal
+    (goal_root / "runs").mkdir(parents=True)
+    (goal_root / "rollout-event-log.jsonl").write_text(json.dumps({
+        "schema_version": "loopx_rollout_event_v0", "event_kind": "quota_should_run",
+        "goal_id": goal, "agent_id": agent, "run_id": turn,
+        "details": {"closeout_required": True, "todo_id": todo},
+    }) + "\n", encoding="utf-8")
+    (goal_root / "runs" / "index.jsonl").write_text(json.dumps({
+        "classification": "quota_monitor_poll", "goal_id": goal, "agent_id": agent,
+        "turn_instance_id": turn, "todo_id": todo,
+        "quota_monitor_poll_commit": {
+            "effect_id": f"quota-monitor-poll:{goal}:{agent}:{turn}:todo:{todo}",
+        },
+    }) + "\n", encoding="utf-8")
+    with (
+        patch.object(unsettled_host_turn, "_bound_todo_item", return_value={
+            "todo_id": todo, "task_class": "continuous_monitor", "status": "open",
+        }),
+        patch(
+            "loopx.control_plane.quota.monitor_poll.find_quota_monitor_poll_turn",
+            side_effect=AssertionError("Python must not scan the run log again"),
+        ),
+    ):
+        assert unsettled_host_turn._unsettled_host_turn_recovery(
+            registry_path=tmp_path / "registry.json", runtime_root=tmp_path,
+            goal_id=goal, agent_id=agent, current_turn_instance_id="new-turn",
+        ) is None
 
 
 def test_a_runtime_timeout_names_the_method_and_the_budget():

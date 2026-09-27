@@ -9,8 +9,9 @@ import {
 } from "../../loopx/control_plane/coordination/nokv_authority_store.ts";
 import { NoKVJsonLinesTransport } from "../../loopx/control_plane/coordination/nokv_jsonl_transport.ts";
 import { registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
+import { resolveTestPython } from "../../scripts/test-python.mjs";
 
-const PYTHON = process.env.LOOPX_TEST_PYTHON ?? "python3";
+const PYTHON = resolveTestPython();
 const FAULT_HELPER = fileURLToPath(
   new URL("../fixtures/nokv_jsonl_fake_helper.py", import.meta.url),
 );
@@ -296,4 +297,3 @@ test("JSON-lines transport surfaces an unknown routing kind as a typed protocol 
       error instanceof NoKVTransportProtocolError && /routing kind/.test(error.message),
   );
 });
-

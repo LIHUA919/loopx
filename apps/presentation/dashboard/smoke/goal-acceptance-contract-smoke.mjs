@@ -26,6 +26,10 @@ for (const copy of Object.values(deliveryReviewCopy)) {
     if (status === "stale") assert.ok(markdown.includes("c".repeat(64)) && markdown.includes(`${copy.contract.revision}: 6`), "Historical verification must retain its distinct basis");
     if (status === "partial") assert.ok(markdown.includes(`${copy.contract.verificationScope}: todo\\_confirmed`));
   }
+  const selected = parseDeliveryReview(withContract({ ...contract,
+    scope: { kind: "selected_work", todo_ids: ["todo_confirmed"] } }), snapshot.goal_id);
+  assert.ok(deliveryReviewMarkdown(selected, copy).includes(copy.contract.selectedWork));
+  assert.ok(deliveryReviewMarkdown(parseDeliveryReview(withContract(contract), snapshot.goal_id), copy).includes(copy.contract.allWork));
   const empty = parseDeliveryReview(withContract({ ...contract, criteria: [], tasks: [] }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noTasks));
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noCriteria));

@@ -230,6 +230,10 @@ def launch_dashboard(
             env=environment,
         )
 
+    if assets_dir is None:
+        from .presentation.chat_bundle import validate_bundle
+        validate_bundle(default_packaged_assets_dir(), source_root=Path(__file__).resolve().parents[1])
+
     existing_chat = _probe_existing_chat(
         host,
         port,

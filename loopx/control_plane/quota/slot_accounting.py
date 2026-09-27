@@ -179,6 +179,21 @@ def _resolve_preview_settlement(
     )
     if readback is None:
         return {}
+    if (
+        isinstance(readback.progress, dict)
+        and readback.progress.get("closeout_kind")
+        == "typed_blocked_writeback_no_spend"
+    ):
+        return {
+            "identity": readback.identity.value,
+            "result": readback.settlement,
+            "delivery_run": readback.writeback_run,
+            "reason": (
+                "this Turn already closed with an exact typed blocked writeback "
+                "and must not consume a quota slot; retry the Todo only after "
+                "its external blocker changes or a bounded backoff"
+            ),
+        }
     result = readback.identity
     identity = result.value if result.failure is None else None
     if identity is not None:
@@ -333,7 +348,7 @@ def _load_goal_run_index_records(runtime_root: Path, goal_id: str) -> list[dict[
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = index_path.read_text(encoding="utf-8").splitlines()
+        lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
         return []
     for line in lines:

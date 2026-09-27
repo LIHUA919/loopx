@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.contract import format_todo_metadata_line
@@ -234,6 +234,81 @@ def test_public_cli_nonterminal_wait_update_and_clear(tmp_path: Path, promoted: 
     assert resumed["status"] == "open" and resumed["done"] is False
     assert not resumed.get("resume_when")
     assert not resumed.get("resume_monitor_generation")
+
+
+def deferred_hard_lease_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> tuple[Path, Path]:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = fixture(tmp_path, False)
+    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
+    target.update(status="deferred", done=True, resume_when="resume_at:2020-01-01T00:00:00Z")
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a", todos=todos, handoff_mode="hard_lease",
+    )
+    initialize_canonical_authority(tmp_path / "runtime", "goal-a", projection,
+                                   state_path=state, provider=provider)
+    state.unlink()
+    return registry, state
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_promoted_hard_lease_deferred_todo_resumes_through_real_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    registry, state = deferred_hard_lease_fixture(tmp_path, monkeypatch, provider)
+
+    def acquire(operation_id: str) -> tuple[int, dict]:
+        process = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            "task-lease", "acquire", "--goal-id", "goal-a", "--todo-id", "todo_target",
+            "--owner", "agent-a", "--idempotency-key", operation_id, "--ttl-seconds", "120",
+        ], capture_output=True, text=True, timeout=45)
+        return process.returncode, json.loads(process.stdout)
+
+    blocked_code, blocked = acquire(f"before-resume-{provider}")
+    assert blocked_code == 1 and blocked["error_code"] == "todo_not_open", blocked
+
+    args = ["--status", "open", "--clear-resume-when",
+            "--update-operation-id", f"resume-{provider}"]
+    assert update(registry, *args, "--dry-run")["status"] == "planned"
+    assert not state.exists()
+    accepted = update(registry, *args)
+    assert accepted["status"] == "applied"
+    assert accepted["source_authority"] == f"{provider}_v0"
+    assert records(registry)["todo_target"]["status"] == "open"
+    assert records(registry)["todo_target"]["claimed_by"] == "agent-a"
+    assert not records(registry)["todo_target"].get("resume_when")
+    assert update(registry, *args)["status"] == "replayed"
+    acquired_code, acquired = acquire(f"after-resume-{provider}")
+    assert acquired_code == 0 and acquired["acquired"] is True, acquired
+    assert acquired["source_authority"] == f"{provider}_v0"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_promoted_hard_lease_deferred_todo_supersedes_through_real_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    registry, state = deferred_hard_lease_fixture(tmp_path, monkeypatch, provider)
+
+    def supersede(*args: str) -> tuple[int, dict]:
+        process = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            "todo", "supersede", "--goal-id", "goal-a", "--todo-id", "todo_target",
+            "--agent-id", "agent-a", "--reason", "Retire a synthetic wait", *args,
+        ], capture_output=True, text=True, timeout=45)
+        return process.returncode, json.loads(process.stdout)
+
+    planned_code, planned = supersede("--dry-run")
+    assert planned_code == 0 and planned["status"] == "planned", planned
+    assert not state.exists()
+    applied_code, applied = supersede()
+    assert applied_code == 0 and applied["status"] == "done", applied
+    assert applied["superseded"] is True
+    assert applied["source_authority"] == f"{provider}_v0"
+    assert records(registry)["todo_target"]["status"] == "done"
 
 
 @pytest.mark.parametrize("args", [
