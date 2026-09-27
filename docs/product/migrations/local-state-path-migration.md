@@ -86,3 +86,9 @@ If both default global registries exist, implicit CLI selection fails. Pass
 explicit `--registry` and `--runtime-root` for read-only diagnosis, then resolve
 the conflicting route before ordinary work. LoopX does not copy on read or keep
 two writable defaults in sync.
+
+Host commands that must address this machine's global registry even when run
+from a connected project can pass `--registry @host-global`. LoopX resolves
+that selector on the executing host using the same new/legacy/conflict rule;
+an explicit `--runtime-root` selects a custom root when needed. SSH lifecycle
+and manager reads use this selector on the remote host.
