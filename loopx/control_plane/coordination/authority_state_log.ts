@@ -13,7 +13,7 @@
  * never decides Todo, lease, quota or promotion semantics.
  */
 import type {JsonObject} from "../effect_program.ts";
-import {createHash} from "node:crypto";
+import {createHash, type Hash} from "node:crypto";
 import type {AuthorityStoreCommit} from "./authority_store.ts";
 import {
   AuthorityStoreProtocolError,
@@ -196,9 +196,9 @@ export function authorityStateDeltaReconstructs(
  */
 export class AuthorityStateReplay {
   #state: JsonObject;
-  #proofBytes: Buffer | undefined;
+  #byteObjects = new WeakMap<object, Buffer>();
   #encoded = new WeakMap<object, string>();
-  #strings = new Map<string, string>();
+  #strings = new Map<string, Buffer>();
   #stringBytes = 0;
 
   constructor(projection: unknown) {
@@ -212,7 +212,6 @@ export class AuthorityStateReplay {
     for (const operation of decodeAuthorityStateDelta(delta).operations) {
       next = applyAuthorityStateOperation(next, operation, 0);
     }
-    if (this.#state !== next) this.#proofBytes = undefined;
     this.#state = next;
   }
 
@@ -222,7 +221,7 @@ export class AuthorityStateReplay {
   canonicalJson(): string { return this.#encode(this.#state); }
 
   stateDigest(): string {
-    return createHash("sha256").update(this.#bytes()).digest("hex");
+    return this.#updateProjection(createHash("sha256")).digest("hex");
   }
 
   commitDigest(fields: Omit<AuthorityStoreCommit, "next_projection">): string {
@@ -233,32 +232,44 @@ export class AuthorityStateReplay {
     const keys = Object.keys(envelope), split = keys.indexOf("next_projection");
     const field = (key: string) => JSON.stringify(key) + ":" + JSON.stringify(envelope[key]);
     const before = keys.slice(0, split).map(field), after = keys.slice(split + 1).map(field);
-    return createHash("sha256")
-      .update("{" + (before.length ? before.join(",") + "," : "") + '"next_projection":')
-      .update(this.#bytes())
-      .update((after.length ? "," + after.join(",") : "") + "}").digest("hex");
+    const hash = createHash("sha256").update("{" + (before.length ? before.join(",") + "," : "") + '"next_projection":');
+    return this.#updateProjection(hash).update((after.length ? "," + after.join(",") : "") + "}").digest("hex");
   }
 
-  #bytes(): Buffer {
-    // Both proofs consume identical UTF-8 projection bytes. Convert once for
-    // this frontier, avoiding another full string concatenation/UTF-8 pass.
-    return this.#proofBytes ??= Buffer.from(this.canonicalJson(), "utf8");
+  #updateProjection(hash: Hash): Hash {
+    hash.update("{");
+    let first = true;
+    for (const key of Object.keys(this.#state)) {
+      hash.update((first ? "" : ",") + JSON.stringify(key) + ":"); first = false;
+      const value = this.#state[key];
+      if (value !== null && typeof value === "object") {
+        let bytes = this.#byteObjects.get(value);
+        if (!bytes) { bytes = Buffer.from(this.#encode(value), "utf8"); this.#byteObjects.set(value, bytes); }
+        hash.update(bytes);
+      } else if (typeof value === "string" && value.length >= 1024) hash.update(this.#longString(value));
+      else hash.update(JSON.stringify(value));
+    }
+    return hash.update("}");
+  }
+
+  #longString(value: string): Buffer {
+    const known = this.#strings.get(value);
+    if (known) return known;
+    const bytes = Buffer.from(JSON.stringify(value), "utf8");
+    if (bytes.byteLength > 2 * 1024 ** 2) return bytes;
+    while (this.#stringBytes + bytes.byteLength > 4 * 1024 ** 2) {
+      const oldest = this.#strings.keys().next().value!;
+      this.#stringBytes -= this.#strings.get(oldest)!.byteLength;
+      this.#strings.delete(oldest);
+    }
+    this.#strings.set(value, bytes); this.#stringBytes += bytes.byteLength;
+    return bytes;
   }
 
   #encode(value: unknown): string {
     if (value === null || typeof value !== "object") {
-      if (typeof value !== "string" || value.length < 1024) return JSON.stringify(value);
-      const known = this.#strings.get(value);
-      if (known !== undefined) return known;
-      const encoded = JSON.stringify(value), bytes = Buffer.byteLength(encoded);
-      if (bytes > 2 * 1024 ** 2) return encoded;
-      while (this.#stringBytes + bytes > 4 * 1024 ** 2) {
-        const oldest = this.#strings.keys().next().value!;
-        this.#stringBytes -= Buffer.byteLength(this.#strings.get(oldest)!);
-        this.#strings.delete(oldest);
-      }
-      this.#strings.set(value, encoded); this.#stringBytes += bytes;
-      return encoded;
+      return typeof value === "string" && value.length >= 1024
+        ? this.#longString(value).toString("utf8") : JSON.stringify(value);
     }
     const known = this.#encoded.get(value);
     if (known !== undefined) return known;

@@ -325,7 +325,8 @@ export class SqliteAuthorityStore implements AuthorityStore {
     // it was reached: the head row's digest covers the live projection, the
     // retained transaction at that cursor must carry the same state digest and
     // must reproduce its exact commit proof, and the cursor bounds must stay
-    // contiguous with the head. Neither cost grows with retained history.
+    // contiguous with the head. Projection decoding never replays history;
+    // the indexed continuity count still depends on retained cursor count.
     const bounds = db.prepare(`SELECT
       (SELECT CAST(MIN(cursor) AS TEXT) FROM commits) AS first,
       (SELECT CAST(MAX(cursor) AS TEXT) FROM commits) AS last,
