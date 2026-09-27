@@ -27,6 +27,7 @@ const count = Number(values.commits), samples = Number(values.samples);
 assert(Number.isSafeInteger(count) && count >= 100 && count <= 2048, "commits must be 100..2048; use D2 runner for capacity");
 assert(Number.isSafeInteger(samples) && samples >= 3 && samples <= 100, "samples must be 3..100");
 const goal = "provider-comparison";
+let fixtureBase: JsonObject | undefined;
 const openStore = (root: string): AuthorityStore => values.provider === "file"
   ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
 if (values["cold-root"]) {
@@ -46,7 +47,7 @@ if (values["cold-root"]) {
 }
 
 function projectionAt(index: number): JsonObject {
-  const base = (values.workload === "full" ? productionScaleCoordinationFixture(goal, "native")
+  const base = fixtureBase ??= (values.workload === "full" ? productionScaleCoordinationFixture(goal, "native")
     : productionScaleHistoryProjection(goal, "native")).projection as JsonObject;
   if (values.workload === "fixed-64k") {
     const padding = 65536 - Buffer.byteLength(JSON.stringify({...base, padding: ""}));
@@ -78,8 +79,9 @@ function sourceIdentity() {
 async function measure(root: string) {
   const source = sourceIdentity();
   const store = openStore(root), commits: number[] = [], loads: number[] = [], reads: number[] = [], scans: number[] = [];
-  // Fixture construction is outside timings. Each provider receives identical full records.
-  const projections = Array.from({length: count}, (_, index) => projectionAt(index));
+  // Generate one input at a time outside timings; retaining N full expected
+  // snapshots here would add artificial memory pressure to the provider test.
+  const finalProjection = projectionAt(count - 1);
   let revision: string | null = null;
   let first: AuthorityStoreCommit | undefined;
   let filePublicationBytes = 0;
@@ -90,7 +92,7 @@ async function measure(root: string) {
   const start = performance.now();
   for (let index = 0; index < count; index++) {
     const input: AuthorityStoreCommit = {expected_provider_revision: revision, operation_id: `op-${index}`,
-      next_projection: projections[index]!, events: [{kind: "observation", index}],
+      next_projection: projectionAt(index), events: [{kind: "observation", index}],
       receipts: [{operation_id: `op-${index}`, index, metadata: {checked: true, labels: ["synthetic", "保留"]}}]};
     const result = await timed(() => store.commitAuthority(input), commits);
     assert.equal(result.status, "applied"); if (result.status !== "applied") throw new Error("commit rejected");
@@ -100,9 +102,10 @@ async function measure(root: string) {
     if ((index + 1) % 128 === 0) process.stderr.write(`${values.provider} ${values.workload}: ${index + 1}/${count}\n`);
   }
   const fillMs = performance.now() - start;
+  const postFillRss = process.memoryUsage().rss;
   for (let index = 0; index < samples; index++) {
     const head = await timed(() => store.loadAuthority(), loads);
-    assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.deepEqual(head.head, projections.at(-1));
+    assert.equal(head.status, "loaded"); if (head.status === "loaded") assert.deepEqual(head.head, finalProjection);
     const receiptIndex = Math.floor(index * (count - 1) / (samples - 1));
     const receipt = await timed(() => store.readReceipt(`op-${receiptIndex}`), reads);
     assert.equal(receipt.status, "found");
@@ -113,7 +116,7 @@ async function measure(root: string) {
       for (const [offset, row] of page.transactions.entries()) {
         const ordinal = count - 100 + offset;
         assert.equal(row.operation_id, `op-${ordinal}`);
-        assert.deepEqual(row.projection, projections[ordinal]);
+        assert.deepEqual(row.projection, projectionAt(ordinal));
         assert.deepEqual(row.receipts, [{operation_id: `op-${ordinal}`, index: ordinal,
           metadata: {checked: true, labels: ["synthetic", "保留"]}}]);
       }
@@ -127,7 +130,7 @@ async function measure(root: string) {
       fileURLToPath(import.meta.url), "--provider", values.provider!, "--cold-root", root],
     {encoding: "utf8", timeout: 120000, maxBuffer: 4 * 1024 ** 2});
     cold.push(performance.now() - started); assert.equal(child.status, 0, child.stderr);
-    assert.deepEqual(JSON.parse(child.stdout).head, projections.at(-1));
+    assert.deepEqual(JSON.parse(child.stdout).head, finalProjection);
   }
   const reopened = openStore(root), replay = await reopened.commitAuthority(first!);
   assert.equal(replay.status, "conflict"); // Current store contract reconciles via readReceipt.
@@ -139,10 +142,11 @@ async function measure(root: string) {
   assert.deepEqual(sourceIdentity(), source, "measurement source changed while running");
   return {schema_version: "loopx_local_provider_comparison_v0", provider: values.provider, workload: values.workload,
     source, node: process.version, sqlite: sqliteRuntimeIdentity(), platform: process.platform, arch: process.arch,
-    commits: count, projection_json_bytes: Buffer.byteLength(JSON.stringify(projections.at(-1))), fill_ms: fillMs,
+    commits: count, projection_json_bytes: Buffer.byteLength(JSON.stringify(finalProjection)), fill_ms: fillMs,
     commit_first_100: latency(commits.slice(0, 100)), commit_last_100: latency(commits.slice(-100)),
     warm_head: latency(loads), historical_receipt: latency(reads), scan_100: latency(scans), cold_process_head: latency(cold),
+    post_fill_rss_bytes: postFillRss,
     final_store_bytes: fileBytes(), file_document_publication_bytes: values.provider === "file" ? filePublicationBytes : null,
     complete_record_and_receipt_checks: "passed", original_receipt_recovery_after_reopen: "passed",
-    limits: "bounded sequential store experiment; cold process includes module loading, not cold OS cache; no CLI, concurrent writers, crash, soak or formal D2 qualification; File publication bytes are application bytes, not physical writes; SQLite WAL traffic is measured by the separate capacity runner"};
+    limits: "bounded sequential store experiment; cold process includes module loading, not cold OS cache; RSS includes fixture and verification allocations, not a steady-state qualification; no CLI, concurrent writers, crash, soak or formal D2 qualification; File publication bytes are application bytes, not physical writes; SQLite WAL traffic is measured by the separate capacity runner"};
 }
