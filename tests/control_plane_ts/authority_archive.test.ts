@@ -1,4 +1,4 @@
-import type {AuthorityStore, AuthorityStoreCommit} from "../../loopx/control_plane/coordination/authority_store.ts";
+import type {AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ for (const sourceKind of ["file", "sqlite"] as const) {
         : new SqliteAuthorityStore(join(root, "source"), "goal");
       let revision: string | null = null;
       for (let i = 1; i <= 7; i++) {
-        const result = await source.commitAuthority({expected_provider_revision: revision,
+        const result: AuthorityStoreCommitResult = await source.commitAuthority({expected_provider_revision: revision,
           operation_id: `op-${i}`, events: [{kind: "change", i}],
           next_projection: {goal_id: "goal", i, archived: ["todo_old"], unicode: "复杂目标"},
           receipts: [{request_sha256: `request-${i}`, changed: i % 2 === 0}]});
