@@ -2482,8 +2482,10 @@ provider 确认；权威空集合不回退到陈旧 Markdown。Legacy 与预览�
 对照、显式可选 profile 和迁移演练后端。不能发布两个含混的默认项，不能把现有 File
 历史布局直接称为长程合格，也不能从选定 SQLite 静默回退。发布启用必须引用 D2
 证据。9 月 27 日同负载短历史实验也选择 SQLite 作为**短期默认实现目标**：写入、
-当前 head 与重启快于现有 checkpoint/delta File，而 File 的热历史读取仍更快。
-大状态 receipt/scan 仍未达预算，因此不是立即启用默认的许可。
+重启成本优于现有 checkpoint/delta File；热读取取舍取决于数据形状。#4931 现让
+SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重放组件，保留完整
+摘要字节，隔离返回记录与内部状态。同机 Linux 对照中，多字段 receipt/scan p95
+降低 88%/68%，但大状态预算与持续内存资格仍未闭合，不能立即启用默认。
 [实测、复现命令及 D2/D3/L9 依赖](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。PostgreSQL 复用 TS 语义合同，但 service、tenant、restore 和 capacity 单独
 资格化；其部署不阻塞本地路线。
 

@@ -3209,10 +3209,14 @@ candidate; File remains the real reference/explicit profile and migration
 rehearsal backend. Do not publish two ambiguous defaults, declare the current
 File history layout long-horizon-qualified, or silently fall back from a
 selected SQLite store. Release activation must cite its D2 evidence. The September 27 matched
-short-history experiment also selects SQLite as the **short-term default
-implementation target**: writes/head/restart beat current checkpoint/delta
-File, while File retains faster warm history reads. Large-state receipt/scan
-budgets remain unmet, so this is not permission to enable the default now.
+short-history experiments also select SQLite as the **short-term default
+implementation target**: mutation/restart costs beat current checkpoint/delta
+File, while warm read tradeoffs depend on the projection. PR #4931 now shares
+privately owned TS replay between SQLite proofs and provider-neutral archive
+recovery, retaining exact byte proofs and isolating returned rows. Matched
+Linux evidence reduces many-field receipt/scan p95 by 88%/68%, but large-state
+budgets and sustained-memory qualification remain open. This is not permission
+to enable the default now.
 [Measurements, reproduction and D2/D3/L9 dependencies](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment).
 PostgreSQL shares the TS semantic contracts but has independent service,
 tenant, restore and capacity qualification; its deployment must not delay the
