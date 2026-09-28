@@ -400,6 +400,100 @@ def test_machine_route_without_registry_is_not_fresh(
         machine_runtime_root()
 
 
+def test_home_project_metadata_does_not_claim_the_machine_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.projects.registry_codec import project_registry_transaction
+
+    source, target, _projects = _fixture(tmp_path, projects=0)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    registry_path = target / "registry.json"
+    state = target / "goals" / "home-goal" / "ACTIVE_GOAL_STATE.md"
+    state.parent.mkdir(parents=True)
+    state.write_text("project Goal state\n", encoding="utf-8")
+    with project_registry_transaction(registry_path, operation="fixture", create=lambda: {}) as transaction:
+        transaction.commit({
+            "common_runtime_root": str(tmp_path / "custom-runtime"),
+            "goals": [{"id": "home-goal", "state_file": ".loopx/goals/home-goal/ACTIVE_GOAL_STATE.md"}],
+        })
+    assert paths.select_default_runtime_root() == source
+    _write_json(target / "extensions" / "state.json", {"extensions": {"fresh": {"enabled": True}}})
+    with pytest.raises(ValueError, match="Both default LoopX"):
+        paths.select_default_runtime_root()
+
+
+def test_registry_writes_pin_bytes_across_host_newline_translation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.runtime import local_state_migration as migration
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    original_fdopen = os.fdopen
+
+    def windows_fdopen(fd: int, mode: str = "r", *args: object, **kwargs: object):
+        if "b" not in mode and "newline" not in kwargs:
+            kwargs["newline"] = "\r\n"
+        return original_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(migration.os, "fdopen", windows_fdopen)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    global_bytes = (target / "registry.global.json").read_bytes()
+    assert b"\r\n" not in global_bytes
+    assert rollback_local_state_migration(Path(receipt["backup_dir"]) / RECEIPT_NAME, execute=True)["status"] == "rolled_back"
+
+
+@pytest.mark.parametrize("receipt_status", ["migrated", "migrating", "rolling_back"])
+def test_earlier_v1_windows_registry_bytes_remain_recoverable(
+    tmp_path: Path, receipt_status: str,
+) -> None:
+    from loopx.control_plane.runtime import local_state_migration as migration
+
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    original_registry = source / "registry.global.json"
+    before = original_registry.read_bytes().replace(b"\n", b"\r\n")
+    original_registry.write_bytes(before)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    # The previous v1 writer translated newlines and had no global expected
+    # byte fingerprint. Construct that supported receipt, not a new writer's.
+    migrated_registry = target / "registry.global.json"
+    migrated_registry.write_bytes(migrated_registry.read_bytes().replace(b"\n", b"\r\n"))
+    receipt["entries"][0].pop("updated_registry_digest")
+    receipt["entries"][0]["after_digest"] = migration._digest(target)
+    receipt["status"] = receipt_status
+    receipt_path = Path(receipt["backup_dir"]) / RECEIPT_NAME
+    _write_json(receipt_path, receipt)
+    assert rollback_local_state_migration(receipt_path, execute=True)["status"] == "rolled_back"
+    assert original_registry.read_bytes() == before
+
+
+def test_new_operation_does_not_accept_unrecorded_registry_newlines(tmp_path: Path) -> None:
+    source, target, _projects = _fixture(tmp_path, projects=1)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    receipt["status"] = "rolling_back"
+    receipt_path = Path(receipt["backup_dir"]) / RECEIPT_NAME
+    _write_json(receipt_path, receipt)
+    registry = target / "registry.global.json"
+    changed = registry.read_bytes().replace(b"\n", b"\r\n")
+    registry.write_bytes(changed)
+    with pytest.raises(ValueError, match="global registry changed"):
+        rollback_local_state_migration(receipt_path, execute=True)
+    assert registry.read_bytes() == changed
+    assert not source.exists()
+
+
 def test_first_global_registration_keeps_legacy_machine_state(tmp_path: Path) -> None:
     source, target, projects = _fixture(tmp_path, projects=1)
     (source / "registry.global.json").unlink()

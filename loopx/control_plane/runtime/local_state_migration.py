@@ -109,6 +109,12 @@ def _read_registry(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _registry_bytes(payload: dict[str, Any]) -> bytes:
+    """One UTF-8/LF producer for global registry and receipt fingerprints."""
+
+    return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def _write_registry(path: Path, payload: dict[str, Any]) -> None:
     # Stage outside the runtime tree: a killed writer must not leave a
     # temporary file that invalidates that tree's recovery fingerprint.
@@ -118,8 +124,8 @@ def _write_registry(path: Path, payload: dict[str, Any]) -> None:
     descriptor, name = tempfile.mkstemp(prefix=".loopx-migration-", dir=path.parent.parent)
     temporary = Path(name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(_registry_bytes(payload))
             stream.flush()
             os.fsync(stream.fileno())
         temporary.replace(path)
@@ -412,7 +418,13 @@ def _prepare_recovery_receipt(plan: dict[str, Any]) -> dict[str, Any]:
     entries = []
     for index, entry in enumerate(plan["entries"]):
         prepared = dict(entry)
-        if entry["kind"] == "registry":
+        if entry["kind"] == "runtime":
+            updated = _rewrite_registry(
+                _read_registry(backup / "snapshot" / str(index) / GLOBAL_REGISTRY_FILENAME),
+                project=None, source_root=source, target_root=target,
+            )
+            prepared["updated_registry_digest"] = hashlib.sha256(b"file\0" + _registry_bytes(updated)).hexdigest()
+        elif entry["kind"] == "registry":
             original = backup / "snapshot" / str(index)
             expected = backup / "expected-registries" / str(index)
             _copy(original, expected)
@@ -595,9 +607,19 @@ def _require_unchanged_runtime(receipt: dict[str, Any], active: Path) -> None:
             source_root=Path(receipt["source_runtime_root"]),
             target_root=Path(receipt["target_runtime_root"]),
         )
-        updated_bytes = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-        updated_digest = hashlib.sha256(b"file\0" + updated_bytes).hexdigest()
-        if _digest(current) not in {_digest(child), updated_digest}:
+        runtime_entry = receipt["entries"][0]
+        if "updated_registry_digest" in runtime_entry:
+            updated_digests = {runtime_entry["updated_registry_digest"]}
+        else:
+            # Earlier v1 receipts used the host's text-mode newline translation.
+            # Their complete target digest is still enforced before rollback;
+            # resumed legacy operations accept only these two producer forms.
+            updated_bytes = _registry_bytes(updated)
+            updated_digests = {
+                hashlib.sha256(b"file\0" + variant).hexdigest()
+                for variant in (updated_bytes, updated_bytes.replace(b"\n", b"\r\n"))
+            }
+        if _digest(current) not in {_digest(child), *updated_digests}:
             raise ValueError(f"global registry changed; automatic rollback is unsafe: {current}")
 
 
@@ -615,7 +637,7 @@ def _recovery_entry_route(receipt: dict[str, Any], index: int) -> Path:
             raise ValueError(f"project registry changed; automatic rollback is unsafe: {old}")
         active = old
     else:
-        _require_unlinked_move_routes(old, new, label="migration rollback")
+        _require_unlinked_move_routes(new, old, label="migration rollback")
         if old.exists() and (new.exists() or receipt["status"] == "migrated"):
             raise FileExistsError(f"legacy path has reappeared: {old}")
         active = old if old.exists() else new

@@ -1423,7 +1423,7 @@
     },
     {
       "site": "loopx/control_plane/runtime/local_state_migration.py::<module>._write_project_registry::codec_transaction:project_registry_transaction#1",
-      "line": 131,
+      "line": 137,
       "column": 10,
       "kind": "codec_transaction",
       "api": "project_registry_transaction",
@@ -1809,6 +1809,14 @@
       "site": "loopx/operator_gate.py::<module>.record_operator_gate::codec_read:load_registry#1",
       "line": 315,
       "column": 16,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
+      "site": "loopx/paths.py::<module>._runtime_root_has_machine_state::codec_read:load_registry#1",
+      "line": 88,
+      "column": 24,
       "kind": "codec_read",
       "api": "load_registry",
       "classification": "codec_api"

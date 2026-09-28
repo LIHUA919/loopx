@@ -73,6 +73,42 @@ def default_registry_path() -> Path:
     return DEFAULT_PROJECT_REGISTRY
 
 
+def _runtime_root_has_machine_state(root: Path) -> bool:
+    """Separate a HOME project's declared files from machine-owned state."""
+
+    if not root.is_dir():
+        return False
+    project_registry = root / DEFAULT_PROJECT_REGISTRY.name
+    project_owned: set[str] = set()
+    if root == DEFAULT_RUNTIME_ROOT and project_registry.is_file() and not project_registry.is_symlink():
+        from .control_plane.projects.registry_codec import load_registry
+        from .file_lock import _lock_path, lock_holder_path, lock_incident_path
+
+        try:
+            registry = load_registry(project_registry)
+        except (OSError, ValueError):
+            return True  # Unclassified existing state requires an explicit route.
+        project_owned = {
+            project_registry.name, _lock_path(project_registry).name,
+            lock_holder_path(project_registry).name, lock_incident_path(project_registry).name,
+        }
+        goal_root = root / DEFAULT_PROJECT_GOALS.name
+        declared_dirs = set()
+        for goal in registry.get("goals", []):
+            if not isinstance(goal, dict) or not isinstance(goal.get("state_file"), str):
+                continue
+            state = Path(goal["state_file"]).expanduser()
+            state = state if state.is_absolute() else root.parent / state
+            if state.name == "ACTIVE_GOAL_STATE.md" and state.parent.parent == goal_root:
+                declared_dirs.add(state.parent)
+        if goal_root.is_dir() and not goal_root.is_symlink() and all(
+            child in declared_dirs and child.is_dir() and not child.is_symlink()
+            for child in goal_root.iterdir()
+        ):
+            project_owned.add(goal_root.name)
+    return any(child.name not in project_owned for child in root.iterdir())
+
+
 def default_runtime_route() -> dict[str, object]:
     """Inspect the two default routes without creating either one."""
 
@@ -93,7 +129,7 @@ def default_runtime_route() -> dict[str, object]:
     # Goal registry. Preserve any existing state in an owned default root;
     # an empty directory alone does not establish a second authority.
     current_state, legacy_state = (
-        root.is_dir() and any(root.iterdir()) for root in roots
+        _runtime_root_has_machine_state(root) for root in roots
     ) if not invalid else (False, False)
     if invalid:
         status = "invalid"
