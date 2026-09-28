@@ -232,3 +232,24 @@ def test_collector_default_off_and_native_callback_dispatch(offered, tmp_path):
     assert active["operation_callback_verified_count"] == 1, active
     assert snapshot(args)["todos"][0]["claimed_by"] == "agent-a"
     assert len(room.messages) == 1
+
+
+def test_legacy_offer_cannot_inherit_an_exact_goal_instance(offered):
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+    args, _, _, _, offer, event, callback_args, _ = offered
+    prepared = offer()
+    assert prepared["ok"], prepared
+    callback = event(prepared)
+    before = snapshot(args)["provider_revision"]
+    payload = json.loads(args["registry_path"].read_text())
+    payload.update(profile_id="source_session_v1", session_bindings=[], session_receipts=[], lifetime_receipts=[])
+    payload["goals"][0].update(goal_instance_id="ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", status="active")
+    args["registry_path"].unlink()
+    with source_session_registry_transaction(args["registry_path"], operation="create_fixture_instance",
+        create=lambda: payload) as transaction:
+        transaction.commit(transaction.payload_copy())
+    with pytest.raises(ingress.RoomClaimCallbackError):
+        ingress.handle_room_claim_callback(callback, **callback_args)
+    assert snapshot(args)["provider_revision"] == before
+    denied = offer(key="exact-profile-offer")
+    assert not denied["ok"] and denied["blocker"] == "exact_instance_claim_unqualified", denied

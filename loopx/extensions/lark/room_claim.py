@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from ...agent_registry import registered_agent_ids_from_registry
 from ...control_plane.coordination.local_authority import claim_canonical_todo_if_promoted
+from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
@@ -87,6 +88,12 @@ def _scope(p: Mapping[str, Any], broker_root: Path) -> dict[str, Any]:
     if (Path(route["source_registry"]).resolve() != Path(p["source_registry"]).resolve() or
         Path(route["source_runtime_root"]).resolve() != Path(p["authority_root"]).resolve()):
         raise RoomClaimCallbackError("source_route_changed")
+    with collaboration_goal_scope(Path(p["source_registry"]), goal_id=request["goal_id"],
+        agents=(request["actor_id"],), require_active=True) as scope:
+        # This facade currently uses the existing goal_id-bound canonical claim
+        # wire. An exact-instance profile cannot inherit a legacy offer.
+        if scope.exact:
+            raise RoomClaimCallbackError("exact_instance_claim_unqualified")
     if request["actor_id"] not in registered_agent_ids_from_registry(Path(p["source_registry"]), request["goal_id"]):
         raise RoomClaimCallbackError("actor_scope_revoked")
     resolve_extension_activation(LARK_EXTENSION_ID,
@@ -120,6 +127,9 @@ def run_room_claim_offer(*, registry_path: Path, authority_root: Path, broker_ro
         "execution_authority_granted": False}
     try:
         validate_public_safe_value({"goal_id": goal_id, "actor_id": actor_id})
+        with collaboration_goal_scope(registry_path, goal_id=goal_id, agents=(actor_id,), require_active=True) as scope:
+            if scope.exact:
+                raise RoomClaimCallbackError("exact_instance_claim_unqualified")
         if actor_id not in registered_agent_ids_from_registry(registry_path, goal_id):
             raise RoomClaimCallbackError("actor_scope_revoked")
         if command == "revoke":

@@ -95,7 +95,10 @@ A trusted local Agent CLI may offer exactly one revision-bound `claim_todo`
 interaction to explicitly named Lark principals. This is a per-request grant,
 not room membership, remote authentication, an execution lease or a remembered
 approval. The broker runtime must still route the Goal to the same source
-registry and authority root when a callback arrives.
+registry and authority root when a callback arrives. This local facade supports
+the existing legacy registry profile. It rejects source-session exact-instance
+profiles until the canonical claim wire is explicitly bound to their GoalRef;
+an older offer cannot inherit a recreated instance.
 
 ```sh
 loopx --registry .loopx/registry.json --format json goal-channel work offer \
