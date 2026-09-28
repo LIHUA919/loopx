@@ -126,6 +126,18 @@ def test_unknown_and_unattributed_candidate_rejected(tmp_path: Path) -> None:
         append_research_observation(path, goal_id=GOAL, observation=raw)
 
 
+@pytest.mark.parametrize("patch", [{"schema_version": None}, {"evidence_ids": {"ev-a": "wrong shape"}}])
+def test_research_transport_does_not_coerce_malformed_progress(tmp_path: Path, patch: dict) -> None:
+    path = explore_result_log_path(tmp_path, GOAL)
+    node(path, "a")
+    raw = observation("a")
+    raw["progress"].update(patch)
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        append_research_observation(path, goal_id=GOAL, observation=raw)
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("batch", [False, True])
 def test_generic_writers_cannot_bypass_attribution(tmp_path: Path, batch: bool) -> None:
     path = explore_result_log_path(tmp_path, GOAL)

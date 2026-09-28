@@ -8,6 +8,7 @@ from typing import Any
 from ...control_plane.effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...control_plane.work_items.progress_observation import normalize_progress_observation
+from ...control_plane.work_items.progress_result import PROGRESS_OBSERVATION_SCHEMA_VERSION
 from ...file_lock import exclusive_file_lock
 
 
@@ -27,6 +28,10 @@ def normalize_research_observation(value: Mapping[str, Any]) -> dict[str, Any]:
     progress = raw.get("progress")
     if not isinstance(progress, Mapping):
         raise ValueError("research observation requires a progress object")
+    if progress.get("schema_version") != PROGRESS_OBSERVATION_SCHEMA_VERSION:
+        raise ValueError("research progress requires its explicit schema_version")
+    if "evidence_ids" in progress and not isinstance(progress["evidence_ids"], list):
+        raise ValueError("research progress evidence_ids must be an array")
     raw["progress"] = normalize_progress_observation(progress)
     if set(progress) - set(raw["progress"]) - {"fingerprint"}:
         raise ValueError("research progress contains unknown or empty fields")
