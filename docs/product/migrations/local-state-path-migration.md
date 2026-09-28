@@ -2,8 +2,11 @@
 
 New LoopX installations use `$HOME/.loopx/registry.global.json` and
 `<project>/.loopx/goals/<goal-id>/ACTIVE_GOAL_STATE.md`. An existing installation
-with only `$HOME/.codex/loopx/registry.global.json` keeps using that single
-legacy runtime route. Registered project Goals keep their declared `state_file`
+with state only under `$HOME/.codex/loopx` keeps using that single legacy
+runtime route, including extension activation or machine configuration created
+before the first global Goal registry. An empty directory alone does not select
+a route. If both default roots contain state, implicit selection refuses to
+create or silently read a second authority. Registered project Goals keep their declared `state_file`
 until explicitly migrated. `loopx doctor --format json` reports the selected,
 legacy, and target routes under `local_state_route`.
 
@@ -59,10 +62,11 @@ loopx --format json migrate-local-state \
 The plan id binds the source contents and paths. A changed source requires a new
 preview. Before moving anything, LoopX copies and verifies the full legacy
 runtime root, affected project registries, and each Goal directory in a private
-backup next to the legacy runtime root. The successful response includes the
-receipt under `backup_dir/migration-receipt.json`. Keep this backup private and
-outside Git. If a write fails, LoopX attempts to restore the original routes
-and reports the backup path if manual recovery is needed.
+backup next to the legacy runtime root. It records the operation and expected
+registry fingerprints in `backup_dir/migration-receipt.json` before the first
+move. The successful response names the same receipt. Keep this backup private
+and outside Git. If a write fails, LoopX attempts to restore the original routes
+and reports the backup path if recovery could not finish.
 
 After execution, run `loopx doctor --format json`, inspect the selected route,
 and run `loopx --registry <project>/.loopx/registry.json --format json status`
@@ -89,7 +93,36 @@ changed since migration, rollback refuses to overwrite it. With a clean preview
 and writers stopped, run the same command with `--execute`. Then read `doctor`
 and the project registries again before restarting workers.
 
-If both default global registries exist, implicit CLI selection fails. Pass
+## Recover an interrupted operation
+
+If migration or rollback exits during a move or registry write, keep all writers
+stopped. Use `backup_dir` from the original preview and run the same
+`--rollback-receipt <backup-dir>/migration-receipt.json` command above, first
+without `--execute`. Do not rerun a new migration preview against half-moved
+directories. The recovery preview reads the existing operation, verifies its
+plan and snapshots, and accepts only the operation's original or expected
+updated registry bytes and unchanged Goal/runtime content.
+
+With a valid recovery preview, add `--execute` to restore the original routes.
+The receipt records `rolling_back` before recovery moves begin. An I/O failure
+or forced process exit can therefore be retried with the same receipt after the
+underlying filesystem problem is resolved. Already restored directories are
+verified and reused; restored registry files are replaced atomically. A completed
+rollback can also be checked or retried safely while its original bytes remain
+unchanged. Read `doctor` and each project registry before restarting workers.
+
+If recovery reports new content, a second directory, a redirected route or a
+damaged backup, it refuses to overwrite anything. Preserve the backup and both
+observed routes for diagnosis; an interrupted operation does not authorize
+discarding later work. This is explicit offline process-interruption recovery,
+not an online writer fence or a guarantee against filesystem/power-loss damage.
+An interrupted backup before the recovery receipt is written has moved no
+authoritative state; retain the partial backup and choose a new backup directory
+for a fresh preview. Machine-only installations without a global registry can
+continue using their legacy route; ordinary first registration stays on that
+route before this registered-state migration becomes applicable.
+
+If both default runtime roots contain state, implicit CLI selection fails. Pass
 explicit `--registry` and `--runtime-root` for read-only diagnosis, then resolve
 the conflicting route before ordinary work. LoopX does not copy on read or keep
 two writable defaults in sync.
