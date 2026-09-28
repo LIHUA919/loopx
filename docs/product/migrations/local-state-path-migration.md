@@ -10,6 +10,12 @@ create or silently read a second authority. Registered project Goals keep their 
 until explicitly migrated. `loopx doctor --format json` reports the selected,
 legacy, and target routes under `local_state_route`.
 
+When HOME is also a connected project, its validated `.loopx/registry.json`,
+registry lock files and explicitly declared project Goal directories are project
+state. They do not select a second machine runtime. Extension activation,
+machine configuration and unclassified contents in that root still require the
+normal machine-state route decision.
+
 This migration is distinct from `migrate-state`, which imports the older Goal
 Harness product state. It moves only the LoopX runtime root and Goal directories
 declared by project registries. Other files under `.codex` remain in place.
@@ -110,6 +116,12 @@ underlying filesystem problem is resolved. Already restored directories are
 verified and reused; restored registry files are replaced atomically. A completed
 rollback can also be checked or retried safely while its original bytes remain
 unchanged. Read `doctor` and each project registry before restarting workers.
+
+New global-registry and receipt writes use deterministic UTF-8/LF bytes on every
+host, with the planned global-registry fingerprint saved before moves. Earlier
+v1 receipts without that field retain explicit LF/Windows CRLF compatibility;
+completed target and backup fingerprints remain enforced. A new operation does
+not accept an unrecorded newline rewrite as its own completed write.
 
 If recovery reports new content, a second directory, a redirected route or a
 damaged backup, it refuses to overwrite anything. Preserve the backup and both

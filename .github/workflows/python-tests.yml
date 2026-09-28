@@ -663,6 +663,10 @@ jobs:
           tests/test_local_state_migration.py::test_rollback_io_failure_can_retry_to_consistent_original_routes
           tests/test_local_state_migration.py::test_hard_interruption_has_a_recoverable_receipt
           tests/test_local_state_migration.py::test_partial_rollback_rejects_subsequent_work_and_keeps_it
+          tests/test_local_state_migration.py::test_home_project_metadata_does_not_claim_the_machine_runtime
+          tests/test_local_state_migration.py::test_registry_writes_pin_bytes_across_host_newline_translation
+          tests/test_local_state_migration.py::test_earlier_v1_windows_registry_bytes_remain_recoverable
+          tests/test_local_state_migration.py::test_new_operation_does_not_accept_unrecorded_registry_newlines
 
       - name: Set up the qualified SQLite runtime
         uses: actions/setup-node@v6
