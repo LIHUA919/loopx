@@ -29,7 +29,7 @@ from .goal_channel_message_delivery import (
 )
 from .presentation.kanban import CommandRunner, default_subprocess_runner
 
-SCHEMA = "loopx_goal_channel_work_result_v0"
+GOAL_CHANNEL_WORK_RESULT_SCHEMA = "loopx_goal_channel_work_result_v0"
 
 
 def _resolve_binding(binding_path: Path, target_path: Path, goal_id: str, actor: str) -> dict[str, Any]:
@@ -68,7 +68,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     target_path: Path, goal_id: str, actor_id: str, command: str, execute: bool,
     todo_id: str | None = None, expected_revision: str | None = None,
     idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner) -> dict[str, Any]:
-    packet: dict[str, Any] = {"schema_version": SCHEMA, "ok": False, "goal_id": goal_id,
+    packet: dict[str, Any] = {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "goal_id": goal_id,
         "actor_id": actor_id, "operation": f"work_{command}", "execute": execute,
         "status": "failed", "external_write_performed": False, "readback_verified": False,
         "canonical_claim_accepted": False, "execution_authority_granted": False, "public_summary": "Room work is unavailable."}
@@ -173,7 +173,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     try:
         validate_public_safe_value(packet)
     except ValueError:
-        return {"schema_version": SCHEMA, "ok": False, "status": "failed",
+        return {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "status": "failed",
             "blocker": "public_projection_invalid", "canonical_claim_accepted": packet["canonical_claim_accepted"],
             "external_write_performed": packet["external_write_performed"], "readback_verified": False}
     return packet
