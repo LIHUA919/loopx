@@ -189,6 +189,10 @@ function rejectIneligibleTodo(
       { requested_role: input.expected_role, todo_role: todo.role },
     );
   }
+  if (todo.bound_agent != null && todo.bound_agent !== "" &&
+      normalizeTodoAgent(todo.bound_agent, "todo.bound_agent") !== input.claimed_by) {
+    return decisionFailure("bound_agent_mismatch", "Todo is bound to another agent");
+  }
   if (todo.status !== "open") {
     return decisionFailure(
       "todo_not_open",

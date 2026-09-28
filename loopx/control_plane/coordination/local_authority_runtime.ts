@@ -1062,6 +1062,9 @@ export async function claimLocalCoordinationTodo(
           : requireAuthorityStoreId(input.role, "role"),
         registered_agents: registeredAgents,
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        ...(input.expected_provider_revision === undefined ? {} : {
+          expected_provider_revision: requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision"),
+        }),
         lease_request: leaseRequest,
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),

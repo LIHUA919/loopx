@@ -1,3 +1,4 @@
+import {projectRoomWork} from "./goals/room_work_projection.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
@@ -581,6 +582,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
+    ["goal_channel.work.project", projectRoomWork],
     ["coordination.local_authority.todo_claim", claimLocalCoordinationTodo],
     ["coordination.local_authority.todo_create", createLocalCoordinationTodo],
     ["work_items.team_plan.preview", previewTeamPlan],
