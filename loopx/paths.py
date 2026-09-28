@@ -85,13 +85,23 @@ def default_runtime_route() -> dict[str, object]:
         for path, present in ((current, current_exists), (legacy, legacy_exists))
         if present
     )
+    roots = (DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT)
+    invalid = invalid or any(
+        root.is_symlink() or (root.exists() and not root.is_dir()) for root in roots
+    )
+    # Machine configuration and extension activation can predate the first
+    # Goal registry. Preserve any existing state in an owned default root;
+    # an empty directory alone does not establish a second authority.
+    current_state, legacy_state = (
+        root.is_dir() and any(root.iterdir()) for root in roots
+    ) if not invalid else (False, False)
     if invalid:
         status = "invalid"
-    elif current_exists and legacy_exists:
+    elif current_state and legacy_state:
         status = "conflict"
-    elif legacy_exists:
+    elif legacy_state:
         status = "legacy"
-    elif current_exists:
+    elif current_state:
         status = "current"
     else:
         status = "fresh"
@@ -104,11 +114,16 @@ def default_runtime_route() -> dict[str, object]:
         )
     elif status == "invalid":
         recommended_action = (
-            "A default registry path is not a regular file; inspect it before continuing."
+            "A default runtime root is linked or not a directory, or a default "
+            "registry path is not a regular file; inspect it before continuing."
         )
     elif status == "legacy":
         recommended_action = (
             "Preview `loopx migrate-local-state`; existing state remains on its legacy route."
+            if legacy_exists else
+            "Existing machine state remains on its legacy route without a Goal registry. "
+            "Ordinary registration will use that route; directory migration requires "
+            "a registered global registry."
         )
     return {
         "status": status,
@@ -124,8 +139,13 @@ def default_runtime_route() -> dict[str, object]:
 def select_default_runtime_root() -> Path:
     route = default_runtime_route()
     if route["status"] == "conflict":
+        conflict = (
+            "Both default LoopX registries exist."
+            if route["target_registry_exists"] and route["legacy_registry_exists"]
+            else "Both default LoopX runtime roots contain state."
+        )
         raise ValueError(
-            "Both default LoopX registries exist. Select an explicit --registry and "
+            f"{conflict} Select an explicit --registry and "
             "--runtime-root; resolve the route conflict before using implicit defaults."
         )
     if route["status"] == "invalid":

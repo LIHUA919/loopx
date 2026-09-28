@@ -12,8 +12,10 @@ import json
 import os
 import shutil
 import stat
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,13 @@ from ...runtime import validate_goal_id_path_segment
 
 LOCAL_STATE_MIGRATION_SCHEMA = "loopx_local_state_migration_v1"
 RECEIPT_NAME = "migration-receipt.json"
+
+
+class _MigrationStatus(str, Enum):
+    MIGRATING = "migrating"
+    MIGRATED = "migrated"
+    ROLLING_BACK = "rolling_back"
+    ROLLED_BACK = "rolled_back"
 
 
 def _absolute(path: Path) -> Path:
@@ -101,9 +110,18 @@ def _read_registry(path: Path) -> dict[str, Any]:
 
 
 def _write_registry(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.migration.tmp")
+    # Stage outside the runtime tree: a killed writer must not leave a
+    # temporary file that invalidates that tree's recovery fingerprint.
+    _require_unlinked_directory_chain(path.parent, label="migration write")
+    if _is_redirected_path(path):
+        raise ValueError(f"migration write is a symlink or junction: {path}")
+    descriptor, name = tempfile.mkstemp(prefix=".loopx-migration-", dir=path.parent.parent)
+    temporary = Path(name)
     try:
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -320,9 +338,8 @@ def _copy(source: Path, target: Path) -> None:
 
 @dataclass
 class _MigrationWrites:
-    """Completed effects and expected payloads for best-effort recovery."""
+    """Expected registry payloads for final migration verification."""
 
-    moved_routes: list[tuple[Path, Path]] = field(default_factory=list)
     project_registries: dict[Path, dict[str, Any]] = field(default_factory=dict)
     global_registry: dict[str, Any] | None = None
 
@@ -386,47 +403,29 @@ def _verify_migrated_state(plan: dict[str, Any], writes: _MigrationWrites) -> No
             raise ValueError(f"runtime state changed during migration: {name}")
 
 
-def _restore_migration_routes(plan: dict[str, Any], writes: _MigrationWrites) -> list[str]:
-    source = Path(plan["source_runtime_root"])
+def _prepare_recovery_receipt(plan: dict[str, Any]) -> dict[str, Any]:
+    """Bind the expected registry bytes before the first authoritative move."""
+
     backup = Path(plan["backup_dir"])
-    entries = plan["entries"]
-    rollback_errors: list[str] = []
-    for old, new in reversed(writes.moved_routes):
-        try:
-            _require_unlinked_move_routes(new, old, label="automatic rollback")
-            if new.exists() and not old.exists():
-                new.rename(old)
-            elif new.exists() and old.exists():
-                rollback_errors.append(f"both routes exist: {old} and {new}")
-        except (OSError, ValueError) as rollback_exc:
-            rollback_errors.append(str(rollback_exc))
-    for index, entry in enumerate(entries):
-        if entry["kind"] == "registry" and Path(entry["source"]) in writes.project_registries:
-            try:
-                registry_path = Path(entry["source"])
-                _require_project_registry_path(registry_path)
-                if _read_registry(registry_path) != writes.project_registries[registry_path]:
-                    rollback_errors.append(f"project registry changed; kept for manual recovery: {registry_path}")
-                    continue
-                _require_project_registry_path(registry_path)
-                _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-                shutil.copy2(backup / "snapshot" / str(index), registry_path)
-            except (OSError, ValueError) as rollback_exc:
-                rollback_errors.append(str(rollback_exc))
-    if writes.global_registry is not None:
-        try:
-            source_registry = source / GLOBAL_REGISTRY_FILENAME
-            _require_unlinked_directory_chain(source, label="restored runtime root")
-            if _is_redirected_path(source_registry):
-                raise ValueError(f"restored global registry is a symlink or junction: {source_registry}")
-            if _read_registry(source_registry) != writes.global_registry:
-                rollback_errors.append(f"global registry changed; kept for manual recovery: {source_registry}")
-            else:
-                _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-                shutil.copy2(backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME, source_registry)
-        except (OSError, ValueError) as rollback_exc:
-            rollback_errors.append(str(rollback_exc))
-    return rollback_errors
+    source = Path(plan["source_runtime_root"])
+    target = Path(plan["target_runtime_root"])
+    entries = []
+    for index, entry in enumerate(plan["entries"]):
+        prepared = dict(entry)
+        if entry["kind"] == "registry":
+            original = backup / "snapshot" / str(index)
+            expected = backup / "expected-registries" / str(index)
+            _copy(original, expected)
+            updated = _rewrite_registry(
+                _read_registry(original), project=Path(entry["source"]).parent.parent,
+                source_root=source, target_root=target,
+            )
+            _write_project_registry(expected, updated)
+            prepared["updated_registry_digest"] = _digest(expected)
+        entries.append(prepared)
+    receipt = {**plan, "dry_run": False, "status": "migrating", "entries": entries}
+    _write_registry(backup / RECEIPT_NAME, receipt)
+    return receipt
 
 
 def migrate_local_state(
@@ -452,8 +451,13 @@ def migrate_local_state(
     backup = Path(plan["backup_dir"])
     entries = plan["entries"]
     _write_verified_backup(plan)
+    # A verified snapshot and operation intent must survive before any route
+    # changes. Recovery uses physical locations and fingerprints, not a lost
+    # in-memory list of completed effects.
+    recovery_receipt = _prepare_recovery_receipt(plan)
 
     writes = _MigrationWrites()
+    effects_started = False
     try:
         for entry in entries:
             original = Path(entry["source"])
@@ -473,8 +477,8 @@ def migrate_local_state(
             new.parent.mkdir(parents=True, exist_ok=True)
             _require_goal_destination(project, new)
             _require_goal_source(project, old)
+            effects_started = True
             old.rename(new)
-            writes.moved_routes.append((old, new))
         for entry in entries:
             if entry["kind"] != "registry":
                 continue
@@ -488,13 +492,14 @@ def migrate_local_state(
                 target_root=target,
             )
             _require_project_registry_path(registry_path)
+            effects_started = True
             _write_project_registry(registry_path, updated)
             writes.project_registries[registry_path] = updated
         _require_unlinked_move_routes(source, target, label="runtime migration")
         if target.exists():
             raise FileExistsError(f"target runtime root reappeared: {target}")
+        effects_started = True
         source.rename(target)
-        writes.moved_routes.append((source, target))
         global_path = target / GLOBAL_REGISTRY_FILENAME
         _require_unlinked_directory_chain(target, label="migrated runtime root")
         if _is_redirected_path(global_path):
@@ -507,7 +512,7 @@ def migrate_local_state(
         _verify_migrated_state(plan, writes)
         after = [
             {**entry, "after_digest": _digest(Path(entry["target"]))}
-            for entry in entries
+            for entry in recovery_receipt["entries"]
         ]
         receipt = {
             **plan,
@@ -520,7 +525,14 @@ def migrate_local_state(
         _write_registry(backup / RECEIPT_NAME, receipt)
         return receipt
     except Exception as exc:
-        rollback_errors = _restore_migration_routes(plan, writes)
+        rollback_errors = []
+        if effects_started:
+            try:
+                rollback_local_state_migration(backup / RECEIPT_NAME, execute=True)
+            except (OSError, ValueError) as rollback_exc:
+                rollback_errors.append(str(rollback_exc))
+        else:
+            _write_registry(backup / RECEIPT_NAME, {**recovery_receipt, "status": "rolled_back"})
         if rollback_errors:
             raise RuntimeError(
                 f"migration failed: {exc}; automatic rollback incomplete; backup={backup}; "
@@ -529,64 +541,171 @@ def migrate_local_state(
         raise RuntimeError(f"migration failed and original routes were restored; backup={backup}: {exc}") from exc
 
 
-def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False) -> dict[str, Any]:
-    receipt_path = _absolute(receipt_path)
+def _read_recovery_receipt(receipt_path: Path) -> dict[str, Any]:
     _require_backup_path(receipt_path.parent)
     if _is_redirected_path(receipt_path):
         raise ValueError(f"backup receipt is a symlink or junction: {receipt_path}")
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    if not isinstance(receipt, dict) or receipt.get("schema_version") != LOCAL_STATE_MIGRATION_SCHEMA or receipt.get("status") != "migrated":
-        raise ValueError("receipt does not describe a completed local state migration")
-    entries = receipt.get("entries")
-    if not isinstance(entries, list):
-        raise ValueError("migration receipt has no entries")
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema_version") != LOCAL_STATE_MIGRATION_SCHEMA
+        or receipt.get("status") not in {status.value for status in _MigrationStatus}
+    ):
+        raise ValueError("receipt does not describe a recoverable local state migration")
     backup = receipt_path.parent
     _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-    for index, entry in enumerate(entries):
-        old, new = Path(entry["source"]), Path(entry["target"])
-        if entry["kind"] == "registry":
-            _require_project_registry_path(new)
+    plan_path = backup / "plan.json"
+    if _is_redirected_path(plan_path):
+        raise ValueError("migration backup plan is redirected")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    entries = receipt.get("entries")
+    if not isinstance(entries, list) or not isinstance(plan, dict):
+        raise ValueError("migration receipt has no entries")
+    for key in ("plan_id", "source_runtime_root", "target_runtime_root", "backup_dir"):
+        if receipt.get(key) != plan.get(key):
+            raise ValueError("migration receipt disagrees with its backup plan")
+    original_entries = [
+        {key: entry[key] for key in ("kind", "source", "target", "digest")}
+        for entry in entries
+    ]
+    binding = {
+        "source": receipt["source_runtime_root"],
+        "target": receipt["target_runtime_root"], "entries": original_entries,
+    }
+    if (
+        str(backup) != receipt["backup_dir"] or original_entries != plan.get("entries")
+        or hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest() != receipt["plan_id"]
+    ):
+        raise ValueError("migration receipt paths or plan fingerprint changed")
+    return receipt
+
+
+def _require_unchanged_runtime(receipt: dict[str, Any], active: Path) -> None:
+    before = Path(receipt["backup_dir"]) / "snapshot" / "0"
+    if {child.name for child in before.iterdir()} != {child.name for child in active.iterdir()}:
+        raise ValueError(f"migrated state changed; automatic rollback is unsafe: {active}")
+    for child in before.iterdir():
+        current = active / child.name
+        if child.name != GLOBAL_REGISTRY_FILENAME:
+            if _digest(current) != _digest(child):
+                raise ValueError(f"migrated state changed; automatic rollback is unsafe: {current}")
+            continue
+        updated = _rewrite_registry(
+            _read_registry(child), project=None,
+            source_root=Path(receipt["source_runtime_root"]),
+            target_root=Path(receipt["target_runtime_root"]),
+        )
+        updated_bytes = (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        updated_digest = hashlib.sha256(b"file\0" + updated_bytes).hexdigest()
+        if _digest(current) not in {_digest(child), updated_digest}:
+            raise ValueError(f"global registry changed; automatic rollback is unsafe: {current}")
+
+
+def _recovery_entry_route(receipt: dict[str, Any], index: int) -> Path:
+    entry = receipt["entries"][index]
+    old, new = Path(entry["source"]), Path(entry["target"])
+    snapshot = Path(receipt["backup_dir"]) / "snapshot" / str(index)
+    if _digest(snapshot) != entry["digest"]:
+        raise ValueError(f"migration backup changed: {snapshot}")
+    if entry["kind"] == "registry":
+        _require_project_registry_path(old)
+        current_digest = _digest(old)
+        expected = entry.get("updated_registry_digest", entry.get("after_digest"))
+        if current_digest not in {entry["digest"], expected}:
+            raise ValueError(f"project registry changed; automatic rollback is unsafe: {old}")
+        active = old
+    else:
+        _require_unlinked_move_routes(old, new, label="migration rollback")
+        if old.exists() and (new.exists() or receipt["status"] == "migrated"):
+            raise FileExistsError(f"legacy path has reappeared: {old}")
+        active = old if old.exists() else new
+        if entry["kind"] == "runtime":
+            _require_unchanged_runtime(receipt, active)
+        elif entry["kind"] == "goal":
+            if _digest(active) != entry["digest"]:
+                raise ValueError(f"migrated state changed; automatic rollback is unsafe: {active}")
         else:
-            _require_unlinked_move_routes(new, old, label="migration rollback")
-            if old.exists():
-                raise FileExistsError(f"legacy path has reappeared: {old}")
-        if _digest(new) != entry["after_digest"]:
-            raise ValueError(f"migrated state changed; automatic rollback is unsafe: {new}")
-        if _digest(backup / "snapshot" / str(index)) != entry["digest"]:
-            raise ValueError(f"migration backup changed: {backup / 'snapshot' / str(index)}")
-    result = {"ok": True, "schema_version": LOCAL_STATE_MIGRATION_SCHEMA, "dry_run": not execute, "status": "rollback_ready", "receipt": str(receipt_path)}
+            raise ValueError("migration receipt contains an unsupported entry kind")
+    if receipt["status"] == "migrated" and _digest(active) != entry["after_digest"]:
+        raise ValueError(f"migrated state changed; automatic rollback is unsafe: {active}")
+    if receipt["status"] == "rolled_back" and (active != old or _digest(old) != entry["digest"]):
+        raise ValueError(f"restored state changed; automatic rollback is unsafe: {old}")
+    return active
+
+
+def _restore_snapshot_file(snapshot: Path, destination: Path, *, expected_digest: str) -> None:
+    """An interrupted copy must leave either complete original or updated bytes."""
+
+    _require_unlinked_directory_chain(snapshot.parent, label="backup snapshot")
+    _require_unlinked_directory_chain(destination.parent, label="registry recovery")
+    if _is_redirected_path(snapshot) or _is_redirected_path(destination):
+        raise ValueError("registry recovery has a symlink or junction leaf")
+    if _digest(snapshot) != expected_digest:
+        raise ValueError(f"migration backup changed: {snapshot}")
+    before = _digest(destination)
+    descriptor, name = tempfile.mkstemp(prefix=".loopx-rollback-", dir=destination.parent.parent)
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        shutil.copy2(snapshot, temporary)
+        if _digest(temporary) != expected_digest or _digest(snapshot) != expected_digest:
+            raise ValueError(f"registry recovery copy changed: {snapshot}")
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        _require_unlinked_directory_chain(destination.parent, label="registry recovery")
+        if _is_redirected_path(destination):
+            raise ValueError("registry recovery destination is redirected")
+        if _digest(destination) != before:
+            raise ValueError(f"registry changed during recovery: {destination}")
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def rollback_local_state_migration(receipt_path: Path, *, execute: bool = False) -> dict[str, Any]:
+    receipt_path = _absolute(receipt_path)
+    receipt = _read_recovery_receipt(receipt_path)
+    entries = receipt["entries"]
+    # Validate the whole operation before moving anything, then revalidate each
+    # effect. A partial attempt never licenses overwriting unrelated new state.
+    for index in range(len(entries)):
+        _recovery_entry_route(receipt, index)
+    result = {
+        "ok": True, "schema_version": LOCAL_STATE_MIGRATION_SCHEMA,
+        "dry_run": not execute, "status": "rollback_ready", "receipt": str(receipt_path),
+    }
+    if receipt["status"] == "rolled_back":
+        return {**result, "status": "rolled_back"}
     if not execute:
         return result
-    for entry in reversed(entries):
-        if entry["kind"] == "runtime":
-            old, new = Path(entry["source"]), Path(entry["target"])
-            _require_unlinked_move_routes(new, old, label="migration rollback")
-            if old.exists():
-                raise FileExistsError(f"legacy path has reappeared: {old}")
-            new.rename(old)
-    for entry in reversed(entries):
-        if entry["kind"] == "goal":
-            old, new = Path(entry["source"]), Path(entry["target"])
-            _require_unlinked_move_routes(new, old, label="migration rollback")
-            if old.exists():
-                raise FileExistsError(f"legacy path has reappeared: {old}")
-            new.rename(old)
+    receipt = {**receipt, "status": "rolling_back"}
+    _write_registry(receipt_path, receipt)
+    for kind in ("runtime", "goal"):
+        for index in reversed(range(len(entries))):
+            entry = entries[index]
+            if entry["kind"] != kind:
+                continue
+            active = _recovery_entry_route(receipt, index)
+            old = Path(entry["source"])
+            if active != old:
+                active.rename(old)
+    backup = receipt_path.parent
     for index, entry in enumerate(entries):
         if entry["kind"] == "registry":
-            _require_project_registry_path(Path(entry["source"]))
-            _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-            shutil.copy2(backup / "snapshot" / str(index), entry["source"])
+            _recovery_entry_route(receipt, index)
+            _restore_snapshot_file(
+                backup / "snapshot" / str(index), Path(entry["source"]),
+                expected_digest=entry["digest"],
+            )
+    _recovery_entry_route(receipt, 0)
     source_registry = Path(receipt["source_runtime_root"]) / GLOBAL_REGISTRY_FILENAME
-    _require_unlinked_directory_chain(source_registry.parent, label="restored runtime root")
-    if _is_redirected_path(source_registry):
-        raise ValueError(f"restored global registry is a symlink or junction: {source_registry}")
-    _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-    shutil.copy2(backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME, source_registry)
-    result["dry_run"] = False
-    result["status"] = "rolled_back"
-    _require_backup_path(backup)
-    _write_registry(receipt_path, {**receipt, "status": "rolled_back"})
-    return result
+    global_snapshot = backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME
+    _restore_snapshot_file(global_snapshot, source_registry, expected_digest=_digest(global_snapshot))
+    restored = {**receipt, "status": "rolled_back"}
+    for index in range(len(entries)):
+        _recovery_entry_route(restored, index)
+    _write_registry(receipt_path, restored)
+    return {**result, "dry_run": False, "status": "rolled_back"}
 
 
 def render_local_state_migration_markdown(payload: dict[str, Any]) -> str:

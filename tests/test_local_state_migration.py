@@ -303,6 +303,7 @@ def _extension_cli_result(
         if key not in {"LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"}
     }
     env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
     return subprocess.run(
         command, cwd=home, env=env, text=True, capture_output=True, check=False,
     )
@@ -366,6 +367,75 @@ def test_extension_cli_uses_fresh_loopx_default(tmp_path: Path) -> None:
     assert _list_extensions(home)[0]["enabled"] is False
     assert _read(home / ".loopx" / "extensions" / "state.json")["extensions"]["fresh"]["enabled"] is False
     assert not (home / ".codex" / "loopx").exists()
+
+
+def test_extension_cli_keeps_legacy_machine_state_without_a_global_registry(tmp_path: Path) -> None:
+    source, target, _projects = _fixture(tmp_path, projects=0)
+    (source / "registry.global.json").unlink()
+    _write_json(source / "extensions" / "state.json", {
+        "schema_version": "loopx_extension_state_v0",
+        "extensions": {"example": {"id": "example", "enabled": True}},
+    })
+    assert _list_extensions(source.parents[1])[0]["id"] == "example"
+    assert _extension_cli(source.parents[1], "disable", "example", "--execute")["changed"]
+    assert _read(source / "extensions" / "state.json")["extensions"]["example"]["enabled"] is False
+    assert not target.exists()
+
+
+def test_machine_route_without_registry_is_not_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.operator_provider import machine_runtime_root
+
+    source, target, _projects = _fixture(tmp_path, projects=0)
+    (source / "registry.global.json").unlink()
+    _write_json(source / "machine" / "configuration.json", {"schema_version": "example"})
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", source)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", target)
+    assert paths.default_runtime_route()["status"] == "legacy"
+    assert machine_runtime_root() == source
+    assert paths.global_registry_path() == source / "registry.global.json"
+    _write_json(target / "extensions" / "state.json", {"extensions": {}})
+    with pytest.raises(ValueError, match="Both default LoopX"):
+        machine_runtime_root()
+
+
+def test_first_global_registration_keeps_legacy_machine_state(tmp_path: Path) -> None:
+    source, target, projects = _fixture(tmp_path, projects=1)
+    (source / "registry.global.json").unlink()
+    configuration = {
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {"todo_replan_cadence": {
+            "schema_version": "todo_replan_cadence_machine_defaults_v0", "completed_todos": 2,
+        }},
+    }
+    machine_file = source / "machine" / "configuration.json"
+    _write_json(machine_file, configuration)
+    registry_path = projects[0] / ".loopx" / "registry.json"
+    registry = _read(registry_path)
+    registry.pop("common_runtime_root")
+    _write_json(registry_path, registry)
+    env = dict(os.environ, HOME=str(source.parents[1]), USERPROFILE=str(source.parents[1]), LOOPX_USAGE_PING="0")
+    for key in ("LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT"):
+        env.pop(key, None)
+    def inspect_machine() -> None:
+        shown = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--format", "json", "machine-config", "inspect",
+        ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+        assert shown.returncode == 0, shown.stdout + shown.stderr
+        stored = json.loads(shown.stdout)["machine_configuration"]
+        assert stored["namespaces"]["todo_replan_cadence"]["completed_todos"] == 2
+
+    inspect_machine()
+    result = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--format", "json",
+        "--registry", str(registry_path), "sync-global",
+    ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (source / "registry.global.json").is_file()
+    assert _read(machine_file) == configuration
+    assert not target.exists()
+    inspect_machine()
 
 
 def test_extension_cli_conflicting_defaults_require_an_explicit_route(tmp_path: Path) -> None:
@@ -453,6 +523,193 @@ def test_failed_write_restores_original_authority(tmp_path: Path, monkeypatch: p
     assert (projects[0] / ".codex" / "goals" / "goal-0" / "ACTIVE_GOAL_STATE.md").exists()
     assert _read(source / "registry.global.json")["common_runtime_root"] == str(source)
     assert _read(projects[0] / ".loopx" / "registry.json")["common_runtime_root"] == str(source)
+
+
+@pytest.mark.parametrize("failed_kind", ["runtime", "goal-0", "goal-1", "registry", "global-registry"])
+def test_rollback_io_failure_can_retry_to_consistent_original_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_kind: str,
+) -> None:
+    from loopx.control_plane.runtime import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    before = {entry["source"]: migration._digest(Path(entry["source"])) for entry in preview["entries"]}
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    backup = Path(receipt["backup_dir"])
+    receipt_path = backup / RECEIPT_NAME
+    original_rename, original_copy = Path.rename, migration.shutil.copy2
+    failed = False
+
+    def fail_rename_once(self: Path, destination: Path) -> Path:
+        nonlocal failed
+        if not failed and (self == target if failed_kind == "runtime" else self.name == failed_kind):
+            failed = True
+            raise OSError(5, "synthetic rollback I/O failure")
+        return original_rename(self, destination)
+
+    def fail_copy_once(original: Path, destination: Path, **kwargs: object) -> Path:
+        nonlocal failed
+        selected = backup / "snapshot" / ("0/registry.global.json" if failed_kind == "global-registry" else "1")
+        if not failed and failed_kind in {"registry", "global-registry"} and Path(original) == selected:
+            failed = True
+            raise OSError(5, "synthetic rollback I/O failure")
+        return original_copy(original, destination, **kwargs)
+
+    monkeypatch.setattr(Path, "rename", fail_rename_once)
+    monkeypatch.setattr(migration.shutil, "copy2", fail_copy_once)
+    with pytest.raises(OSError, match="synthetic rollback"):
+        rollback_local_state_migration(receipt_path, execute=True)
+    assert failed
+    assert rollback_local_state_migration(receipt_path)["status"] == "rollback_ready"
+    assert rollback_local_state_migration(receipt_path, execute=True)["status"] == "rolled_back"
+    assert not target.exists()
+    for route, digest in before.items():
+        assert migration._digest(Path(route)) == digest
+    for project in projects:
+        assert _read(project / ".loopx" / "registry.json")["common_runtime_root"] == str(source)
+
+
+@pytest.mark.parametrize("phase", ["migration", "rollback"])
+@pytest.mark.parametrize("interrupt_after", ["goal-0", "goal-1", "runtime", "project-registry", "global-registry"])
+def test_hard_interruption_has_a_recoverable_receipt(
+    tmp_path: Path, interrupt_after: str, phase: str,
+) -> None:
+    from loopx.control_plane.runtime import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    before = {entry["source"]: migration._digest(Path(entry["source"])) for entry in preview["entries"]}
+    receipt_path = Path(preview["backup_dir"]) / RECEIPT_NAME
+    if phase == "rollback":
+        migrate_local_state(
+            source_runtime_root=source, target_runtime_root=target,
+            expected_plan_id=preview["plan_id"], execute=True,
+        )
+    if interrupt_after == "runtime":
+        interrupted_route = source if phase == "migration" else target
+    elif interrupt_after == "project-registry":
+        interrupted_route = projects[0] / ".loopx" / "registry.json"
+    elif interrupt_after == "global-registry":
+        interrupted_route = (target if phase == "migration" else source) / "registry.global.json"
+    else:
+        interrupted_route = Path(next(
+            entry["source" if phase == "migration" else "target"] for entry in preview["entries"]
+            if entry["kind"] == "goal" and Path(entry["source"]).name == interrupt_after
+        ))
+    script = """
+import os, sys
+from pathlib import Path
+from loopx.entrypoint import main
+from loopx.control_plane.runtime import local_state_migration as migration
+original = Path.rename
+original_replace = Path.replace
+original_project_write = migration._write_project_registry
+interrupt = Path(sys.argv.pop(1))
+def rename(self, destination):
+    result = original(self, destination)
+    if self == interrupt:
+        os._exit(137)
+    return result
+def replace(self, destination):
+    result = original_replace(self, destination)
+    if Path(destination) == interrupt:
+        os._exit(137)
+    return result
+def project_write(path, payload):
+    original_project_write(path, payload)
+    if path == interrupt:
+        os._exit(137)
+Path.rename = rename
+Path.replace = replace
+migration._write_project_registry = project_write
+raise SystemExit(main())
+"""
+    env = dict(os.environ, HOME=str(source.parents[1]), USERPROFILE=str(source.parents[1]), LOOPX_USAGE_PING="0")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    arguments = (
+        ["--rollback-receipt", str(receipt_path), "--execute"] if phase == "rollback"
+        else ["--source-runtime-root", str(source), "--target-runtime-root", str(target),
+              "--execute", "--expected-plan-id", preview["plan_id"]]
+    )
+    result = subprocess.run([
+        sys.executable, "-c", script, str(interrupted_route), "--format", "json",
+        "migrate-local-state", *arguments,
+    ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 137, result.stdout + result.stderr
+    assert receipt_path.is_file()
+    for execute, expected_status in [(False, "rollback_ready"), (True, "rolled_back"), (True, "rolled_back")]:
+        recovered = subprocess.run([
+            sys.executable, "-c", "from loopx.entrypoint import main; raise SystemExit(main())",
+            "--format", "json", "migrate-local-state", "--rollback-receipt", str(receipt_path),
+            *(["--execute"] if execute else []),
+        ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=45)
+        assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+        assert json.loads(recovered.stdout)["status"] == expected_status
+    for route, digest in before.items():
+        assert migration._digest(Path(route)) == digest
+    assert not target.exists()
+
+
+def test_partial_rollback_rejects_subsequent_work_and_keeps_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target, projects = _fixture(tmp_path)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    receipt_path = Path(receipt["backup_dir"]) / RECEIPT_NAME
+    original_rename = Path.rename
+
+    def fail_goal(self: Path, destination: Path) -> Path:
+        if self.name == "goal-1":
+            raise OSError(5, "synthetic rollback failure")
+        return original_rename(self, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_goal)
+    with pytest.raises(OSError):
+        rollback_local_state_migration(receipt_path, execute=True)
+    monkeypatch.setattr(Path, "rename", original_rename)
+    state = projects[0] / ".loopx" / "goals" / "goal-0" / "ACTIVE_GOAL_STATE.md"
+    state.write_text("later work must survive\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="state changed"):
+        rollback_local_state_migration(receipt_path, execute=True)
+    assert state.read_text(encoding="utf-8") == "later work must survive\n"
+    assert _read(projects[0] / ".loopx" / "registry.json")["common_runtime_root"] == str(target)
+
+
+def test_registry_recovery_rechecks_backup_before_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.runtime import local_state_migration as migration
+
+    source, target, projects = _fixture(tmp_path)
+    preview = migrate_local_state(source_runtime_root=source, target_runtime_root=target)
+    receipt = migrate_local_state(
+        source_runtime_root=source, target_runtime_root=target,
+        expected_plan_id=preview["plan_id"], execute=True,
+    )
+    backup = Path(receipt["backup_dir"])
+    registry = projects[0] / ".loopx" / "registry.json"
+    before = registry.read_bytes()
+    snapshot = backup / "snapshot" / "1"
+    original_copy = migration.shutil.copy2
+
+    def corrupt_before_copy(original: Path, destination: Path, **kwargs: object) -> Path:
+        if Path(original) == snapshot:
+            snapshot.write_text("corrupted backup\n", encoding="utf-8")
+        return original_copy(original, destination, **kwargs)
+
+    monkeypatch.setattr(migration.shutil, "copy2", corrupt_before_copy)
+    with pytest.raises(ValueError, match="recovery copy changed"):
+        rollback_local_state_migration(backup / RECEIPT_NAME, execute=True)
+    assert registry.read_bytes() == before
+    with pytest.raises(ValueError, match="backup changed"):
+        rollback_local_state_migration(backup / RECEIPT_NAME, execute=True)
 
 
 def test_symlink_and_changed_target_block_unsafe_migration_or_rollback(tmp_path: Path) -> None:
