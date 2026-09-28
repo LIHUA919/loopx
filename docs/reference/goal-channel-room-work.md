@@ -144,15 +144,53 @@ providers, including source CLI preview and the production collector dispatch
 entrypoint. This implements the callback path in code; native Lark rendering,
 console/listener setup and independent-host live qualification remain separate.
 
-## Read-only context and remaining qualification
+## Private read-only reconnect context
 
-Keep any authorized OpenViking retrieval in the existing private
-[Agent Turn Recall](../../loopx/capabilities/agent_turn_recall/README.md) path.
-It consumes the exact selected quota packet, enforces its existing provider
-scope, and produces private observations. This room stage never enables recall,
-imports context, forwards pointers, writes memory, or treats a recalled approval
-as a current gate. Authorized artifact-reference composition and live context
-recovery remain later acceptance work on #5198.
+`work resume` composes the existing private
+[Agent Turn Recall](../../loopx/capabilities/agent_turn_recall/README.md) path with
+current channel identity, canonical projection and quota readback. Use the exact
+admitted quota packet saved by the host; the command does not admit another Turn:
+
+```sh
+loopx --registry .loopx/registry.json --format json goal-channel work resume \
+  --goal-id room-goal --agent-id agent-a --turn-instance-id '<admitted-turn-id>' \
+  --quota-decision-json .local/admitted-quota.json
+```
+
+Preview performs no provider retrieval, receipt write, claim or room send.
+Add `--execute` to verify the current Bot identity and restore scoped context.
+The existing Reward Memory configuration and Agent enablement receipts remain
+the configuration owner; this command never enables or broadens recall. It
+explicitly skips pending memory-ingest reconciliation even when ordinary
+automatic recall enables that behavior. Normal automatic recall retains its
+existing default. Retrieval may write the existing private local recall receipt;
+it performs no memory-provider write, quota spend, lease renewal or room delivery.
+
+Restore always retrieves anew rather than trusting an earlier same-Turn context
+receipt. It checks current source route, Agent registration, exact channel,
+Bot identity and configured memory scope, then reads canonical state and quota.
+After retrieval it checks those observations again. A changed binding, scope,
+Todo revision, selected work or gate discards the context and references. A
+provider outage or disabled configuration leaves the fresh LoopX observations
+available with `status=context_unavailable`; it does not manufacture a user gate.
+Exact-instance source-session profiles remain unsupported and fail closed.
+
+To carry an inspected reference, repeat `--artifact-ref '<viking://...>'` up to
+eight times. Only explicitly requested references inside the current configured
+read scope and covered by the current accepted recall's verified application
+receipt are returned. Unknown, expired or out-of-scope references are omitted.
+This stage carries pointers to scoped retrieved record artifacts; it does not
+qualify arbitrary external artifact targets or fetch them through a new provider.
+A pointer never grants access to its target or proves completion.
+
+The JSON result has `visibility=private`, `private_context`, bounded
+`artifact_references`, fresh `current_quota` and content-minimal `work_projection`.
+Do not copy that private packet into a room, public evidence or shared logs.
+Remembered approvals cannot satisfy current gates, and restored context grants
+no execution authority. Reconcile an uncertain prior claim separately with the
+original `work claim` tuple/key; resume itself never replays a work command.
+
+## Remaining qualification
 
 The new checks use synthetic Lark transport and real disposable File/SQLite
 stores, including source CLI projection and direct CLI ownership readback.

@@ -295,9 +295,17 @@ Goal Channel delivery/readback. It
 reuses promoted File/SQLite authority and the typed Todo owner; it does not
 replace the shared-service or provisioning owners.
 
+The private `work resume` path composes existing scoped Turn Recall with fresh
+channel identity, canonical projection and quota observations. It skips memory
+ingest, rechecks scope and state after retrieval, discards context on changes,
+and carries only explicitly requested scoped record-artifact references covered
+by current verified recall receipts. It does not send private context to a room
+or accept/renew work. Source-session exact-instance profiles and arbitrary
+external artifact targets remain outside this local qualification stage.
+
 Validation uses synthetic Lark transport with disposable real local stores and
 source CLI readback. Real non-production room qualification, independent hosts,
-daemon reconnect, native callback qualification, authorized artifact references and scoped live
+daemon reconnect, native callback qualification, external artifact-target access and scoped live
 OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
 synthetic checks do not close those requirements or authorize promotion.
 
