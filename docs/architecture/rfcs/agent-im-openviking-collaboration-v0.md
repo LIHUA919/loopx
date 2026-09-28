@@ -284,6 +284,22 @@ Measure outcome quality rather than message volume:
 - false acceptance or rejection of controlled transitions;
 - verified goal outcomes produced after handoff.
 
+## Current Delivery Checkpoint
+
+Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composition.
+The first proposed implementation stage is the
+[canonical room-work Agent CLI](../../reference/goal-channel-room-work.md): compact
+actor-scoped orientation, revision-guarded claim, historical acceptance plus
+current ownership, and existing verified Goal Channel delivery/readback. It
+reuses promoted File/SQLite authority and the typed Todo owner; it does not
+replace the shared-service or provisioning owners.
+
+Validation uses synthetic Lark transport with disposable real local stores and
+source CLI readback. Real non-production room qualification, independent hosts,
+daemon reconnect, IM callbacks, authorized artifact references and scoped live
+OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
+synthetic checks do not close those requirements or authorize promotion.
+
 ## Open Questions
 
 1. Which LoopX projection fields are stable enough for the first public
