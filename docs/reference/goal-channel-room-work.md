@@ -1,10 +1,11 @@
 # Canonical room work through the Agent CLI
 
-This first composition stage of [the Agent IM / LoopX / OpenViking RFC](../architecture/rfcs/agent-im-openviking-collaboration-v0.md)
+This composition stage of [the Agent IM / LoopX / OpenViking RFC](../architecture/rfcs/agent-im-openviking-collaboration-v0.md)
 lets a local registered Agent publish compact work orientation and a canonical
 claim receipt into its existing Lark Goal Channel. It uses one already promoted
 local File or SQLite authority. It does not qualify independent multi-host
-service authority, an IM button callback, or live OpenViking integration.
+service authority or live OpenViking integration. A scoped IM claim button
+callback is implemented and tested with synthetic transport.
 
 The existing Goal Channel connection remains the configuration owner. An exact,
 enabled Agent connection and a verified project Bot are required; a default or
@@ -88,6 +89,58 @@ not queue unbounded writes or fall back to Markdown authority. After reconnect,
 resolve the current binding and canonical revision again; a revoked connection
 or identity cannot use an old receipt to resume this facade.
 
+## Offer a claim in the room
+
+A trusted local Agent CLI may offer exactly one revision-bound `claim_todo`
+interaction to explicitly named Lark principals. This is a per-request grant,
+not room membership, remote authentication, an execution lease or a remembered
+approval. The broker runtime must still route the Goal to the same source
+registry and authority root when a callback arrives.
+
+```sh
+loopx --registry .loopx/registry.json --format json goal-channel work offer \
+  --goal-id room-goal --agent-id agent-a --todo-id todo_example \
+  --expected-revision '<source_revision>' --idempotency-key room-offer-example \
+  --principal lark:ou_example --expires-at '<RFC3339 expiry>'
+```
+
+Preview does not persist a grant, send a card or claim work. Add `--execute` to
+persist the bounded private offer and publish its confirmation button through
+the verified Goal Channel. The existing collector's explicit v1
+`operation_callbacks.enabled=true` configuration is required to consume
+`card.action.trigger`; offering a card does not start or enable that collector.
+Existing operation callbacks and CLI `project|claim` defaults remain unchanged.
+
+The incoming principal must pass current provider tenant/member verification
+and the offer's explicit scope. The callback also rechecks Bot/profile,
+originating message and exact action-card content, current Goal source route,
+Agent registration, channel binding and expiry. Actor, Todo, revision and key
+come from the private offer, never from incoming fields or memory. The canonical
+Todo transaction then owns the claim and idempotent receipt; the result replaces
+the initiating card after independent provider readback. A callback ACK alone
+is not an accepted claim. No claim callback acquires or renews execution authority.
+
+Revoke that one offer through the same trusted CLI:
+
+```sh
+loopx --registry .loopx/registry.json --format json goal-channel work revoke \
+  --goal-id room-goal --agent-id agent-a --request-id '<request_id>' --execute
+```
+
+Revocation, actor removal, channel retargeting, authority-route replacement and
+expiry fail closed on subsequent callbacks, including replay. Revoke serializes
+with dispatch for that offer. It does not undo a historical accepted claim.
+Private offer files preserve intent/scope and message delivery metadata, not an
+independently advanceable copy of Todo state. On restart the existing collector
+may recover a recorded public result card; recovery only patches/reads that
+message and never executes another canonical claim. The current binding and
+offer scope still govern recovery.
+
+Validation uses synthetic Lark transport and real disposable File/SQLite
+providers, including source CLI preview and the production collector dispatch
+entrypoint. This implements the callback path in code; native Lark rendering,
+console/listener setup and independent-host live qualification remain separate.
+
 ## Read-only context and remaining qualification
 
 Keep any authorized OpenViking retrieval in the existing private
@@ -124,5 +177,6 @@ Goal Channel configuration remain usable.
 这一修复也适用于直接的 promoted Todo claim。
 
 公开卡片仅包含标识、计数与安全回执，不携带任务正文、证据、artifact 或记忆内容。
+已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。
 合成 Lark transport 加真实隔离权威的测试不能宣称三方 RFC 已完成。

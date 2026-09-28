@@ -290,13 +290,14 @@ Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composit
 The first proposed implementation stage is the
 [canonical room-work Agent CLI](../../reference/goal-channel-room-work.md): compact
 actor-scoped orientation, revision-guarded claim, historical acceptance plus
-current ownership, and existing verified Goal Channel delivery/readback. It
+current ownership, scoped IM claim-button offers/callbacks and existing verified
+Goal Channel delivery/readback. It
 reuses promoted File/SQLite authority and the typed Todo owner; it does not
 replace the shared-service or provisioning owners.
 
 Validation uses synthetic Lark transport with disposable real local stores and
 source CLI readback. Real non-production room qualification, independent hosts,
-daemon reconnect, IM callbacks, authorized artifact references and scoped live
+daemon reconnect, native callback qualification, authorized artifact references and scoped live
 OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
 synthetic checks do not close those requirements or authorize promotion.
 
