@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import stat
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -317,26 +318,16 @@ def _copy(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def migrate_local_state(
-    *,
-    source_runtime_root: Path = LEGACY_RUNTIME_ROOT,
-    target_runtime_root: Path = DEFAULT_RUNTIME_ROOT,
-    backup_dir: Path | None = None,
-    expected_plan_id: str | None = None,
-    execute: bool = False,
-) -> dict[str, Any]:
-    plan = plan_local_state_migration(
-        source_runtime_root=source_runtime_root,
-        target_runtime_root=target_runtime_root,
-        backup_dir=backup_dir,
-    )
-    if not execute:
-        return plan
-    if not expected_plan_id or expected_plan_id != plan["plan_id"]:
-        raise ValueError("migration preview changed; rerun preview and supply its exact --expected-plan-id")
+@dataclass
+class _MigrationWrites:
+    """Completed effects and expected payloads for best-effort recovery."""
 
-    source = Path(plan["source_runtime_root"])
-    target = Path(plan["target_runtime_root"])
+    moved_routes: list[tuple[Path, Path]] = field(default_factory=list)
+    project_registries: dict[Path, dict[str, Any]] = field(default_factory=dict)
+    global_registry: dict[str, Any] | None = None
+
+
+def _write_verified_backup(plan: dict[str, Any]) -> None:
     backup = Path(plan["backup_dir"])
     entries = plan["entries"]
     _require_backup_path(backup, must_be_absent=True)
@@ -362,11 +353,107 @@ def migrate_local_state(
         # Keep any partial backup for inspection. No authoritative state moved.
         raise
 
-    moved: list[tuple[Path, Path]] = []
-    modified: list[Path] = []
-    expected_project_registries: dict[Path, dict[str, Any]] = {}
-    global_modified = False
-    expected_global_registry: dict[str, Any] | None = None
+
+def _verify_migrated_state(plan: dict[str, Any], writes: _MigrationWrites) -> None:
+    target = Path(plan["target_runtime_root"])
+    backup = Path(plan["backup_dir"])
+    entries = plan["entries"]
+    global_path = target / GLOBAL_REGISTRY_FILENAME
+    if _read_registry(global_path) != writes.global_registry:
+        raise ValueError("global registry changed during migration")
+    for registry_path, expected in writes.project_registries.items():
+        _require_project_registry_path(registry_path)
+        if _read_registry(registry_path) != expected:
+            raise ValueError(f"project registry changed during migration: {registry_path}")
+    for entry in entries:
+        if entry["kind"] == "goal":
+            goal_target = Path(entry["target"])
+            _require_unlinked_directory_chain(goal_target.parent, label="migrated Goal state")
+            if _digest(goal_target) != entry["digest"]:
+                raise ValueError(f"Goal state changed during migration: {entry['target']}")
+        if entry["kind"] != "registry":
+            legacy = Path(entry["source"])
+            _require_unlinked_directory_chain(legacy.parent, label="legacy authority")
+            if legacy.exists() or _is_redirected_path(legacy):
+                raise ValueError(f"legacy authority reappeared during migration: {legacy}")
+    before_runtime = backup / "snapshot" / "0"
+    before_children = {child.name for child in before_runtime.iterdir()}
+    after_children = {child.name for child in target.iterdir()}
+    if before_children != after_children:
+        raise ValueError("runtime files changed during migration")
+    for name in before_children - {GLOBAL_REGISTRY_FILENAME}:
+        if _digest(before_runtime / name) != _digest(target / name):
+            raise ValueError(f"runtime state changed during migration: {name}")
+
+
+def _restore_migration_routes(plan: dict[str, Any], writes: _MigrationWrites) -> list[str]:
+    source = Path(plan["source_runtime_root"])
+    backup = Path(plan["backup_dir"])
+    entries = plan["entries"]
+    rollback_errors: list[str] = []
+    for old, new in reversed(writes.moved_routes):
+        try:
+            _require_unlinked_move_routes(new, old, label="automatic rollback")
+            if new.exists() and not old.exists():
+                new.rename(old)
+            elif new.exists() and old.exists():
+                rollback_errors.append(f"both routes exist: {old} and {new}")
+        except (OSError, ValueError) as rollback_exc:
+            rollback_errors.append(str(rollback_exc))
+    for index, entry in enumerate(entries):
+        if entry["kind"] == "registry" and Path(entry["source"]) in writes.project_registries:
+            try:
+                registry_path = Path(entry["source"])
+                _require_project_registry_path(registry_path)
+                if _read_registry(registry_path) != writes.project_registries[registry_path]:
+                    rollback_errors.append(f"project registry changed; kept for manual recovery: {registry_path}")
+                    continue
+                _require_project_registry_path(registry_path)
+                _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
+                shutil.copy2(backup / "snapshot" / str(index), registry_path)
+            except (OSError, ValueError) as rollback_exc:
+                rollback_errors.append(str(rollback_exc))
+    if writes.global_registry is not None:
+        try:
+            source_registry = source / GLOBAL_REGISTRY_FILENAME
+            _require_unlinked_directory_chain(source, label="restored runtime root")
+            if _is_redirected_path(source_registry):
+                raise ValueError(f"restored global registry is a symlink or junction: {source_registry}")
+            if _read_registry(source_registry) != writes.global_registry:
+                rollback_errors.append(f"global registry changed; kept for manual recovery: {source_registry}")
+            else:
+                _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
+                shutil.copy2(backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME, source_registry)
+        except (OSError, ValueError) as rollback_exc:
+            rollback_errors.append(str(rollback_exc))
+    return rollback_errors
+
+
+def migrate_local_state(
+    *,
+    source_runtime_root: Path = LEGACY_RUNTIME_ROOT,
+    target_runtime_root: Path = DEFAULT_RUNTIME_ROOT,
+    backup_dir: Path | None = None,
+    expected_plan_id: str | None = None,
+    execute: bool = False,
+) -> dict[str, Any]:
+    plan = plan_local_state_migration(
+        source_runtime_root=source_runtime_root,
+        target_runtime_root=target_runtime_root,
+        backup_dir=backup_dir,
+    )
+    if not execute:
+        return plan
+    if not expected_plan_id or expected_plan_id != plan["plan_id"]:
+        raise ValueError("migration preview changed; rerun preview and supply its exact --expected-plan-id")
+
+    source = Path(plan["source_runtime_root"])
+    target = Path(plan["target_runtime_root"])
+    backup = Path(plan["backup_dir"])
+    entries = plan["entries"]
+    _write_verified_backup(plan)
+
+    writes = _MigrationWrites()
     try:
         for entry in entries:
             original = Path(entry["source"])
@@ -387,7 +474,7 @@ def migrate_local_state(
             _require_goal_destination(project, new)
             _require_goal_source(project, old)
             old.rename(new)
-            moved.append((old, new))
+            writes.moved_routes.append((old, new))
         for entry in entries:
             if entry["kind"] != "registry":
                 continue
@@ -402,13 +489,12 @@ def migrate_local_state(
             )
             _require_project_registry_path(registry_path)
             _write_project_registry(registry_path, updated)
-            modified.append(registry_path)
-            expected_project_registries[registry_path] = updated
+            writes.project_registries[registry_path] = updated
         _require_unlinked_move_routes(source, target, label="runtime migration")
         if target.exists():
             raise FileExistsError(f"target runtime root reappeared: {target}")
         source.rename(target)
-        moved.append((source, target))
+        writes.moved_routes.append((source, target))
         global_path = target / GLOBAL_REGISTRY_FILENAME
         _require_unlinked_directory_chain(target, label="migrated runtime root")
         if _is_redirected_path(global_path):
@@ -417,33 +503,8 @@ def migrate_local_state(
             _read_registry(global_path), project=None, source_root=source, target_root=target
         )
         _write_registry(global_path, updated_global)
-        global_modified = True
-        expected_global_registry = updated_global
-        if _read_registry(global_path) != updated_global:
-            raise ValueError("global registry changed during migration")
-        for registry_path, expected in expected_project_registries.items():
-            _require_project_registry_path(registry_path)
-            if _read_registry(registry_path) != expected:
-                raise ValueError(f"project registry changed during migration: {registry_path}")
-        for entry in entries:
-            if entry["kind"] == "goal":
-                goal_target = Path(entry["target"])
-                _require_unlinked_directory_chain(goal_target.parent, label="migrated Goal state")
-                if _digest(goal_target) != entry["digest"]:
-                    raise ValueError(f"Goal state changed during migration: {entry['target']}")
-            if entry["kind"] != "registry":
-                legacy = Path(entry["source"])
-                _require_unlinked_directory_chain(legacy.parent, label="legacy authority")
-                if legacy.exists() or _is_redirected_path(legacy):
-                    raise ValueError(f"legacy authority reappeared during migration: {legacy}")
-        before_runtime = backup / "snapshot" / "0"
-        before_children = {child.name for child in before_runtime.iterdir()}
-        after_children = {child.name for child in target.iterdir()}
-        if before_children != after_children:
-            raise ValueError("runtime files changed during migration")
-        for name in before_children - {GLOBAL_REGISTRY_FILENAME}:
-            if _digest(before_runtime / name) != _digest(target / name):
-                raise ValueError(f"runtime state changed during migration: {name}")
+        writes.global_registry = updated_global
+        _verify_migrated_state(plan, writes)
         after = [
             {**entry, "after_digest": _digest(Path(entry["target"]))}
             for entry in entries
@@ -459,42 +520,7 @@ def migrate_local_state(
         _write_registry(backup / RECEIPT_NAME, receipt)
         return receipt
     except Exception as exc:
-        rollback_errors: list[str] = []
-        for old, new in reversed(moved):
-            try:
-                _require_unlinked_move_routes(new, old, label="automatic rollback")
-                if new.exists() and not old.exists():
-                    new.rename(old)
-                elif new.exists() and old.exists():
-                    rollback_errors.append(f"both routes exist: {old} and {new}")
-            except (OSError, ValueError) as rollback_exc:
-                rollback_errors.append(str(rollback_exc))
-        for index, entry in enumerate(entries):
-            if entry["kind"] == "registry" and Path(entry["source"]) in modified:
-                try:
-                    registry_path = Path(entry["source"])
-                    _require_project_registry_path(registry_path)
-                    if _read_registry(registry_path) != expected_project_registries[registry_path]:
-                        rollback_errors.append(f"project registry changed; kept for manual recovery: {registry_path}")
-                        continue
-                    _require_project_registry_path(registry_path)
-                    _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-                    shutil.copy2(backup / "snapshot" / str(index), registry_path)
-                except (OSError, ValueError) as rollback_exc:
-                    rollback_errors.append(str(rollback_exc))
-        if global_modified:
-            try:
-                source_registry = source / GLOBAL_REGISTRY_FILENAME
-                _require_unlinked_directory_chain(source, label="restored runtime root")
-                if _is_redirected_path(source_registry):
-                    raise ValueError(f"restored global registry is a symlink or junction: {source_registry}")
-                if _read_registry(source_registry) != expected_global_registry:
-                    rollback_errors.append(f"global registry changed; kept for manual recovery: {source_registry}")
-                else:
-                    _require_unlinked_directory_chain(backup / "snapshot", label="backup snapshot")
-                    shutil.copy2(backup / "snapshot" / "0" / GLOBAL_REGISTRY_FILENAME, source_registry)
-            except (OSError, ValueError) as rollback_exc:
-                rollback_errors.append(str(rollback_exc))
+        rollback_errors = _restore_migration_routes(plan, writes)
         if rollback_errors:
             raise RuntimeError(
                 f"migration failed: {exc}; automatic rollback incomplete; backup={backup}; "
