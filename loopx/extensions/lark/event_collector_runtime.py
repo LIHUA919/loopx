@@ -27,6 +27,7 @@ from .goal_channel_operation import (
     recover_goal_channel_operation_results,
     recover_goal_channel_simulation_claims,
 )
+from .room_claim import is_room_claim_callback, handle_room_claim_callback, recover_room_claim_results
 from .private_json import write_private_json_atomic
 
 APP_ID_PATTERN = re.compile(r"cli_[A-Za-z0-9_-]+")
@@ -843,17 +844,22 @@ def run_lark_event_collector(
                             raise ValueError(
                                 "collector Bot application identity is unverified"
                             )
-                        receipt = handle_goal_channel_operation_callback(
-                            payload,
-                            runtime_root=resolved_runtime_root,
-                            action_store_root=resolved_runtime_root
-                            / "chat"
-                            / "actions",
-                            profile_app_id=profile_app_id,
-                            cli_bin=lark_cli_executable,
-                            profile=str(config["profile"]),
-                            runner=transport_runner,
-                        )
+                        if is_room_claim_callback(payload):
+                            receipt = handle_room_claim_callback(payload,
+                                runtime_root=resolved_runtime_root, profile_app_id=profile_app_id,
+                                cli_bin=lark_cli_executable, profile=str(config["profile"]), runner=transport_runner)
+                        else:
+                            receipt = handle_goal_channel_operation_callback(
+                                payload,
+                                runtime_root=resolved_runtime_root,
+                                action_store_root=resolved_runtime_root
+                                / "chat"
+                                / "actions",
+                                profile_app_id=profile_app_id,
+                                cli_bin=lark_cli_executable,
+                                profile=str(config["profile"]),
+                                runner=transport_runner,
+                            )
                         if receipt.get("ok") is not True:
                             raise RuntimeError(
                                 "operation callback result delivery was not verified"
@@ -917,6 +923,12 @@ def run_lark_event_collector(
                     )
                 except Exception:  # noqa: BLE001
                     result = {"attempted": 1, "delivered": 0, "failed": 1}
+                room_result = recover_room_claim_results(runtime_root=resolved_runtime_root,
+                    profile_app_id=str(profile_app_id or ""), allowed_chat_ids=set(routes_by_chat),
+                    cli_bin=lark_cli_executable, profile=str(config["profile"]),
+                    runner=_operation_transport_runner(runner, command_prefix=command_prefix))
+                for key in result_recovery_stats:
+                    result[key] = int(result.get(key) or 0) + int(room_result.get(key) or 0)
                 for key in simulation_recovery_stats:
                     simulation_recovery_stats[key] += int(
                         simulation_result.get(key) or 0

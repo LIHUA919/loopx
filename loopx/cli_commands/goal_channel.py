@@ -214,16 +214,21 @@ def register_goal_channel_commands(
 
     work = sub.add_parser("work", help="Publish canonical room orientation or claim through the local Agent CLI.")
     work_sub = work.add_subparsers(dest="goal_channel_work_command", required=True)
-    for work_command in ("project", "claim"):
+    for work_command in ("project", "claim", "offer", "revoke"):
         work_parser = work_sub.add_parser(work_command)
         add_subcommand_format(work_parser)
         _add_common_args(work_parser)
         work_parser.add_argument("--agent-id", required=True)
         work_parser.add_argument("--execute", action="store_true")
-        if work_command == "claim":
+        if work_command in {"claim", "offer"}:
             work_parser.add_argument("--todo-id", required=True)
             work_parser.add_argument("--expected-revision", required=True)
             work_parser.add_argument("--idempotency-key", required=True)
+        if work_command == "offer":
+            work_parser.add_argument("--principal", action="append", required=True)
+            work_parser.add_argument("--expires-at", required=True)
+        if work_command == "revoke":
+            work_parser.add_argument("--request-id", required=True)
 
     register_goal_channel_runtime_commands(sub, add_subcommand_format)
 
@@ -466,12 +471,25 @@ def handle_goal_channel_command(
         _, source_registry_path, work_binding_path, source_runtime_root = _source_context(
             registry=registry, registry_path=registry_path, goal_id=goal_id,
             binding_path_arg=getattr(args, "binding_path", None))
-        payload = run_goal_channel_work(registry_path=source_registry_path,
-            runtime_root=source_runtime_root, binding_path=work_binding_path,
-            target_path=_target_path(args, runtime_root), goal_id=goal_id, actor_id=args.agent_id,
-            command=args.goal_channel_work_command, execute=execute,
-            todo_id=getattr(args, "todo_id", None), expected_revision=getattr(args, "expected_revision", None),
-            idempotency_key=getattr(args, "idempotency_key", None))
+        if args.goal_channel_work_command in {"offer", "revoke"}:
+            from ..extensions.lark.room_claim import run_room_claim_offer
+
+            payload = run_room_claim_offer(registry_path=source_registry_path,
+                authority_root=source_runtime_root, broker_root=runtime_root,
+                binding_path=work_binding_path, target_path=_target_path(args, runtime_root),
+                goal_id=goal_id, actor_id=args.agent_id, command=args.goal_channel_work_command,
+                execute=execute, todo_id=getattr(args, "todo_id", None),
+                expected_revision=getattr(args, "expected_revision", None),
+                idempotency_key=getattr(args, "idempotency_key", None),
+                principals=getattr(args, "principal", None), expires_at=getattr(args, "expires_at", None),
+                request_id=getattr(args, "request_id", None))
+        else:
+            payload = run_goal_channel_work(registry_path=source_registry_path,
+                runtime_root=source_runtime_root, binding_path=work_binding_path,
+                target_path=_target_path(args, runtime_root), goal_id=goal_id, actor_id=args.agent_id,
+                command=args.goal_channel_work_command, execute=execute,
+                todo_id=getattr(args, "todo_id", None), expected_revision=getattr(args, "expected_revision", None),
+                idempotency_key=getattr(args, "idempotency_key", None))
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 0 if payload.get("ok") else 1
     if command == "runtime":

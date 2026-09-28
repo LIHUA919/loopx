@@ -1,3 +1,4 @@
+import {decodeRoomClaimRequest, admitRoomClaimCallback} from "./goals/room_claim_request.ts";
 import {projectRoomWork} from "./goals/room_work_projection.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
@@ -583,6 +584,8 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
     ["goal_channel.work.project", projectRoomWork],
+    ["goal_channel.work.claim_request", decodeRoomClaimRequest],
+    ["goal_channel.work.claim_admission", admitRoomClaimCallback],
     ["coordination.local_authority.todo_claim", claimLocalCoordinationTodo],
     ["coordination.local_authority.todo_create", createLocalCoordinationTodo],
     ["work_items.team_plan.preview", previewTeamPlan],

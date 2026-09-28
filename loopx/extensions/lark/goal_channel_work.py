@@ -67,7 +67,8 @@ def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
 def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_path: Path,
     target_path: Path, goal_id: str, actor_id: str, command: str, execute: bool,
     todo_id: str | None = None, expected_revision: str | None = None,
-    idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner) -> dict[str, Any]:
+    idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner,
+    publish_receipt: bool = True) -> dict[str, Any]:
     packet: dict[str, Any] = {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "goal_id": goal_id,
         "actor_id": actor_id, "operation": f"work_{command}", "execute": execute,
         "status": "failed", "external_write_performed": False, "readback_verified": False,
@@ -145,7 +146,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
             packet["status"] = "projected"
         packet["public_summary"] = "Canonical room work readback is ready."
         validate_public_safe_value(packet)
-        if execute:
+        if execute and publish_receipt:
             stage = "delivery"
             # Stable card identity permits lost-response recovery independently
             # of the accepted state transition. No new claim is minted here.
