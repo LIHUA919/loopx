@@ -1,9 +1,15 @@
 """Synthetic room transport, real canonical File/SQLite authority and source CLI."""
 import json
+import io
+import multiprocessing
+import os
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
+import tempfile
+from contextlib import redirect_stdout
+from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -94,7 +100,65 @@ def claim(args, actor, revision, key, **extra):
         todo_id=TODO, expected_revision=revision, idempotency_key=key, **extra)
 
 
-def test_competing_hosts_retry_and_direct_cli_readback(setup):
+def _source_cli_claim(args, actor, revision, key, worker_root, results, barrier=None, messages=()):
+    """Real CLI client/TS runtime; fixture extension config and synthetic Lark IO."""
+    worker_root.mkdir()
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        os.environ[variable] = str(worker_root)
+    tempfile.tempdir = str(worker_root)
+    from loopx.cli import main
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    room = Room()
+    room.messages = list(messages)
+    argv = ["--registry", str(args["registry_path"]), "--runtime-root", str(args["runtime_root"]),
+        "--format", "json", "goal-channel", "work", "claim", "--goal-id", GOAL,
+        "--agent-id", actor, "--todo-id", TODO, "--expected-revision", revision,
+        "--idempotency-key", key, "--execute"]
+    try:
+        if barrier is not None:
+            barrier.wait(timeout=30)
+        output = io.StringIO()
+        # The parent fixture supplies an enabled extension. Spawned clients
+        # independently reproduce that fixture fact and inject only room IO.
+        with patch.object(work, "resolve_extension_activation", return_value={"enabled": True}), \
+             patch.object(work, "run_goal_channel_work", partial(work.run_goal_channel_work, runner=room)), \
+             redirect_stdout(output):
+            exit_code = main(argv)
+        runtime_info = list(worker_root.glob("loopx-effect-runtime-*/runtime-*.json"))
+        assert len(runtime_info) == 1
+        runtime_pid = json.loads(runtime_info[0].read_text())["pid"]
+        results.put({"pid": os.getpid(), "runtime_pid": runtime_pid, "exit_code": exit_code,
+            "packet": json.loads(output.getvalue()), "messages": room.messages})
+    finally:
+        effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+def _independent_claims(args, revision, actors, root, messages=()):
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    barrier = context.Barrier(len(actors)) if len(actors) > 1 else None
+    clients = [context.Process(target=_source_cli_claim,
+        args=(args, actor, revision, "room-claim-" + actor, root / actor, results, barrier, messages))
+        for actor in actors]
+    try:
+        for client in clients:
+            client.start()
+        observed = [results.get(timeout=90) for _ in clients]
+        for client in clients:
+            client.join(timeout=30)
+            assert client.exitcode == 0
+        return observed
+    finally:
+        for client in clients:
+            if client.is_alive():
+                client.terminate()
+                client.join(timeout=10)
+        results.close()
+        results.join_thread()
+
+
+def test_independent_source_cli_claims_retry_and_direct_readback(setup, tmp_path):
     args, room, _ = setup
     before = snapshot(args)
     project = work.run_goal_channel_work(**args, actor_id="agent-a", command="project", execute=False)
@@ -102,17 +166,27 @@ def test_competing_hosts_retry_and_direct_cli_readback(setup):
     assert project["projection"]["counts"] == {"unclaimed": 1, "user_gates": 0}
     assert not room.messages and "PRIVATE_" not in json.dumps(project)
     revision = before["provider_revision"]
-    with ThreadPoolExecutor(2) as pool:
-        results = list(pool.map(lambda actor: claim(args, actor, revision, "room-claim-" + actor), ["agent-a", "agent-b"]))
+    process_args = {name: value for name, value in args.items() if name != "runner"}
+    clients = _independent_claims(process_args, revision, ["agent-a", "agent-b"], tmp_path)
+    assert len({client["pid"] for client in clients} | {os.getpid()}) == 3
+    assert len({client["runtime_pid"] for client in clients}) == 2
+    results = [client["packet"] for client in clients]
     assert sum(r["canonical_claim_accepted"] for r in results) == 1, results
     assert sorted(r["status"] for r in results) == ["applied", "conflict"], results
     winner = next(r["actor_id"] for r in results if r["canonical_claim_accepted"])
     committed = snapshot(args)
-    replay = claim(args, winner, revision, "room-claim-" + winner)
+    winner_client = next(client for client in clients if client["packet"]["actor_id"] == winner)
+    retry_root = tmp_path / "retry"
+    retry_root.mkdir()
+    retry = _independent_claims(process_args, revision, [winner], retry_root, winner_client["messages"])[0]
+    assert sorted(client["exit_code"] for client in clients) == [0, 1]
+    assert retry["exit_code"] == 0
+    replay = retry["packet"]
     assert replay["status"] == "already_applied" and replay["readback_verified"], replay
     assert snapshot(args)["provider_revision"] == committed["provider_revision"]
     assert snapshot(args)["todos"][0]["claimed_by"] == winner
-    assert "PRIVATE_" not in json.dumps(room.messages)
+    assert len(retry["messages"]) == 1
+    assert "PRIVATE_" not in json.dumps(clients + [retry])
     readback = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
         "--format", "json", "todo", "list", "--goal-id", GOAL], cwd=ROOT, text=True, capture_output=True)
     assert readback.returncode == 0, readback.stdout + readback.stderr
