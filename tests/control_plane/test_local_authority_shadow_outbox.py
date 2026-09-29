@@ -26,6 +26,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
     build_runtime_shadow_source_snapshot,
     RuntimeInvoker,
 )
+from loopx.control_plane.coordination.shadow_goal_scope import shadow_goal_scope
 from loopx.control_plane.coordination.shadow_management import (
     read_shadow_bootstrap_source_path,
     read_shadow_management_state,
@@ -44,7 +45,10 @@ GOAL_ID = "goal-outbox"
 
 
 def _fixture(
-    tmp_path: Path, *, bootstrap: bool = True,
+    tmp_path: Path,
+    *,
+    bootstrap: bool = True,
+    incidental_goal_instance_id: bool = False,
     runtime_invoker: RuntimeInvoker = source_effect_runtime_result,
 ) -> tuple[Path, Path, Path]:
     repo = tmp_path / "repo"
@@ -61,24 +65,25 @@ def _fixture(
     )
     runtime_root = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
+    goal = {
+        "id": GOAL_ID,
+        "domain": "harness_self_improvement",
+        "status": "active",
+        "repo": str(repo),
+        "state_file": state.name,
+        "adapter": {"kind": "harness_self_improvement"},
+        "coordination": {
+            "agent_model": "peer_v1",
+            "registered_agents": ["agent-a"],
+        },
+    }
+    if incidental_goal_instance_id:
+        goal["goal_instance_id"] = "ginst_0123456789abcdef0123456789abcdef"
     registry.write_text(
         json.dumps(
             {
                 "common_runtime_root": str(runtime_root),
-                "goals": [
-                    {
-                        "id": GOAL_ID,
-                        "domain": "harness_self_improvement",
-                        "status": "active",
-                        "repo": str(repo),
-                        "state_file": state.name,
-                        "adapter": {"kind": "harness_self_improvement"},
-                        "coordination": {
-                            "agent_model": "peer_v1",
-                            "registered_agents": ["agent-a"],
-                        },
-                    }
-                ],
+                "goals": [goal],
             }
         ),
         encoding="utf-8",
@@ -114,13 +119,16 @@ def _fixture(
                     assert {key: receipt[key] for key in binding} == binding, receipt
                     return {"schema_version": COORDINATION_RUNTIME_SHADOW_BOOTSTRAP_RESULT_SCHEMA, **receipt}
 
-        result = bootstrap_coordination_runtime_shadow(
-            goal=enabled_goal, runtime_root=runtime_root, goal_id=GOAL_ID,
-            operation_id="bootstrap:outbox-test", source_version="source:initial",
-            projection=projection, source_snapshot=snapshot, runtime_invoker=bootstrap_or_receipt,
-        )
+        with shadow_goal_scope(registry, goal_id=GOAL_ID) as scope:
+            result = bootstrap_coordination_runtime_shadow(
+                goal=enabled_goal, runtime_root=runtime_root, goal_id=GOAL_ID,
+                operation_id="bootstrap:outbox-test", source_version="source:initial",
+                projection=projection, source_snapshot=snapshot,
+                runtime_invoker=bootstrap_or_receipt,
+                goal_ref=scope.goal_ref,
+            )
         # Outbox assertions require a verified bootstrap, including an exact
-        # durable result when the managed RPC response is ambiguous.
+        # durable receipt when the managed RPC response is ambiguous.
         assert result["status"] in {"applied", "recovered", "replayed"}, result
         assert result["operation_id"] == "bootstrap:outbox-test", result
         assert result["cursor"] == "1", result
@@ -192,6 +200,27 @@ def _record_change(registry: Path, state: Path, runtime_root: Path, text: str) -
     capture.committed()
     assert capture.outcome.failure is None, capture.outcome.failure
     return capture
+
+
+def test_legacy_profile_ignores_an_incidental_goal_instance_id(
+    tmp_path: Path,
+) -> None:
+    registry, state, runtime_root = _fixture(
+        tmp_path,
+        incidental_goal_instance_id=True,
+    )
+
+    capture = _record_change(
+        registry,
+        state,
+        runtime_root,
+        "Capture work through the legacy profile.",
+    )
+
+    assert capture.outcome.failure is None
+    binding = require_shadow_primary_write_allowed(runtime_root, GOAL_ID)
+    assert binding is not None
+    assert "goal_ref" not in binding
 
 
 def _files(directory: Path) -> dict[str, bytes]:
