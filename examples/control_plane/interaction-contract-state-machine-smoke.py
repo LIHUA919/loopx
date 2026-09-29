@@ -607,7 +607,9 @@ def assert_required_reads_are_mirrored_into_execution_channels() -> None:
     expected = [
         {
             "kind": "agent_scoped_evidence_log",
-            "command": "loopx evidence-log --goal-id interaction-state-machine-goal",
+            # Execution channels retain the admitted command verbatim. Trimming
+            # belongs to display compaction and can change quoted arguments.
+            "command": "  loopx evidence-log --goal-id interaction-state-machine-goal  ",
         }
     ]
     assert contract["agent_channel"]["required_reads"] == expected, contract
