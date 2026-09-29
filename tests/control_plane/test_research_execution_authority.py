@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -97,8 +99,9 @@ def test_execution_attribution_reads_promoted_provider(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("resolution", ["observed", "dismissed", "deferred"])
+@pytest.mark.parametrize("diagnostic_timing", [None, "before_activation", "after_activation"])
 def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str, diagnostic_timing: str | None,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     try:
@@ -109,9 +112,22 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
         harness = {"enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "scope-joint"}
         registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
             "id": goal, "repo": str(tmp_path), "state_file": state.name, "status": "active",
-            "spawn_policy": {"explore_harness": harness},
+            "spawn_policy": {"explore_harness": {"enabled": True} if diagnostic_timing == "before_activation" else harness},
             "coordination": {"agent_model": "peer_v1", "registered_agents": [agent]},
         }]}))
+        def cli(*args: str, success: bool = True) -> dict:
+            process = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                "--registry", str(registry), "--runtime-root", str(runtime), *args],
+                cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=60)
+            assert (process.returncode == 0) is success, process.stdout + process.stderr
+            return json.loads(process.stdout)
+
+        packet = tmp_path / "observation.json"
+        def record(value: dict, *, success: bool = True) -> dict:
+            packet.write_text(json.dumps(value))
+            return cli("explore", "observe", "--goal-id", goal, "--agent-id", agent,
+                       "--observation-json", str(packet), success=success)
+
         log = explore_result_log_path(runtime, goal)
         for name in ["a", "b", "joint"]:
             append_explore_result_event(log, build_explore_node_event(
@@ -126,6 +142,19 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
         for name in ["a", "b"]:
             append_explore_result_event(log, build_explore_edge_event(
                 goal_id=goal, from_node="joint", to_node=name, edge_type="depends_on"))
+        if diagnostic_timing:
+            append_explore_result_event(log, build_explore_node_event(goal_id=goal, node_id="diagnostic",
+                title="Retained diagnostic", node_kind="experiment", status="resolved"))
+            for name in ["a", "b"]:
+                append_explore_result_event(log, build_explore_edge_event(goal_id=goal,
+                    from_node="diagnostic", to_node=name, edge_type="depends_on"))
+            cold = build_explore_result_projection(load_explore_result_events_strict(log, goal_id=goal), goal_id=goal)
+            diagnostic = observation("diagnostic")
+            diagnostic["input_observations"] = cold["research_frontier"]["gaps"][0]["input_observations"]
+            assert record(diagnostic)["written"]
+            if diagnostic_timing == "before_activation":
+                assert cli("configure-goal", "--goal-id", goal, "--explore-composition-mode", "explicit_only",
+                           "--explore-composition-scope-id", "scope-joint", "--execute")["ok"]
         events = load_explore_result_events_strict(log, goal_id=goal)
         projection = build_explore_result_projection(events, goal_id=goal)
         frontier = build_research_composition_frontier(projection,
@@ -133,6 +162,10 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
                                for e in events if e.get("research_observation")],
             harness=harness, todos=[], agent_id=agent)
         gap = frontier["selected_gap"]
+        assert gap["status"] == "pending"
+        if diagnostic_timing:
+            assert projection["research_frontier"]["observed_count"] == 1
+            assert frontier["observed_count"] == 0
         task = {"schema_version": "todo_item_v0", "todo_id": "todo_joint", "index": 1,
                 "role": "agent", "status": "open", "done": False, "text": "Run the bounded joint experiment.",
                 "archive_state": "active", "source_section": "Agent Todo", "priority": "P1",
@@ -140,6 +173,8 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
                 "target_key": "joint", "explore_result_node_refs": ["joint"], "replan_obligation_id": gap["obligation_id"]}
         initialize_canonical_authority(runtime, goal,
             build_todo_runtime_shadow_projection(goal_id=goal, todos=[task]), state_path=state, provider=provider)
+        live = cli("explore", "summary", "--goal-id", goal, "--agent-id", agent)["research_execution_frontier"]
+        assert live["scheduled_count"] == 1 and live["observed_count"] == 0
         from loopx.control_plane.work_items.task_lease import acquire_task_lease
         acquired = acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id=goal,
             todo_id="todo_joint", owner=agent, idempotency_key="native-research-proof", ttl_seconds=300)
@@ -193,8 +228,16 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
             result["closure_basis"] = None
             result["composition_resolution"] = {"schema_version": "research_composition_resolution_v0",
                 "disposition": "deferred", "evidence_ids": ["ev-joint"]}
-        recorded = append_research_observation(log, goal_id=goal, observation=result, agent_id=agent,
-                                   registry_path=registry, runtime_root=runtime)
+        recorded = record(result)
+        written = log.read_bytes()
+        replay = record(result)
+        assert replay["replayed"] and not replay["written"]
+        assert log.read_bytes() == written
+        if resolution != "deferred":
+            changed = json.loads(json.dumps(result))
+            changed["progress"]["evidence_ids"].append("ev-new")
+            assert "pending gap" in json.dumps(record(changed, success=False))
+            assert log.read_bytes() == written
         if resolution == "deferred":
             from loopx.todos import update_goal_todo
             from loopx.capabilities.explore.composition_frontier import project_live_explore_composition_frontier
@@ -265,6 +308,8 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
                 agent_id=agent, status_payload={"run_history": {"goals": json.loads(registry.read_text())["goals"]}})
         assert live()[f"{resolution}_count"] == 1
         assert live()["scheduled_count"] == 0
+        cli_view = cli("explore", "summary", "--goal-id", goal, "--agent-id", agent)["research_execution_frontier"]
+        assert cli_view[f"{resolution}_count"] == 1 and cli_view["scheduled_count"] == 0
         append_explore_result_event(log, build_explore_node_event(goal_id=goal, node_id="a", title="Research a", status="open"))
         assert live()["observed_count"] == 0
         replay = complete_goal_todo(registry_path=registry, goal_id=goal, todo_id="todo_joint",

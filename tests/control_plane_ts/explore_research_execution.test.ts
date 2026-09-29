@@ -285,6 +285,40 @@ test("stale fingerprints, reads, malformed lineage and already-observed inputs f
   assert.throws(() => validateResearchExecution(params), /pending gap/);
 });
 
+test("cold terminal diagnostics cannot discharge or block a live execution duty", () => {
+  const params = liveFixture(), nodes = params.nodes as JsonObject[], raw = params.observation as JsonObject;
+  const diagnostic: JsonObject = {...raw, explore_node_id: "diagnostic",
+    progress: {...raw.progress as JsonObject, work_item_id: "todo_diagnostic"}};
+  delete diagnostic.execution_lineage;
+  params.nodes = [...nodes, {node_id: "diagnostic", node_kind: "experiment", status: "resolved",
+    research_observation: normalizeResearchObservation({observation: diagnostic})}];
+  params.edges = [...params.edges as JsonObject[], ...["a", "b"].map(to_node =>
+    ({from_node: "diagnostic", to_node, edge_type: "depends_on"}))];
+  params.todos = [params.todo];
+  assert.equal(researchCompositionGaps(params)[0].state, "observed");
+  const scheduled = projectResearchComposition(params);
+  assert.equal(scheduled.scheduled_count, 1);
+  assert.equal(scheduled.observed_count, 0);
+  assert.doesNotThrow(() => validateResearchExecution({...params, frontier: scheduled}));
+  assert.throws(() => validateResearchExecution({...params, frontier: {...scheduled, agent_id: "another-agent"}}), /Goal and actor/);
+  assert.throws(() => validateResearchExecution({...params, frontier: {...scheduled,
+    policy: {...scheduled.policy as JsonObject, coverage_scope_id: "other-scope"}}}), /pending gap/);
+  params.nodes = [...(params.nodes as JsonObject[]).filter(node => node.node_id !== "joint"),
+    {...nodes[2], status: "resolved", research_observation: normalizeResearchObservation({observation: raw})}];
+  const observed = projectResearchComposition(params);
+  assert.equal(observed.observed_count, 1);
+  assert.throws(() => validateResearchExecution({...params, frontier: observed}), /pending gap/);
+  const retained = {...params.todo as JsonObject, status: "done", claimed_by: null, archive_state: "archive", actionable_open: false};
+  const retry = {...params.todo as JsonObject, todo_id: "todo_retry", explore_result_node_refs: ["retry"], target_key: "retry"};
+  params.nodes = [...params.nodes as JsonObject[], {node_id: "retry", node_kind: "experiment", status: "resolved"}];
+  params.edges = [...params.edges as JsonObject[], ...["a", "b"].map(to_node =>
+    ({from_node: "retry", to_node, edge_type: "depends_on"}))];
+  const retryRaw = {...raw, explore_node_id: "retry", progress: {...raw.progress as JsonObject, work_item_id: "todo_retry"},
+    execution_lineage: {...raw.execution_lineage as JsonObject, successor_todo_id: "todo_retry"}};
+  assert.throws(() => validateResearchExecution({...params, todo: retry, observation: retryRaw,
+    frontier: projectResearchComposition({...params, todos: [retained, retry]})}), /pending gap/);
+});
+
 test("the three-card presentation budget cannot hide execution attribution", () => {
   const params = fixture(), nodes = params.nodes as JsonObject[];
   const template = nodes[0].research_observation as JsonObject;
