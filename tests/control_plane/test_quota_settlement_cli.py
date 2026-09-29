@@ -25,6 +25,10 @@ from loopx.control_plane.quota.settlement_validation import (
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    load_scheduler_state,
+)
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.rollout_event_log import build_rollout_event
 
@@ -2357,9 +2361,18 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         runtime,
         *settled_ack_hint["cli_args"],
     )
+    # A settled Turn remains current until a newer heartbeat is admitted.
     assert ack_rc == 0, ack
+    assert ack["scheduler_commit"]["written"] is True
     assert ack["scheduler_state_mutated"] is True
-    assert ack["already_applied"] is False
+    assert ack["appended"] is False
+    assert load_scheduler_state(
+        runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    ) is not None
+    assert _spend_run_count(runtime) == 1
 
     fresh_turn_rc, fresh_turn = _run_cli(
         registry_path,
@@ -2385,6 +2398,18 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert stale_ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
     assert stale_ack["write_performed"] is False
     assert stale_ack["scheduler_state_mutated"] is False
+    fresh_ack_args = fresh_turn["scheduler_hint"]["app_automation"]["ack_hint"]["cli_args"]
+    fresh_ack_rc, fresh_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert fresh_ack_rc == 0, fresh_ack
+    assert fresh_ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert fresh_ack["mode"] == "scheduler-ack"
+    assert fresh_ack["scheduler_commit"]["written"] is True
+    scheduler_bytes = Path(fresh_ack["scheduler_state_path"]).read_bytes()
+    replay_ack_rc, replay_ack = _run_cli(registry_path, runtime, *fresh_ack_args)
+    assert replay_ack_rc == 0, replay_ack
+    assert replay_ack["scheduler_commit"]["replayed"] is True
+    assert replay_ack["scheduler_commit"]["written"] is False
+    assert Path(fresh_ack["scheduler_state_path"]).read_bytes() == scheduler_bytes
     assert _spend_run_count(runtime) == 1
 
 
@@ -5091,11 +5116,14 @@ def test_todoless_replan_keeps_scheduler_ack_outside_agent_settlement(
     )
     assert ack_rc == 0, ack
     assert ack["ok"] is True
-    assert ack["mode"] in {"scheduler-ack", "scheduler-ack-current"}
+    assert ack["schema_version"] == "loopx_scheduler_host_followup_result_v0"
+    assert ack["mode"] == "scheduler-ack"
     assert ack["registry_mutated"] is False
     assert ack["appended"] is False
-    scheduler_path = ack.get("scheduler_state_path")
-    scheduler_bytes = Path(scheduler_path).read_bytes() if scheduler_path else None
+    assert ack["scheduler_commit"]["written"] is True
+    assert ack["scheduler_state_mutated"] is True
+    scheduler_path = Path(ack["scheduler_state_path"])
+    scheduler_bytes = scheduler_path.read_bytes()
     ack_replay_rc, ack_replay = _run_cli(
         registry_path, runtime, *original_scheduler_ack_args,
     )
@@ -5103,10 +5131,11 @@ def test_todoless_replan_keeps_scheduler_ack_outside_agent_settlement(
     assert ack_replay["ok"] is True
     assert ack_replay["registry_mutated"] is False
     assert ack_replay["appended"] is False
+    assert ack_replay["scheduler_commit"]["replayed"] is True
+    assert ack_replay["scheduler_commit"]["written"] is False
+    assert scheduler_path.read_bytes() == scheduler_bytes
     assert state_path.read_bytes() == before_state
     assert run_index.read_bytes() == before_runs
-    if scheduler_path:
-        assert Path(scheduler_path).read_bytes() == scheduler_bytes
     assert _spend_run_count(runtime) == 1
 
     fresh_turn_id = "turn-autonomous-replan-settlement-2"
