@@ -67,7 +67,8 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
         "role": "agent" if i < 40 else "user", "status": "open" if i % 3 else "done",
         "done": i % 3 == 0, "text": f"Retained work {i}", "note": "exact metadata🙂" * 100,
         "archive_state": "active", "source_section": "Agent Todo" if i < 40 else "User Todo",
-        "index": i + 1, "task_class": "advancement_task"} for i in range(60)]
+        "index": i + 1, "task_class": "advancement_task" if i < 40 else "user_action",
+        **({"goal_bound": True} if i >= 40 else {})} for i in range(60)]
     projection = build_todo_runtime_shadow_projection(goal_id="example", todos=records, leases=[], handoff_mode="soft_claim")
     initialize_canonical_authority(runtime, "example", projection, state_path=state, provider=provider)
 
@@ -97,6 +98,7 @@ def test_real_cli_compact_and_full_detail_preserve_canonical_todos(tmp_path, mon
                     if record["role"] == role:
                         assert actual[record["todo_id"]]["note"] == record["note"]
                         assert actual[record["todo_id"]]["status"] == record["status"]
+                        assert actual[record["todo_id"]]["task_class"] == record["task_class"]
             assert len(json.dumps(compact)) < len(json.dumps(full)) / 2
         assert not list((runtime / "goals" / "example" / "runs").glob("*.json*"))
     finally:

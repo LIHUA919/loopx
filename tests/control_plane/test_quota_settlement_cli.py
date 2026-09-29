@@ -2290,21 +2290,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert refresh_replay["idempotent_replay"] is True
     assert _classification_count(runtime, "validated_progress") == 1
 
-    fresh_guard_rc, fresh_guard = _run_cli(
-        registry_path,
-        runtime,
-        "quota",
-        "should-run",
-        "--codex-app",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--scan-path",
-        str(project),
-    )
-    assert fresh_guard_rc == 0, fresh_guard
-    assert fresh_guard["selected_todo"]["todo_id"] == successor_id
+    # Finish this Turn and its ACK before the next guard owns scheduler authority.
 
     spend_args = (
         "quota",
@@ -2392,6 +2378,14 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert fresh_turn_rc == 0, fresh_turn
     assert fresh_turn["selected_todo"]["todo_id"] == successor_id
+    stale_ack_rc, stale_ack = _run_cli(
+        registry_path, runtime, *settled_ack_hint["cli_args"],
+    )
+    assert stale_ack_rc == 1, stale_ack
+    assert stale_ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
+    assert stale_ack["write_performed"] is False
+    assert stale_ack["scheduler_state_mutated"] is False
+    assert _spend_run_count(runtime) == 1
 
 
 def _assert_material_monitor_writeback_can_add_workspace_before_spend(
@@ -4931,7 +4925,7 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
     assert all(not event["details"].get("settlement_effect_id") for event in events)
 
 
-def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
+def test_todoless_replan_keeps_scheduler_ack_outside_agent_settlement(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
@@ -4975,6 +4969,7 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     assert identity["replan_obligation_id"] == obligation_id
     assert "todo_id" not in identity
     cli_channel = guard["interaction_contract"]["cli_channel"]
+    assert cli_channel["settlement_plan"]["host_handoff"]["inside_agent_settlement"] is False
     plan_identity = cli_channel["settlement_plan"]["identity"]
     assert plan_identity["binding_kind"] == identity["binding_kind"]
     assert plan_identity["binding_id"] == identity["binding_id"]
@@ -4986,7 +4981,9 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     original_scheduler_ack_args = original_scheduler_ack_args[
         original_scheduler_ack_args.index("quota"):
     ]
-    assert original_scheduler_ack_args[:2] == ["quota", "scheduler-ack-current"]
+    # The bounded hint may return an explicit ACK instead of resolving current state.
+    assert original_scheduler_ack_args[0] == "quota"
+    assert original_scheduler_ack_args[1] in {"scheduler-ack", "scheduler-ack-current"}
     assert "--turn-instance-id" in original_scheduler_ack_args
     assert turn_instance_id in original_scheduler_ack_args
     actions = cli_channel["next_cli_actions"]
@@ -5082,6 +5079,11 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     ] == "autonomous_replan"
     assert _spend_run_count(runtime) == 1
 
+    # Scheduler handoff is outside agent settlement. Its ACK may update only
+    # scheduler state; repeated execution cannot change Goal state or accounting.
+    state_path = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    run_index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    before_state, before_runs = state_path.read_bytes(), run_index.read_bytes()
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
@@ -5089,13 +5091,22 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
     )
     assert ack_rc == 0, ack
     assert ack["ok"] is True
-    assert ack["mode"] == "scheduler-ack-current"
-    assert ack["status"] == "heartbeat_settled_skip"
-    assert ack["idempotent_replay"] is True
-    assert ack["write_performed"] is False
-    assert ack["scheduler_state_mutated"] is False
-    assert ack["quota_spend_performed"] is False
+    assert ack["mode"] in {"scheduler-ack", "scheduler-ack-current"}
+    assert ack["registry_mutated"] is False
     assert ack["appended"] is False
+    scheduler_path = ack.get("scheduler_state_path")
+    scheduler_bytes = Path(scheduler_path).read_bytes() if scheduler_path else None
+    ack_replay_rc, ack_replay = _run_cli(
+        registry_path, runtime, *original_scheduler_ack_args,
+    )
+    assert ack_replay_rc == 0, ack_replay
+    assert ack_replay["ok"] is True
+    assert ack_replay["registry_mutated"] is False
+    assert ack_replay["appended"] is False
+    assert state_path.read_bytes() == before_state
+    assert run_index.read_bytes() == before_runs
+    if scheduler_path:
+        assert Path(scheduler_path).read_bytes() == scheduler_bytes
     assert _spend_run_count(runtime) == 1
 
     fresh_turn_id = "turn-autonomous-replan-settlement-2"
