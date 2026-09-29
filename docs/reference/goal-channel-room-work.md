@@ -183,6 +183,12 @@ Supporting that profile must first bind the existing Todo head/receipt owner to
 the lifetime contract; a room adapter cannot bypass the codec gate or substitute
 provider incarnation/revision for Goal identity. See the
 [Goal-instance owner boundary](../architecture/rfcs/goal-instance-identity-and-orphan-recovery-v0.md#roadmap-placement-and-contract-cooperation).
+The current Goal-id claim wire now rejects any explicit `goal_ref` property,
+including null, before provider or old-receipt access. Previously that field was
+ignored, so both a fresh claim and a same-key replay could look lifetime-bound
+without actually checking the instance. Existing callers that omit the field
+retain their behavior; supplying an unqualified lifetime reference is a
+machine-enforced protocol failure, not optional guidance or instance support.
 
 To carry an inspected reference, repeat `--artifact-ref '<viking://...>'` up to
 eight times. Only explicitly requested references inside the current configured

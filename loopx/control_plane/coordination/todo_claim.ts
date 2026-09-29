@@ -142,6 +142,12 @@ function decisionFailure(
   };
 }
 
+/** The legacy claim contract must never imply unimplemented lifetime binding. */
+export function unqualifiedGoalRefClaimFailure(value: object): CoordinationTodoClaimResult | null {
+  return Object.hasOwn(value, "goal_ref") ? failure("goal_ref_claim_contract_unqualified",
+    "This claim contract does not bind the head and operation receipt to GoalRef; a qualified lifetime-bound claim owner is required.") : null;
+}
+
 function rejectInvalidClaimActor(
   input: CoordinationTodoClaimInput,
 ): ClaimRejection {
@@ -337,6 +343,8 @@ export async function executeCoordinationTodoClaim(
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
+    const scopeFailure = unqualifiedGoalRefClaimFailure(rawInput);
+    if (scopeFailure !== null) return scopeFailure;
     input = {
       ...rawInput,
       goal_id: requireAuthorityStoreId(rawInput.goal_id, "goal id"),

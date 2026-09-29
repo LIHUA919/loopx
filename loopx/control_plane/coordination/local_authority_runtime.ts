@@ -63,6 +63,7 @@ import {
 import {
   COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
   executeCoordinationTodoClaim,
+  unqualifiedGoalRefClaimFailure,
 } from "./todo_claim.ts";
 import {
   COORDINATION_TODO_CREATE_RESULT_SCHEMA,
@@ -1016,6 +1017,9 @@ export async function claimLocalCoordinationTodo(
         input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
+    const scopeFailure = unqualifiedGoalRefClaimFailure(input);
+    if (scopeFailure !== null) return {...scopeFailure, source_authority: null,
+      decision_read_from_provider: false, legacy_fallback_used: false};
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {

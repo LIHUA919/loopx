@@ -222,3 +222,33 @@ def test_scope_revoked_during_provider_preflight_is_rechecked_before_claim(setup
     denied = claim(changed_args, "agent-a", before, "room-preflight-revoked")
     assert revoked and not denied["canonical_claim_accepted"], denied
     assert snapshot(args)["provider_revision"] == before and not room.messages
+
+
+@pytest.mark.parametrize("has_receipt", [False, True])
+@pytest.mark.parametrize("goal_ref", [None, "invalid", {"goal_id": GOAL, "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}])
+@pytest.mark.parametrize("wire_version", [0, 1])
+def test_legacy_claim_wire_cannot_silently_accept_goal_ref(setup, has_receipt, goal_ref, wire_version):
+    import hashlib
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    args, room, _ = setup
+    original_revision = snapshot(args)["provider_revision"]
+    key = "room-unqualified-goal-ref"
+    if has_receipt:
+        assert claim(args, "agent-a", original_revision, key)["canonical_claim_accepted"]
+    before = snapshot(args)["provider_revision"]
+    packet = {"schema_version": "loopx_local_coordination_todo_claim_request_v1",
+        "runtime_root": str(args["runtime_root"]), "goal_id": GOAL, "todo_id": TODO,
+        "role": "agent", "claimed_by": "agent-a", "actor_agent_id": "agent-a",
+        "registered_agents": ["agent-a", "agent-b"],
+        "registry_source": {"path": str(args["registry_path"]),
+            "sha256": hashlib.sha256(args["registry_path"].read_bytes()).hexdigest()},
+        "operation_id": key, "expected_provider_revision": original_revision,
+        "lease_request": None, "observed_at": "2026-09-29T00:00:00Z", "dry_run": False,
+        "goal_ref": goal_ref}
+    if wire_version == 0:
+        packet["schema_version"] = "loopx_local_coordination_todo_claim_request_v0"
+        packet.pop("registry_source")
+    result = effect_runtime_result("coordination.local_authority.todo_claim", packet)
+    assert result["status"] == "failed" and result["reason_code"] == "goal_ref_claim_contract_unqualified", result
+    assert result["decision_read_from_provider"] is False
+    assert snapshot(args)["provider_revision"] == before
