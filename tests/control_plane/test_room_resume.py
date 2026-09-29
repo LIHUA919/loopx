@@ -175,6 +175,12 @@ def test_changes_during_retrieval_discard_context_and_references(recalled, chang
     assert not result["ok"], result
     assert result["private_context"] is None and result["artifact_references"] == []
     assert provider.calls == 1 and not room.messages
+    if change in {"actor", "binding", "route"}:
+        assert "current_quota" not in result and "work_projection" not in result
+    if change == "user_gate":
+        assert result["status"] == "authority_changed"
+        assert result["current_quota"]["should_run"] is False
+        assert result["work_projection"]["counts"]["user_gates"] == 1
     if change not in {"canonical_revision", "user_gate"}:
         assert snapshot(args)["provider_revision"] == before
 
@@ -255,7 +261,9 @@ def test_executing_cli_dispatch_returns_private_context_without_room_delivery(re
 
 def test_exact_instance_profile_fails_closed_before_retrieval(recalled):
     from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+    from loopx.control_plane.coordination.local_authority import claim_canonical_todo_if_promoted
     args, room, _, kwargs, provider, _ = recalled
+    before = snapshot(args)["provider_revision"]
     source = json.loads(args["registry_path"].read_text())
     source.update(profile_id="source_session_v1", session_bindings=[], session_receipts=[], lifetime_receipts=[])
     source["goals"][0].update(goal_instance_id="ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", status="active")
@@ -264,3 +272,10 @@ def test_exact_instance_profile_fails_closed_before_retrieval(recalled):
         tx.commit(tx.payload_copy())
     result = resume.run_room_resume(**kwargs, execute=True, provider=provider)
     assert not result["ok"] and provider.calls == 0 and result["private_context"] is None and not room.messages
+    # The underlying current Todo facade is also profile-gated. A room adapter
+    # must not bypass this owner or infer a Goal instance from its provider key.
+    with pytest.raises(ValueError, match="source_session_v1"):
+        claim_canonical_todo_if_promoted(registry_path=args["registry_path"], runtime_root=args["runtime_root"],
+            goal_id=GOAL, todo_id=TODO, role="agent", claimed_by="agent-a", actor_agent_id="agent-a",
+            dry_run=False, operation_id="exact-scope-denied", expected_provider_revision=before)
+    assert snapshot(args)["provider_revision"] == before

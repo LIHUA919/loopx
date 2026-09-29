@@ -46,3 +46,18 @@ test("reconnect discards context when canonical revision, gate, ownership or sco
   assert.equal(projectRoomResumeReadback({...readback, recall: {ok: true, status: "provider_unavailable",
     context: {guidance: []}}}).context_usable, false);
 });
+
+test("healthy no-work/gated readback is fresh state, while missing scope proof fails closed", () => {
+  const empty = projectRoomResumeReadback({...readback, after_quota: {...quota, selected_todo: null, should_run: false}});
+  assert.equal(empty.authority_observation_stable, false);
+  assert.equal(empty.context_usable, false);
+  assert.deepEqual(empty.artifact_references, []);
+  for (const delta of [{before_scope: null}, {after_scope: null},
+    {after_projection: {...projection, source_revision: null}}]) {
+    assert.throws(() => projectRoomResumeReadback({...readback, ...delta}));
+  }
+  const unverified = projectRoomResumeReadback({...readback, recall: {...readback.recall,
+    application: {receipt: {...readback.recall.application.receipt, result_readback_verified: false}}}});
+  assert.equal(unverified.context_usable, false);
+  assert.deepEqual(unverified.artifact_references, []);
+});

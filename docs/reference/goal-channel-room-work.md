@@ -171,9 +171,18 @@ receipt. It checks current source route, Agent registration, exact channel,
 Bot identity and configured memory scope, then reads canonical state and quota.
 After retrieval it checks those observations again. A changed binding, scope,
 Todo revision, selected work or gate discards the context and references. A
-provider outage or disabled configuration leaves the fresh LoopX observations
+failed scope/readback check also omits every earlier quota/projection snapshot;
+those observations are not returned as current. A healthy fresh observation
+with no selected work can still show the current gate while discarding context.
+A provider outage or disabled configuration leaves the fresh LoopX observations
 available with `status=context_unavailable`; it does not manufacture a user gate.
 Exact-instance source-session profiles remain unsupported and fail closed.
+The current direct canonical Todo facade is profile-gated too: its witnessed
+claim wire and provider receipts identify `goal_id`, without an exact GoalRef.
+Supporting that profile must first bind the existing Todo head/receipt owner to
+the lifetime contract; a room adapter cannot bypass the codec gate or substitute
+provider incarnation/revision for Goal identity. See the
+[Goal-instance owner boundary](../architecture/rfcs/goal-instance-identity-and-orphan-recovery-v0.md#roadmap-placement-and-contract-cooperation).
 
 To carry an inspected reference, repeat `--artifact-ref '<viking://...>'` up to
 eight times. Only explicitly requested references inside the current configured

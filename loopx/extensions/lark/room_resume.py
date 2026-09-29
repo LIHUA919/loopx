@@ -104,5 +104,10 @@ def run_room_resume(*, registry_path: Path, authority_root: Path, broker_root: P
             private_context=recalled.get("context") if readback["context_usable"] else None)
         return packet
     except (OSError, RuntimeError, TypeError, ValueError):
+        # Scope/readback failure invalidates every earlier observation, including
+        # the private quota packet. Do not label a pre-retrieval read "current".
+        packet.pop("current_quota", None)
+        packet.pop("work_projection", None)
+        packet.pop("readback", None)
         return {**packet, "ok": False, "status": "rejected", "private_context": None,
             "artifact_references": [], "blocker": "resume_scope_unavailable"}
