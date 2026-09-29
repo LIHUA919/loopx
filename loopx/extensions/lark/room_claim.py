@@ -63,7 +63,7 @@ def _read(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise RoomClaimCallbackError("offer_unavailable")
     try:
-        p = json.loads(path.read_text())
+        p = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(p, dict) or p.get("schema_version") != ROOM_CLAIM_OFFER_RECORD_SCHEMA:
             raise ValueError("invalid offer")
         normalized = effect_runtime_result("goal_channel.work.claim_request", p["request"])
