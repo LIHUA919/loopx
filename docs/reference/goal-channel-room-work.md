@@ -208,12 +208,24 @@ original `work claim` tuple/key; resume itself never replays a work command.
 ## Remaining qualification
 
 The new checks use synthetic Lark transport and real disposable File/SQLite
-stores, including source CLI projection and direct CLI ownership readback.
+stores. Two independent source CLI processes, each served by a separate TS
+runtime, compete at the same canonical revision. One accepts the claim; a new
+client/runtime recovers its exact receipt without another transition or card.
+A separate direct CLI reads current ownership. This proves the supported local
+process boundary; each client still uses the trusted local Agent identity model.
 They are not evidence of a real room, two independently authenticated hosts,
 a live daemon reconnect, or OpenViking provider qualification. Those checks need
 an explicitly authorized non-production room, actor bindings and read-only
 resource scope. Existing shared authority and provisioning tasks retain their
 ownership; this stage does not promote or deploy them.
+
+Source-session activation is a later owner boundary, not a prerequisite for
+qualifying this legacy-profile local stage. Its lifetime-bound head and
+operation receipts, retirement serialization and old-writer fencing belong to
+the existing [shared authority](../architecture/rfcs/shared-goal-authority-state-provider-v0.md)
+and [Goal-instance](../architecture/rfcs/goal-instance-identity-and-orphan-recovery-v0.md)
+contracts. Keep that profile closed until those owners qualify the full path;
+adding a GoalRef to a room request cannot provide that qualification.
 
 To disable publication, stop issuing the optional `work ... --execute` commands
 or disconnect the exact connection through the existing Goal Channel connection

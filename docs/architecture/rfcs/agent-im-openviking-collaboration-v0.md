@@ -303,11 +303,23 @@ by current verified recall receipts. It does not send private context to a room
 or accept/renew work. Source-session exact-instance profiles and arbitrary
 external artifact targets remain outside this local qualification stage.
 
-Validation uses synthetic Lark transport with disposable real local stores and
-source CLI readback. Real non-production room qualification, independent hosts,
+Validation uses synthetic Lark transport with disposable real local stores.
+Independent source CLI processes with separate TS runtimes compete for one
+File/SQLite claim; a fresh process replays its exact receipt, and direct CLI
+readback verifies current ownership. These local clients use trusted registered
+Agent identities; independently authenticated remote hosts remain unqualified.
+Real non-production room qualification, independent hosts,
 daemon reconnect, native callback qualification, external artifact-target access and scoped live
 OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
 synthetic checks do not close those requirements or authorize promotion.
+
+The legacy-profile local stage can be qualified without enabling source-session
+business effects. Exact GoalRef support must first qualify the existing shared
+authority head/receipt owner, retirement and caller/writer fences under the
+[Goal-instance contract](goal-instance-identity-and-orphan-recovery-v0.md).
+That later profile boundary does not expand this composition stage into a
+parallel authority migration. Existing claim wires reject explicit unqualified
+GoalRef intent before provider or historical-receipt access.
 
 ## Open Questions
 
