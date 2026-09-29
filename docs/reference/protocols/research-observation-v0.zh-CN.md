@@ -4,7 +4,8 @@ Explore 拥有这一可选证据契约。第一个写入入口是 `loopx explore
 `loopx explore summary` 与现有 Lark Explore 节点摘要显示同一派生事实。
 本批交付 M1 证据基础和 M2 **只读 shadow**。M3 开发边界增加可选执行 attribution
 与 explicit-only live replan 门禁，以及 legacy/native File/SQLite Todo closeout
-校验。Retirement/resumption 及完整 status/Explore 展示仍未完成。
+校验、来源限定的义务退役、lease-fenced 恢复和共享 status/Explore 展示。
+Maintainer review 集成与现场模型/科研、远端 Lark qualification 仍待完成。
 
 ## 录入与读回
 

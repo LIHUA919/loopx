@@ -5,7 +5,9 @@ Explore owns this optional evidence contract. Its first consumer is
 node summary render the same derived facts. This is the M1 evidence substrate
 and M2 **read-only shadow**. The M3 development boundary adds optional execution
 attribution, an explicit-only live replan gate, and legacy/native File/SQLite
-Todo closeout checks. Retirement/resumption and full status/Explore presentation remain open.
+Todo closeout checks, source-qualified duty retirement, lease-fenced resumption,
+and shared status/Explore presentation. Maintainer-reviewed integration and live
+model/scientific or remote Lark qualification remain open.
 
 ## Record and read back
 
