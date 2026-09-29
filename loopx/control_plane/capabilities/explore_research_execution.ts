@@ -287,10 +287,23 @@ export function validateResearchExecution(params: JsonObject): JsonObject {
   const lineage = requireJsonObject(observation.execution_lineage, "execution_lineage");
   const todo = requireJsonObject(params.todo, "canonical execution Todo");
   const node = (params.nodes as JsonObject[]).find(row => row.node_id === observation.explore_node_id);
-  const gap = researchCompositionGaps(params).find(row => row.gap_id === lineage.gap_id);
   const reject = (reason: string): never => {
     throw new EffectRuntimeRequestError(`research execution ${lineage.replan_obligation_id}: ${reason}; read the current Todo and Explore summary before explore observe`);
   };
+  const frontier = params.frontier == null ? null : requireJsonObject(params.frontier, "execution frontier");
+  if (frontier && (frontier.schema_version !== "research_composition_frontier_v0"
+    || frontier.goal_id !== params.goal_id || frontier.agent_id !== params.agent_id)) {
+    reject("the current execution frontier must belong to this Goal and actor");
+  }
+  // M2 diagnostics retain their cold meaning. M3 uses the same current
+  // canonical lineage join as status and closeout, including retained Todos.
+  const live = frontier?.enabled === true;
+  const gap = (live ? array(frontier!.lineage_gaps) : researchCompositionGaps(params))
+    .find(row => row.gap_id === lineage.gap_id);
+  const uncovered = live ? !!gap && ["pending", "scheduled"].includes(String(gap.status))
+    && gap.obligation_id === lineage.replan_obligation_id
+    && object(frontier!.policy).coverage_scope_id === object(observation.progress).coverage_scope_id
+    : gap?.state === "pending";
   if (lineage.goal_id !== params.goal_id || lineage.agent_id !== params.agent_id) {
     reject("Goal or actor differs from execution lineage");
   }
@@ -308,7 +321,7 @@ export function validateResearchExecution(params: JsonObject): JsonObject {
     reject("Todo must bind exactly this experiment node");
   }
   if (node?.node_kind !== "experiment" || (node.agent_id && node.agent_id !== lineage.agent_id)
-    || !gap || gap.state !== "pending"
+    || !gap || !uncovered
     || !(gap.experiment_node_ids as string[]).includes(String(observation.explore_node_id))
     || JSON.stringify(gap.input_observations) !== JSON.stringify(observation.input_observations)) {
     reject("the experiment must cover this pending gap's current exact input observations");

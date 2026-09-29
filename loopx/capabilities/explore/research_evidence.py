@@ -105,21 +105,33 @@ def append_research_observation(
             if registry_path is None or runtime_root is None:
                 raise ValueError("research execution lineage requires the selected registry and source runtime")
             from ...todos import list_goal_todos
+            from ...history import load_registry
+            from ...materials import find_registry_goal
+            from .research_frontier import build_research_composition_frontier, read_research_todo_history
 
             lineage = canonical["execution_lineage"]
-            context = list_goal_todos(
-                registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
-                role="agent", todo_id=lineage["successor_todo_id"],
-            )
-            todos = context.get("todos") or []
+            goal = find_registry_goal(load_registry(registry_path), goal_id) or {}
+            harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+            policy = _research_result("explore.research.composition_policy", {"harness": harness})
+            candidate_sources = [{"node_id": event["result_id"], "research_observation": event["research_observation"]}
+                                 for event in events if event.get("research_observation")]
+            frontier = None
+            if policy["enabled"]:
+                history = read_research_todo_history(runtime_root=runtime_root, goal=goal)
+                frontier = build_research_composition_frontier(projection, candidate_sources=candidate_sources,
+                    harness=harness, todos=history, agent_id=agent_id)
+                todos = [todo for todo in history if todo["todo_id"] == lineage["successor_todo_id"]]
+            else:
+                context = list_goal_todos(
+                    registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
+                    role="agent", todo_id=lineage["successor_todo_id"],
+                )
+                todos = context.get("todos") or []
             todo = todos[0] if len(todos) == 1 else {}
             _research_result("explore.research.validate_execution", {
                 "goal_id": goal_id, "agent_id": agent_id, "observation": canonical,
                 "nodes": projection["nodes"], "edges": projection["edges"],
-                "candidate_sources": [
-                    {"node_id": event["result_id"], "research_observation": event["research_observation"]}
-                    for event in events if event.get("research_observation")
-                ],
+                "candidate_sources": candidate_sources, "frontier": frontier,
                 "todo": _research_todo_facts(todo),
             })
         event = build_explore_node_event(

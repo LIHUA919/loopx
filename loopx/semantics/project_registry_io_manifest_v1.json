@@ -166,6 +166,14 @@
       "classification": "codec_api"
     },
     {
+      "site": "loopx/capabilities/explore/research_evidence.py::<module>.append_research_observation::codec_read:load_registry#1",
+      "line": 113,
+      "column": 39,
+      "kind": "codec_read",
+      "api": "load_registry",
+      "classification": "codec_api"
+    },
+    {
       "site": "loopx/capabilities/explore/research_frontier.py::<module>.hold_research_completion_evidence::codec_read:load_registry#1",
       "line": 199,
       "column": 31,
