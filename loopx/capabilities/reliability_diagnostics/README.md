@@ -196,9 +196,11 @@ replay — are not consumed.
 For an operator-run offline export/delete/restore rehearsal, use the
 [local retention reference (v0)](docs/local-retention-v0.md). It preserves whole
 ledger bytes and negative integrity evidence, requires a frozen writer and an
-owner-selected finite retention period, and does not implement automatic TTL
-or qualify a live deployment. It also documents the current filename-alias
-boundary; ambiguous ownership must hold deletion.
+owner-selected finite retention period, and verifies the provider directory
+matches the CLI's canonical runtime layout before operating on a regular file.
+It does not implement automatic TTL or qualify a live deployment. It also
+documents the current filename-alias boundary; ambiguous ownership must hold
+deletion.
 
 ## Validation
 

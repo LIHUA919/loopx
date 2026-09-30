@@ -63,10 +63,19 @@ worker. Unsetting optional variables alone is insufficient.
 The POSIX recipe below operates on **one frozen, owner-authorized ledger**.
 Set `diagnostic_runtime` to its explicit runtime root, `diagnostic_goal` to its
 exact goal id and `diagnostic_as_of` to one timezone-aware replay timestamp.
+Set `diagnostic_provider_ledger_dir` to the resolved ledger directory recorded
+in the frozen provider configuration; the current shell environment is not
+evidence of what an already running observer used.
 Use the same installed `loopx` revision throughout and record `loopx --version`.
-If the DSH provider has a custom `LOOPX_DSH_SHADOW_OBSERVER_LEDGER_DIR`, verify
-that its parent is the runtime root used here. Do not infer a ledger from the
-current project or the CLI's default runtime.
+This v0 recipe supports the canonical layout only:
+`<runtime-root>/reliability_diagnostics/<goal-file>.ndjson`. The provider's
+resolved directory must match `<runtime-root>/reliability_diagnostics`, including
+when `LOOPX_DSH_SHADOW_OBSERVER_LEDGER_DIR` was explicitly set. An arbitrary
+custom directory's parent does not supply this mapping: the CLI always inserts
+`reliability_diagnostics`. The preflight below rejects that mismatch before
+CLI readback or export. Do not move, re-ingest or delete an unsupported ledger
+to make this recipe pass; retain it privately for an owner-approved recovery
+path. Do not infer a ledger from the current project or default runtime.
 
 Filename normalization currently replaces `:` with `_`, and some filesystems
 ignore case. Distinct goal ids can therefore share a filename. The ownership
@@ -79,8 +88,19 @@ set -eu
 : "${diagnostic_runtime:?set the frozen ledger runtime root}"
 : "${diagnostic_goal:?set the exact goal id}"
 : "${diagnostic_as_of:?set a fixed timezone-aware replay timestamp}"
+: "${diagnostic_provider_ledger_dir:?set the frozen provider ledger directory}"
+python3 - "$diagnostic_runtime" "$diagnostic_provider_ledger_dir" <<'PY'
+import sys
+from pathlib import Path
+expected = Path(sys.argv[1]).expanduser() / "reliability_diagnostics"
+provider = Path(sys.argv[2]).expanduser()
+if provider.resolve() != expected.resolve():
+    raise SystemExit("unsupported provider ledger directory: canonical runtime layout required")
+if provider.is_symlink():
+    raise SystemExit("symlink ledger directory: hold offline operations")
+PY
 umask 077
-diagnostic_archive=$(mktemp -d)
+diagnostic_archive=$(mktemp -d "${TMPDIR:-/tmp}/loopx-diagnostics.XXXXXX")
 loopx --version > "$diagnostic_archive/version.txt"
 loopx --runtime-root "$diagnostic_runtime" --format json reliability-diagnostics \
   status --goal-id "$diagnostic_goal" --with-receipt --as-of "$diagnostic_as_of" \
@@ -88,7 +108,8 @@ loopx --runtime-root "$diagnostic_runtime" --format json reliability-diagnostics
 diagnostic_ref=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ledger_ref"])' \
   "$diagnostic_archive/before.json")
 diagnostic_ledger="$diagnostic_runtime/$diagnostic_ref"
-test ! -L "$diagnostic_ledger" && test -f "$diagnostic_ledger"
+test ! -L "$diagnostic_ledger" || { printf '%s\n' 'symlink ledger: hold offline operations' >&2; exit 1; }
+test -f "$diagnostic_ledger" || { printf '%s\n' 'regular ledger required: hold offline operations' >&2; exit 1; }
 python3 - "$diagnostic_ledger" "$diagnostic_goal" <<'PY'
 import json, sys
 from pathlib import Path
@@ -161,11 +182,16 @@ uv run --extra test python examples/reliability_diagnostics/ledger-retention-smo
 python examples/reliability_diagnostics/ledger-retention-smoke.py --installed
 ```
 
-The smoke runs the real CLI against a disposable filesystem, exports and
-replays a degraded fixture and a refused-control-input ledger, deletes the
-source, verifies invalid missing-ledger evidence, then restores exact bytes and
-receipt/projection. It also checks export tampering detection, overwrite refusal
-and unchanged synthetic sibling state. This proves offline recovery mechanics;
+The smoke executes this literal shell block with the selected interpreter's
+real CLI against disposable state. It restores degraded and refused-control
+input ledgers with identical bytes and receipt/projection, including invalid
+missing-ledger readback after deletion. Symlinks, foreign/mixed ownership,
+malformed input and normalized filename collisions stop before ledger export;
+source/copy tampering and occupied restore destinations are rejected. Synthetic
+sibling state stays unchanged. The existing DSH producer's real resolver and
+file appender also write both canonical and arbitrary custom layouts: the
+canonical ledger round-trips through the CLI, while an unsupported directory
+is held before this recipe's operations. This proves offline recovery mechanics;
 it measures neither observer CPU/RSS/bytes/latency nor actual harness lifecycle
 or live C0/C1 non-interference. Record the revision, commands, failures/skips,
 operator stop evidence and policy acceptance in the owning issue before a pilot.
@@ -191,8 +217,13 @@ public-safe 聚合。保留全部失败标记，不筛选“成功”行。
 1. 在下一次 harness 启动前 unset 三个必需变量；这不会卸载已运行进程的 hooks。由 harness
    owner 按已授权生命周期 detach/dispose observer，等待最后 flush，并确认无 observer/ingest
    writer。若会干扰活跃 worker，则延期；retention 不能取得 stop/resume/retry worker 的权限。
-2. 明确 `diagnostic_runtime`、准确的 `diagnostic_goal` 和固定带时区 `diagnostic_as_of`，记录
-   同一安装版本。自定义 DSH ledger 目录须与此 runtime 对齐，不能依赖当前项目或默认路径。
+2. 明确 `diagnostic_runtime`、准确的 `diagnostic_goal` 和固定带时区 `diagnostic_as_of`，并把
+   冻结 provider 配置中记录的真实目录填入 `diagnostic_provider_ledger_dir`，记录同一安装版本。
+   本 v0 只支持 canonical 布局：该目录须与 `<runtime-root>/reliability_diagnostics` 对应。
+   任意 custom directory 的 parent 无法建立映射，因为 CLI 会固定添加 `reliability_diagnostics`；
+   preflight 会在 CLI 读回和导出前拒绝不匹配或 symlink directory。保留原件供另行授权的恢复
+   路径使用，不要移动、重新 ingest 或删除文件来绕过此 hold，也不能依赖当前 shell 的 env、
+   当前项目或默认路径猜测实际目录。
 3. 使用 recipe 的归属检查；目前 `:` 会被映射为 `_`，部分文件系统忽略大小写，不同 goal
    可能共用文件名。混合、外来或不可解析行须暂停删除，另行调查；此方案没有证明租户隔离。
 4. 完整导出、记录 SHA-256 和固定时间 receipt/projection，在隔离副本里读回并比较；删除前
@@ -208,8 +239,11 @@ public-safe 聚合。保留全部失败标记，不筛选“成功”行。
 不是字节保真恢复 API：它可能用新的 violation marker 替代非法输入。恢复整个冻结文件到
 不存在的目标，才能保留 stats、缺口、失败标记及损坏字节的原始意义。
 
-上面的两条验证命令只在临时合成状态中运行真实 CLI。`--installed` 要求非 editable 的 wheel
-安装并拒绝 checkout import；演练 degraded 和拒绝控制输入的 invalid ledger，验证导出副本、
-丢失后的 invalid 证据、恢复前后完全一致、篡改检测、拒绝覆盖和其它合成状态不变。它只证明
+上面的两条验证命令在临时合成状态中执行实际 shell block 和所选解释器的真实 CLI。
+`--installed` 要求非 editable 的 wheel 安装并拒绝 checkout import；演练 degraded 和拒绝
+控制输入的 invalid ledger，验证导出副本、丢失后的 invalid 证据和恢复前后完全一致。
+symlink、foreign/mixed ownership、损坏行和文件名碰撞在导出 ledger 前拒绝；源／副本篡改、
+已占用恢复目标也被拒绝，其它合成状态不变。真实 DSH producer 的 resolver 与 file appender
+分别写入 canonical 和任意 custom 布局：前者经 CLI 完整读回，后者在 recipe 操作前 hold。它只证明
 离线恢复机制，没有测 observer CPU/RSS/bytes/latency，也未验真实 harness 停机或 live C0/C1。
 pilot 前须在所属 issue 记录 revision、命令、通过/失败/跳过、停写证据与 policy 接受决定。
