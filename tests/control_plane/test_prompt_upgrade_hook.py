@@ -167,8 +167,16 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     assert envelope["compaction"]["budget_bytes"] == 8192 + 1536
     assert envelope["compaction"]["hook_prompt_budget_bytes"] == 1536
     assert build_turn_envelope(baseline)["compaction"]["budget_bytes"] == 8192
+    assert baseline.get("turn_start_capability_hook_dispatch") is None
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert len(dispatch["required_reads"]) == 1
+    dispatched_read = dispatch["required_reads"][0]
+    assert dispatched_read["hook_id"] == "heartbeat.prompt_upgrade"
+    assert dispatched_read["capability_id"] == "automation-prompt-upgrade"
+    assert {key: dispatched_read[key] for key in hint} == hint
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet"}:
+        if key not in {"required_reads", "interaction_contract", "protocol_action_packet",
+                       "turn_start_capability_hook_dispatch"}:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline

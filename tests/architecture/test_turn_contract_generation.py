@@ -260,7 +260,9 @@ def test_new_independent_twin_cannot_hide_behind_generated_pair(monkeypatch):
     )
     assert counts is not None
     raw, generated, maintained, budget = map(int, counts.groups())
-    assert generated == 1 and raw == maintained + generated
+    # The Turn contract and content digest are the two verified generated
+    # twins. A new authored twin still consumes the independent module budget.
+    assert generated == 2 and raw == maintained + generated
     from loopx.semantics.inventory import SourceFile
 
     target = smoke["check_dual_runtime_twins"].__globals__
