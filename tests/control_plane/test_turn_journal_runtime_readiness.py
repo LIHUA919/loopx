@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Event
 from pathlib import Path
 from typing import Any
 
@@ -117,12 +118,16 @@ def test_runtime_fingerprint_rescans_when_a_snapshotted_file_disappears_while_re
     later.write_text("export const later = true;\n", encoding="utf-8")
     original_read_bytes = Path.read_bytes
     reads: list[str] = []
+    first_read_done = Event()
 
     def remove_later_after_first_read(path: Path) -> bytes:
+        if path == later:
+            assert first_read_done.wait(5), "first source read did not finish"
         reads.append(path.name)
         content = original_read_bytes(path)
         if path == first and later.exists():
             later.unlink()
+            first_read_done.set()
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
@@ -142,17 +147,22 @@ def _install_persistent_stat_read_churn(
     original_scan = effect_runtime._scan_runtime_source_files
     original_read_bytes = Path.read_bytes
     scans: list[tuple[str, ...]] = []
+    first_read_done = Event()
 
     def restore_then_scan(root: Path) -> tuple[str, ...]:
+        first_read_done.clear()
         later.write_text("export const later = true;\n", encoding="utf-8")
         files = original_scan(root)
         scans.append(files)
         return files
 
     def remove_later_after_first_read(path: Path) -> bytes:
+        if path == later:
+            assert first_read_done.wait(5), "first source read did not finish"
         content = original_read_bytes(path)
         if path == first:
             later.unlink()
+            first_read_done.set()
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
