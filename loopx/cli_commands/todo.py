@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from operator import itemgetter
 from pathlib import Path
 
@@ -84,6 +84,12 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+
+
+def _completion_hook_state_version(payload: Mapping[str, object], committed_at: str) -> str:
+    """Keep ordinary and terminal Todo writes distinct within one clock second."""
+    continuation = payload.get("completion_continuation")
+    return f"{committed_at}|{continuation}" if isinstance(continuation, str) else committed_at
 
 
 def _read_todo_turn_settlement(
@@ -692,6 +698,8 @@ def handle_todo_command(
         else:
             raise ValueError("unsupported todo command")
     except Exception as exc:
+        from ..usage_ping import capture_failure
+        capture_failure(exc)
         payload = todo_error_payload(args, exc)
     append_todo_rollout_event(
         payload,
@@ -764,7 +772,7 @@ def handle_todo_command(
                     goal_id=args.goal_id,
                     event_kind="todo_complete",
                     identity=identity,
-                    state_version=committed_at,
+                    state_version=_completion_hook_state_version(payload, committed_at),
                     committed_at=committed_at,
                     hooks=post_writeback_hooks,
                     projection_builder=post_writeback_projection_builder,
