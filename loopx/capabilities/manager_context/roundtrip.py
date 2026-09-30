@@ -7,7 +7,6 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from contextlib import ExitStack
 from datetime import datetime, timezone, timedelta
@@ -34,7 +33,6 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 
 from ...control_plane.collaboration.inbox import (
     _request_lock,
-    needs_conclusion as needs_conclusion,
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
@@ -266,9 +264,17 @@ def reply_status(root, row):
         path = _root(root) / "replies" / row["request_id"] / (phase + ".json")
         if not path.exists():
             continue
-        reply = _read(path)
         state_path = path.with_name(phase + ".delivery.json")
-        state = _read(state_path) if state_path.exists() else {}
+        try:
+            reply = _read(path)
+            state = _read(state_path) if state_path.exists() else {}
+        except (OSError, ValueError):
+            result.append({
+                "phase": phase, "status": "explicit_unverified",
+                "created_at": None, "delivered_at": None,
+                "error": "delivery_state_unreadable",
+            })
+            continue
         status = state.get("status", "queued")
         error = state.get("error")
         if status not in DELIVERY_STATUSES:
@@ -562,6 +568,10 @@ def _write_exact_return_state(
             else:
                 result.pop("admission", None)
             _write(context["state_path"], result)
+            if (result.get("status") == "delivered" and result.get("reply_verified") is True
+                    and current.get("status") != "delivered"):
+                from ...usage_ping import observe_verified_return
+                observe_verified_return()
 
 
 def _retry_state(state, now, *, error):
