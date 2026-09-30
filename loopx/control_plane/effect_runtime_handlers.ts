@@ -1,4 +1,6 @@
+import {manageNewGoalStorage} from "./coordination/local_authority_defaults.ts";
 import {projectDecisionNotice} from "./presentation/decision_notice.ts";
+import {normalizeResearchObservation, validateResearchAttribution, projectResearchFrontier} from "./capabilities/explore_research.ts";
 import {projectTodoSummary} from "./todos/summary_projection.ts";
 import {admitAutomationStart, confirmAutomationStart, manageAutomationCadence, projectCadenceSchedule} from "./quota/automation_cadence.ts";
 import {deliverShadowEntry} from "./coordination/shadow_entry_delivery.ts";
@@ -200,6 +202,7 @@ import {
 import { evaluateCoordinationTodoArchiveSelection } from "./coordination/todo_archive_selection.ts";
 import {evaluateStandingDecisionProjection} from "./todos/standing_decision.ts";
 import {evaluateDecisionScope} from "./todos/decision_scope.ts";
+import {agentPreferences} from "./capabilities/agent_preferences.ts";
 import {agentCapabilityMemory} from "./agents/capability_memory.ts";
 import {evaluateCapabilityGate} from "./agents/capability_gate.ts";
 import {projectCoordinationSource} from "./coordination/source_projection.ts";
@@ -230,6 +233,7 @@ import {
   normalizeManagerReturnDeliveryAttempt,
 } from "./collaboration/return_delivery.ts";
 import { decideCollaborationLifecycle } from "./collaboration/goal_instance_lifecycle.ts";
+import { inspectCollaborationInboxReceipts } from "./collaboration/inbox_receipts.ts";
 
 import { normalizeCollaborationRequest } from "./collaboration/semantic_request.ts";
 import {
@@ -475,6 +479,7 @@ export function createEffectRuntimeHandlers(
     ["todo.user_completion.plan", evaluateUserCompletion],
     ["agent.capability_gate.evaluate", evaluateCapabilityGate],
     ["agent.capability_memory", agentCapabilityMemory],
+    ["agent.preferences", agentPreferences],
     ["todo.archive.capture_dependencies", withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies)],
     ["agent.supervisor.plan_append", planSupervisorEventAppend],
     ["coordination.source.project", withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource)],
@@ -588,6 +593,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow)],
     ["coordination.local_authority.promote", promoteLocalCoordinationAuthority],
     ["coordination.authority_archive.manage", manageLocalAuthorityArchive],
+    ["coordination.local_authority.new_goal_storage", manageNewGoalStorage],
     ["coordination.local_authority.promotion_review", withCoordinationSourceTransfer("coordination.local_authority.promotion_review", reviewLocalCoordinationAuthorityPromotion)],
     ["coordination.local_authority.promotion_reviewed", executeReviewedCoordinationPromotion],
     ["coordination.local_authority.todo_continuation", continueLocalTodo],
@@ -746,6 +752,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       (params) => normalizeCollaborationRequest(params.request),
     ],
+    ["collaboration.inbox.inspect_receipts", inspectCollaborationInboxReceipts],
     [
       "collaboration.goal_instance.decide",
       (params) => decideCollaborationLifecycle(params),
@@ -858,6 +865,9 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", evaluateHostTodoCompletion],
     ["work_item.replan_settlement.project", projectReplanSettlementContract],
     ["work_item.replan_semantics.project", projectReplanSemantics],
+    ["explore.research.normalize", normalizeResearchObservation],
+    ["explore.research.validate_attribution", validateResearchAttribution],
+    ["explore.research.frontier", projectResearchFrontier],
   ["work_item.replan_history.project", projectReplanHistory],
   ["work_item.replan_history.project_snapshot", projectReplanHistorySnapshot],
     [
