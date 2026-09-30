@@ -260,7 +260,12 @@ def test_new_independent_twin_cannot_hide_behind_generated_pair(monkeypatch):
     )
     assert counts is not None
     raw, generated, maintained, budget = map(int, counts.groups())
-    assert generated == 1 and raw == maintained + generated
+    # Both reviewed generators now contribute one verified Python/TS pair.
+    from scripts.generate_semantic_bindings import verified_generated_paths as semantic_generated_paths
+
+    assert "loopx/control_plane/turn_driver/turn_contract_generated.py" in generator.verified_generated_paths()
+    assert "loopx/control_plane/content_digest.py" in semantic_generated_paths()
+    assert generated == 2 and raw == maintained + generated
     from loopx.semantics.inventory import SourceFile
 
     target = smoke["check_dual_runtime_twins"].__globals__

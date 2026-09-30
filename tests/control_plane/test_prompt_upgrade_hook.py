@@ -158,6 +158,13 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     receipt.write_bytes(contents)
     pending = build_live_quota_should_run_decision(status, **kwargs)
     assert pending["required_reads"][-1]["kind"] == "automation_prompt_upgrade"
+    assert "turn_start_capability_hook_dispatch" not in baseline
+    dispatch = pending["turn_start_capability_hook_dispatch"]
+    assert set(dispatch) == {"required_reads"}
+    assert len(dispatch["required_reads"]) == 1
+    assert dispatch["required_reads"][0]["kind"] == pending["required_reads"][-1]["kind"]
+    assert dispatch["required_reads"][0]["command"] == pending["required_reads"][-1]["command"]
+    assert pending["required_reads"][-1]["source"] == "turn_start_capability_hook"
     assert pending["interaction_contract"]["agent_channel"]["required_reads"] == pending["required_reads"]
     hint = pending["required_reads"][-1]
     assert len(hint["command"]) > 360
@@ -168,7 +175,8 @@ def test_live_decision_adds_only_existing_required_read_channel(tmp_path, monkey
     assert envelope["compaction"]["hook_prompt_budget_bytes"] == 1536
     assert build_turn_envelope(baseline)["compaction"]["budget_bytes"] == 8192
     for key in baseline.keys() | pending.keys():
-        if key not in {"required_reads", "interaction_contract", "protocol_action_packet"}:
+        if key not in {"required_reads", "interaction_contract", "protocol_action_packet",
+                       "turn_start_capability_hook_dispatch"}:
             assert pending.get(key) == baseline.get(key), key
     _set_fixture_prompt(path, database, desired)
     assert build_live_quota_should_run_decision(status, **kwargs) == baseline
