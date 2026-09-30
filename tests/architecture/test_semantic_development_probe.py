@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -344,6 +345,13 @@ def probe_cli(repository: Path) -> Path:
 
 
 def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
+    # The child executes copied sources under a disposable loopx/ package. Do
+    # not attribute those temporary files to the checkout's coverage artifact:
+    # shard artifacts are combined after pytest has removed the temp checkout.
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("COV_CORE_") and key != "COVERAGE_PROCESS_START"
+    }
     return subprocess.run(
         [
             sys.executable,
@@ -352,6 +360,7 @@ def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
             "HEAD",
         ],
         cwd=repository,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
