@@ -110,15 +110,15 @@ workspace、Codex Session 与持久 delegation operation。`delegation inspect` 
 规划投影会读回例如 `gpt-5.6-sol@xhigh`，start/resume 也把同一配置送入原 Session。
 这不扩大 requester grant，也不把 profile 冒充验收或结果返回回执。
 
-For a Codex binding, the delegation host also supplies one invocation-scoped
+By default, a Codex binding also supplies one invocation-scoped
 `loopx_delegation` stdio MCP server to every fresh or resumed worker Session.
 Its command pins the selected worker `agent_id`, workspace, Goal, registry,
 runtime and operator execution configuration before Codex starts. The model
 cannot select or rewrite those values. Codex receives the server through
 per-invocation configuration, so LoopX does not modify the user's global Codex
-MCP settings and a resumed worker keeps the same binding. The server is required
-for this managed worker route and its already identity-scoped tools are approved
-inside that route; failure to start the server rejects the Turn instead of
+MCP settings and a resumed worker keeps the same binding. When configured, the
+server and its already identity-scoped tools are approved inside that route;
+failure to start the server rejects the Turn instead of
 silently continuing without tools. The native tools are
 the collaboration and authorized delegation operations from that bound server;
 they do not add shell, Todo or external-action authority.
@@ -129,7 +129,7 @@ shell-only coordination. Both surfaces call the same `Delegations` service and
 preserve the same binding, operation and acceptance rules; the shell path is
 not a second control-plane implementation.
 
-中文：Codex binding 会为每个新建或续接的 worker Session 注入一次调用范围内的
+中文：Codex binding 默认会为每个新建或续接的 worker Session 注入一次调用范围内的
 `loopx_delegation` stdio MCP server。启动前，host 已固定 worker `agent_id`、
 workspace、Goal、registry、runtime 与 operator execution configuration；模型不能
 选择或改写这些值。该配置不会修改用户的全局 Codex MCP 设置，也不会授予 shell、
@@ -223,7 +223,11 @@ than maintaining separate rules.
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead
-turn. The conversation remains persistent independently of whether autonomous
+turn; for a Goal Chat LoopX lead that is the Chat service's one-time wake after
+acceptance, described in [Goal Chat continuation](goal-chat-continuation.md).
+That wake returns to the conversation whose Turn started the operation, which
+the trusted Chat host records beside the operation; the model supplies no
+routing. The conversation remains persistent independently of whether autonomous
 LoopX mode is enabled. Dashboard, CLI/managed Turn and Lark keep their existing
 conversation and runtime owners; they may consume the shared bounded route
 projection described below, but they do not get another grant or scheduler.
@@ -400,7 +404,7 @@ of the new tool description, not injected into those older threads' shared promp
 仍显式调用 `resume --execute`。分页回读会重新核验 accepted，单条失效显示
 `unavailable`，不能当成失败重派或静默隐藏。`has_more` 表示还有下一页，
 `page_readback_complete` 只表示本页是否均成功读取；二者都不代表整个团队已完成。
-此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。
+此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。Goal Chat LoopX 模式的协调员由 Chat 服务在结果被接受后唤醒一次，且只回到「启动该操作的回合所属会话」——该绑定由受信任的 Chat 宿主写在操作记录旁，模型不提供路由；见 [Goal Chat 续跑](goal-chat-continuation.md)。
 
 ### Check a binding before new work
 
@@ -409,6 +413,25 @@ workspace, host, model/effort and validator arguments as an actual delegation,
 through `turn run-once` without `--execute`. It creates no request or Turn,
 does not invoke the host and spends no quota. Host arguments that enable
 execution or retarget the selected work are rejected before the subprocess.
+
+Inspection and its Turn preview load their existing command registrars, not
+unrelated CLI owners. One inspection reuses only the executable TS source
+revision within that logical request; it does not cache binding, acceptance,
+provider revision or validation-file facts. Those facts are still re-read to
+reject drift, and the next observation resolves its own source revision. The
+preview remains a pinned child process with the real workspace scan; CLI, MCP
+and Team execution consume the same unchanged projection. There is no new
+setting, scheduler or grant. Diagnose cold process/fixture cost separately from
+the useful observation, following the
+[measurement and budget rules](../development/testing-and-quality.md#roadmap-aligned-optimization);
+functional success does not waive an original latency qualification.
+
+中文：预检与其 Turn 预览只加载既有命令注册，不加载无关 CLI owner。同一次逻辑
+观察仅复用可执行 TS 源码版本，不缓存 binding、验收、provider revision 或校验
+文件事实；这些事实仍重读以拒绝漂移，下次观察重新解析源码版本。预览仍在固定
+release 的子进程中扫描真实工作树；CLI、MCP 与团队执行消费不变的共享投影，不
+增加设置、调度器或授权。按上述测量与预算规则区分冷进程／fixture 开销和真实
+观察成本；功能检查通过不能豁免原延迟验收。
 
 The typed result keeps three facts separate: `turn_eligible` is the current
 Turn decision for that exact Todo; `acceptance_ready` is the current pinned
@@ -422,6 +445,40 @@ Normal start still reads current admission and independently validates output.
 If the existing Turn rejects preflight, inspection reports that error rather than
 manufacturing a launchable result; no request is created.
 
+`acceptance_reason_code` and `acceptance_next_action` retain bounded diagnostics
+from the same TS validation plan; they do not change admission or grant repair
+authority. A current matching task can report
+`independent_delegation_validation_required`,
+`completion_validation_declaration_unavailable`, or
+`completion_validation_declaration_mismatch`, with
+`review_original_todo_validation`. A ready declaration with unavailable pinned
+files reports `validation_files_unavailable` and `restore_original_validation_files`.
+Missing, stale, foreign-task or unknown observations report
+`acceptance_binding_unavailable` and `review_original_task_acceptance` rather
+than exposing private errors. Workspace/authority stops did not inspect task
+validation, so their reason is `null` and action is `none`; ready acceptance
+also has no recovery action. Older clients may omit these optional fields.
+
+CLI, MCP and Goal Chat return this same projection. **Team execution** shows
+the matching Chinese/English cause and asks the original configuration owner
+to review the original task declaration/contract or restore pinned files, then
+recheck. A missing independent validator is not a runtime outage, a request to
+expand Goal acceptance, or permission to retarget/replay an old operation.
+Commands, file paths and validator effects are not part of the public diagnosis.
+
+中文：`acceptance_reason_code` 与 `acceptance_next_action` 来自同一 TS 验收计划，
+只补诊断，不改变准入或授予修复权限。同一当前任务缺少独立声明、已声明内容无法
+读取或指纹不符时，返回对应原因和 `review_original_todo_validation`；声明已就绪
+但固定文件不可用时，返回 `validation_files_unavailable` 与
+`restore_original_validation_files`。缺失、陈旧、其他任务或未知观察只能返回
+`acceptance_binding_unavailable` 与 `review_original_task_acceptance`，不输出私有
+异常。工作目录／权限提前停止代表验收尚未检查，原因为 `null`、动作为 `none`；
+验收已就绪也没有修复动作。旧客户端可省略这两个可选字段。
+
+CLI、MCP、Goal Chat 和「团队执行」消费同一投影；页面中英文提示由原配置责任人
+核对原任务声明／契约或恢复固定文件，再重新检查。缺少独立校验不等于运行时故障，
+不建议扩大 Goal 验收范围，不改绑或重放旧操作，也不暴露命令、路径与校验 effects。
+
 Workspace failures are observed before authority or Turn inspection, but after
 the caller's binding grant and active Goal are checked. `workspace_unavailable`
 retains a bounded `workspace_state`: `missing`, `not_directory`, or `unavailable`
@@ -433,7 +490,13 @@ repeat inspection. The same projection is rendered in **Team execution** and
 returned by CLI/MCP/Goal Chat. Inspection creates no directory, retargets no
 binding, launches no worker and exports no private path or filesystem error.
 It is a point-in-time observation; a changed binding fails closed and start
-still rechecks the existing work/authority boundaries.
+still rechecks the existing work/authority boundaries. Inspection also
+reobserves the directory target after acceptance and the real Turn preview:
+if that target disappeared or was replaced, it returns the same bounded
+workspace diagnosis instead of reporting the old workspace as ready. This
+does not lock the filesystem or authorize launch.
+Expected preview failures also recheck the workspace; when the directory is
+unchanged, the original timeout, malformed response or I/O error is preserved.
 
 中文：工作目录故障在调用者授权与 Goal 活跃检查之后、Authority 与 Turn 检查之前
 返回 `workspace_unavailable`。`workspace_state` 区分 `missing`（不存在）、
@@ -443,6 +506,9 @@ still rechecks the existing work/authority boundaries.
 要求核对原执行配置及绑定目录后重新检查；团队执行页面与 CLI/MCP/Goal Chat 消费
 同一投影。检查不创建目录、不改绑、不启动成员，也不暴露私人路径或文件系统错误。
 结果只是时点观察；配置变更仍拒绝，实际启动仍须重新通过原有工作与权限边界。
+预期的预览故障也重新检查目录；目录未变时保留原始超时、响应解析或 I/O 错误。
+预检还会在验收检查与真实 Turn 预览后复核目录目标；期间消失或被替换时，返回相同
+的有界工作目录诊断，不把旧目录误报为就绪。这并不锁定文件系统，也不授权启动。
 
 `executor.runtime_probe` preserves the host's bounded probe scope: a DSH
 `probing_interpreter` result concerns module availability in the interpreter
@@ -632,3 +698,119 @@ member counts, model choices, workspaces and requester grants in the Goal's
 execution configuration; reuse machine authentication without copying another
 Goal's assignments. A configured credential does not prove the selected SDK,
 model, remote environment or task acceptance is ready.
+
+## Confirmed operation callback continuation
+
+This default-off adapter lets the existing authenticated Lark operation callback
+request a continuation through one existing delegation binding. Human operation
+confirmation and the operator's launch grant are separate authorities. In the
+original collector v1 configuration, explicitly set:
+
+```json
+{
+  "operation_callbacks": {
+    "enabled": true,
+    "managed_turn_wake": {
+      "registry_path": "/absolute/operator-registry.json",
+      "goal_id": "project-goal",
+      "requester_agent_id": "coordinator",
+      "execution_config": ".loopx/config/delegations.json",
+      "binding_id": "confirmed-operation"
+    }
+  }
+}
+```
+
+This is a fragment, not a complete collector configuration. `execution_config`
+is project-relative, without traversal or symlinks, and remains outside the
+member workspace. The selected binding must grant that registered requester
+the operation's exact Agent/Todo. Use `codex-cli`, `--codex-operation-tools`
+and the original pinned model/effort. Do not select `fresh`, change the owning
+home, binary, sandbox or effective MCP configuration, or retarget the Todo.
+Prepare the operation in this same managed session/profile. Existing delegation
+inspection and ordinary Turn admission still determine whether it can run.
+
+If the original standalone operation Session was prepared **without** a
+delegation MCP server, its profile includes `mcp_server: null`. Preserve that
+exact profile using the existing operator-owned binding option:
+
+```json
+{
+  "host_args": [
+    "--host", "codex-cli",
+    "--codex-operation-tools",
+    "--codex-model", "original-model",
+    "--codex-reasoning-effort", "original-effort",
+    "--codex-sandbox", "read-only",
+    "--codex-mcp-server-json", "null"
+  ]
+}
+```
+
+This is a fragment; replace the model/effort placeholders with their original
+values and retain the original executable, workspace, home and Agent/Todo
+grant as well. Binding `host_args` follow the default injected MCP
+option, so the real CLI parser uses the explicit JSON `null`. Do not infer
+absence by reading the first occurrence in argv. Omit this override for an
+original delegation-MCP profile: removing that server would also be drift.
+Inspect the original profile before enabling the collector; runtime
+qualification requires same-session/profile native acceptance, not just this
+configuration readback. No global Codex configuration is changed.
+The native `loopx_operation` tool remains bound to the original transport;
+`null` does not grant collaboration MCP tools, bypass ordinary receiver
+adoption/validation, or prove consumption, outcome or source delivery. A
+synthetic typed `wait` may yield native acceptance and a rejected delegation;
+that is not an accepted work result or an end-to-end operation loop.
+
+中文：若原独立 operation Session 在没有 delegation MCP 时准备，profile 中的
+`mcp_server` 为 `null`，应在原 operator binding 的 `host_args` 显式设置
+`["--codex-mcp-server-json", "null"]`，保留 executable、workspace、home、原
+Agent/Todo grant 及模型/深度等其余字段。上例仅为片段，model/effort 占位符须替换
+为原值；binding 参数在默认注入
+参数之后，真实 CLI parser 采用后面的 JSON `null`，不能取 argv 第一个同名参数
+来判断生效配置。原 profile 使用 delegation MCP 时不要加此覆盖，删除 server
+同样属于漂移。启用 collector 前核对原 profile；运行资格必须由同 session/profile
+的原生接收回执证明，不能只凭配置读回。不改全局 Codex 配置。原生
+`loopx_operation` 工具保持原连接绑定，但 `null`
+不会授予 collaboration MCP 工具、绕过接收方采纳/验收，也不证明消费、结果或原
+来源送达；合成 typed `wait` 可同时产生原生接收和 delegation rejected，不代表
+工作完成或端到端操作闭环。
+
+`loopx lark-inbox collector-plan` and `collector-status` expose
+`operation_callback_managed_wake_configured`, a configuration observation, not
+runtime qualification. An authenticated callback returns `managed_turn_wake`:
+`delegation_requested` gives the original operation locator;
+`existing_delegation` acknowledges replay without another spawn;
+`blocked` preserves the canonical confirmation but grants no launch. Read the
+locator through existing delegation read/recovery commands. Callback receipts
+never certify native start, consumption, Todo completion or original-audience
+result delivery. The internal `--codex-confirmed-operation-id` is only an exact
+resume fence, not a caller credential or domain permit.
+
+Remove `managed_turn_wake` or the exact delegation requester grant to stop new
+admission. The collector reloads the launch grant at each callback; already
+started work needs its ordinary stop/reconciliation path. Lost spawn ACKs do
+not trigger automatic callback resume. Retain the original journal and inspect
+it before recovery. No new scheduler, approval store or result owner is added.
+
+The existing Dashboard shows operation/host-start state through the shared
+frame, but does **not** edit this grant. Frontend grant editing and genuine
+original-source outcome delivery remain partial; synthetic startup tests do
+not establish an end-to-end user or trading loop.
+
+中文：此适配默认关闭。认证 Lark 确认只能请求既有 delegation 续跑，不能直接
+执行金融操作；启动 grant 与用户对不可变条款的批准独立。上例是原 collector v1
+配置片段，不是完整配置。`execution_config` 必须项目内相对路径、无穿越或符号
+链接，并位于成员工作树之外；精确 binding 必须授予已注册 requester 原 Agent/Todo。
+使用 `codex-cli`、operation tools 和原固定模型/深度；不能选 `fresh`、更换 home、
+binary、sandbox、生效 MCP 或任务。在相同受管 session/profile 准备操作，
+普通 Turn 的准入、quota、租约与验收仍全部生效。
+
+plan/inspect 的 `operation_callback_managed_wake_configured` 仅证明配置，
+不证明运行资格。callback 的 `delegation_requested` 返回原定位信息，
+`existing_delegation` 表示重放未重新 spawn，`blocked` 保留确认但不授予启动。
+通过既有 delegation 读回/恢复命令检查原记录；上述状态都不是原生启动、消费、
+完成或原受众送达回执。内部 operation-id 参数只做精确恢复保护，不是身份凭证。
+移除启动配置或原 requester grant 在下一 callback 生效，已开始工作须走原停止/
+对账流程；丢失 ACK 不自动重启。Dashboard 沿用共享 frame 展示状态，但尚不能编辑
+此 grant；前端配置与真实原来源结果送达仍为部分交付，不能据合成测试称交易闭环。

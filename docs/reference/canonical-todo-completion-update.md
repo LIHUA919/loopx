@@ -111,6 +111,39 @@ Markdown is a display projection and is not required to admit a completion.
 Private validation declarations remain in their private store; they are neither
 imported from an untrusted display nor embedded in public completion receipts.
 
+## Validation timeout and cancellation cleanup / 验证超时与取消清理
+
+The shared host validation executor runs non-interactive declared commands in
+an owned POSIX process group. A timeout or caller cancellation force-stops that
+group, including children holding inherited output pipes after the leader has
+exited. Zero-grace cleanup sends KILL directly; it does not add a termination
+delay or replace the original timeout with a TERM/KILL race error. Existing
+argv/text parsing, cwd, inherited environment/stdin and privacy-safe receipt
+fields are unchanged. Commands that intentionally escape the process group are
+not contained by this transport. Windows retains the existing `taskkill /T`
+adapter; this is not a new Windows containment qualification.
+
+This is Python OS I/O reuse, not another decision owner: TS still admits the
+command, owns the declaration/deadline, checks the source/lease witnesses and
+decides completion. A timeout keeps the Todo open and its canonical revision and
+private declaration unchanged. It is not a passed validator, accepted progress
+or a debit authorization. CLI/managed Turn and existing Chat/Lark consumers keep
+the same failure projection; no setting, field editor or separate UI authority
+is added. Synthetic File/SQLite real-CLI regression tests verify this readback;
+they do not certify a long-running batch fits the synchronous deadline.
+
+共享 host 验证器将非交互式声明命令放入其拥有的 POSIX 进程组。超时或调用方取消会
+直接终止整组，包括父进程已退出、仍持有输出管道的子进程；零宽限直接发送 KILL，
+不增加延迟，也不让 TERM/KILL 退出竞态遮盖原超时。argv/文本解析、工作目录、继承
+的环境与 stdin，以及隐私安全回执字段保持不变。主动脱离进程组的命令不在此传输
+的隔离保证内；Windows 复用已有 `taskkill /T`，本改动不宣称完成新的 Windows 验收。
+
+Python 只复用 OS I/O；准入、声明、期限、源/租约见证和完成决策仍由 TS 权威负责。
+超时保持 Todo 开放，canonical revision 和私有声明不变，不等于验收通过、进展
+获准或扣额授权。CLI/managed Turn 与现有 Chat/Lark 消费方保持原失败投影，不新增
+设置、字段编辑器或 UI 权威。File/SQLite 的隔离真实 CLI 回归验证了读回，但不能
+证明长批次已经满足同步期限。
+
 ## Linked User completion effects
 
 An admitted `todo complete --decision-outcome approve|reject|cancel` now commits
@@ -125,6 +158,7 @@ snapshot extraction and writeback, not a second scope/resume implementation.
 | Approve a linked gate | Consume only covered required scopes and their recorded negative outcomes; preserve independent requirements. |
 | Reject or cancel a linked gate | Keep requirements, replace the latest outcome for that exact scope, preserve independent outcomes, and block the active target. |
 | Complete a linked User action | Attempt resume without consuming decision authority. |
+| Cancel a linked User action | Close only the source reminder; do not edit or resume its target. |
 | Another active linked User Todo, remaining requirement or negative outcome | Keep the blocked target blocked. |
 | Explicit blocker task | Require explicit blocker repair. |
 | Completed, deferred or archived target | Do not change or reactivate it. |
@@ -162,6 +196,71 @@ User Todo、剩余要求或拒绝结果仍会阻止恢复；已完成、延期�
 重新激活。上述两项安全修复同时影响旧路径和 canonical 路径，其他默认值不变。
 重放返回历史回执，不补做旧版本遗漏的联动，也不产生新的授权；历史不一致须根据
 原决定显式核对修复。目标任务的执行租约与用户批准仍是不同合同。
+
+## Closing an ordinary bound User action / 关闭普通绑定用户事项
+
+For a promoted Goal in `hard_lease` mode, the exact registered bound Agent may
+close an ordinary `user_action` without acquiring an execution lease. User
+actions cannot acquire execution leases; this is an administrative terminal
+edit under the existing provider CAS, not an execution grant. A foreign actor,
+an excluded/unregistered actor, an active lease holder or stale explicit lease
+proof is not exempted. No claim, lease generation or decision scope is created.
+
+```sh
+loopx todo complete --goal-id example --todo-id todo_observation \
+  --role user --agent-id agent-a --decision-outcome cancel \
+  --evidence 'The observation request was withdrawn'
+```
+
+Only `cancel` is accepted as an explicit ordinary-action outcome. A linked
+reminder reports `decision_cancelled` and leaves its Agent Todo, requirements and scope
+outcomes unchanged. Ordinary completion with no decision outcome retains the
+existing guarded resume behavior. Gate approval/rejection/cancellation retains
+its explicit gate contract. Cancelling a reminder is not cancelling an order,
+withdrawing an external message or authorizing a trade; expiry is not detected
+or acted on automatically by this change.
+
+Compatibility: canonical `todo complete` continues to accept a `user_gate`
+without `--decision-outcome` as closure only, not approval, rejection or
+cancellation. Its required scopes, scope outcomes and blocked dependents remain
+unchanged, just as for `todo update --status done`. To record a decision and its
+linked effects, explicitly supply `approve|reject|cancel`. The legacy Markdown
+explicit-completion adapter keeps its pre-existing requirement for a decision;
+that adapter's stricter input rule is not imposed on native callers. Historical
+successful receipts remain replayable as recorded.
+
+The delivered cancellation entry point is CLI/managed CLI. Existing Chat
+completion continues through the shared terminal owner, and frontend/Lark
+consumers read the canonical completed status; no new cancellation button,
+configuration setting or chat-specific authority is introduced. Direct
+frontend/Lark cancellation controls are not part of this bounded slice. The
+canonical transaction is qualified on File, SQLite and real PostgreSQL. The
+legacy Markdown adapter shares outcome validation and cancellation effects,
+but its separate hard-lease terminal fence is not changed. Historical receipts
+are replayed as recorded, not reinterpreted as a new cancellation.
+
+已晋升且启用 `hard_lease` 的 Goal 中，精确绑定、已注册且未被排除的 Agent 可以
+关闭普通 `user_action`，无需取得执行租约。用户事项本来不能领取执行租约；这里是
+既有 provider CAS 下的行政关闭，不产生认领、租约代次或批准权限。异主体、活跃
+租约及显式过期/错误租约证明仍不绕过检查。
+
+普通事项仅接受显式 `cancel`：关联提醒报告 `decision_cancelled`，不修改或恢复关联 Agent
+任务，不消解要求或写入决策范围结果。不带决定的普通完成保留既有受保护恢复行为；
+用户 gate 的批准、拒绝和取消仍遵循原契约。取消提醒不等于撤单、撤回外部消息或
+交易授权，本改动也不自动检测到期。
+
+保持兼容：canonical `todo complete` 继续接受未带 `--decision-outcome` 的
+`user_gate`，仅关闭事项，不视为批准、拒绝或取消决定；关联任务的阻塞、范围要求
+和范围结果保持不变，与 `todo update --status done` 一样。如需记录决定及关联
+效果，须显式传入 `approve|reject|cancel`。旧 Markdown 显式完成适配器保留原有的
+决定必填规则，不将该适配器更严格的输入规则强加给原生调用方。历史成功回执仍
+按原记录重放。
+
+本交付的取消入口是 CLI/managed CLI；既有 Chat 完成入口复用同一终结权威，前端和
+Lark 读取 canonical 完成状态，但不新增取消按钮、配置或独立聊天权威。直接前端/
+Lark 取消控件不属于本有界切片。File、SQLite 和真实 PostgreSQL 已验证该事务；旧
+Markdown 路径复用结果校验和取消联动，但不改变其独立 hard-lease 终结门禁。历史
+回执按原记录重放，不会被重新解释成新的取消。
 
 ## Recovery and callers
 
