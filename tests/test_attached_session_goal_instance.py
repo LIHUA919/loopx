@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
-import loopx.attached_session as attached_session_module
 
 from loopx.attached_session import (
     bind_attached_agent_session,
@@ -529,29 +525,31 @@ def test_missing_registry_without_exact_history_preserves_legacy_mutation(
 
 
 def test_claim_wait_does_not_hold_goal_lifetime_guard(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from types import SimpleNamespace
+
+    import loopx.attached_session as attached_session
+
     registry_path, _runtime_root, store, instance_a = _register(tmp_path)
     session_a = str(_bind(store, registry_path)["session"]["session_id"])  # type: ignore[index]
-    wait_entered = threading.Event()
-    release_wait = threading.Event()
-    claim_finished = threading.Event()
-    recreation_finished = threading.Event()
-    recreated: list[str] = []
-    stale_claims: list[str] = []
+    polling = threading.Event()
+    resume_claim = threading.Event()
+    recreated = threading.Event()
     errors: list[BaseException] = []
+    stale_claim: list[str] = []
+    new_instances: list[str] = []
 
-    def blocked_poll_wait(_seconds: float) -> None:
-        wait_entered.set()
-        if not release_wait.wait(timeout=10):
-            raise TimeoutError("claim poll wait was not released")
+    def park_between_polls(_seconds: float) -> None:
+        polling.set()
+        if not resume_claim.wait(timeout=10):
+            raise AssertionError("claim polling was not released")
 
-    # Replace only this module's wait hook, retaining real admission, storage,
-    # lifetime locks and recreation. Event order is the oracle, not wall time.
+    # Control only the claimant's clock, not time.sleep in other modules. The
+    # invariant is lock availability between polls, not recreation latency.
     monkeypatch.setattr(
-        attached_session_module, "time",
-        SimpleNamespace(monotonic=time.monotonic, sleep=blocked_poll_wait),
+        attached_session, "time",
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=park_between_polls),
     )
 
     def wait_for_claim() -> None:
@@ -567,44 +565,39 @@ def test_claim_wait_does_not_hold_goal_lifetime_guard(
             )
         except ValueError as exc:
             if "stale_goal_instance" in str(exc):
-                stale_claims.append(str(exc))
+                stale_claim.append(str(exc))
             else:
                 errors.append(exc)
         except BaseException as exc:
             errors.append(exc)
-        finally:
-            claim_finished.set()
 
-    def recreate() -> None:
+    def recreate_while_claim_waits() -> None:
         try:
-            recreated.append(_recreate(registry_path, instance_a))
+            new_instances.append(_recreate(registry_path, instance_a))
         except BaseException as exc:
             errors.append(exc)
         finally:
-            recreation_finished.set()
+            recreated.set()
 
-    claim_thread = threading.Thread(target=wait_for_claim)
-    recreate_thread = threading.Thread(target=recreate)
-    claim_thread.start()
+    claimant = threading.Thread(target=wait_for_claim, daemon=True)
+    recreation = threading.Thread(target=recreate_while_claim_waits, daemon=True)
+    claimant.start()
     try:
-        assert wait_entered.wait(timeout=5)
-        assert not claim_finished.is_set()
-        recreate_thread.start()
-        assert recreation_finished.wait(timeout=5)
-        assert not release_wait.is_set()
-        assert not claim_finished.is_set()
+        assert polling.wait(timeout=5), "claim did not reach its inter-poll wait"
+        recreation.start()
+        assert recreated.wait(timeout=5), "claim wait held the Goal lifetime guard"
+        assert claimant.is_alive()
+        assert new_instances and new_instances[0] != instance_a
     finally:
-        release_wait.set()
-        claim_thread.join(timeout=5)
-        if recreate_thread.ident is not None:
-            recreate_thread.join(timeout=5)
+        resume_claim.set()
+        claimant.join(timeout=10)
+        if recreation.ident is not None:
+            recreation.join(timeout=10)
 
-    assert not claim_thread.is_alive()
-    assert not recreate_thread.is_alive()
+    assert not claimant.is_alive()
+    assert not recreation.is_alive()
     assert errors == []
-    assert recreated and recreated[0] != instance_a
-    assert claim_finished.is_set()
-    assert len(stale_claims) == 1
+    assert len(stale_claim) == 1
 
 
 def test_resume_writeback_holds_goal_lifetime_guard(
