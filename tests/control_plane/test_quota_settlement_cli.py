@@ -2219,6 +2219,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
 
     assert guard_rc == 0, guard
+    original_ack_hint = guard["scheduler_hint"]["app_automation"]["ack_hint"]
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == TODO_ID
     assert identity["effect_id"] == (f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}")
@@ -2351,9 +2352,9 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     )
     assert _spend_run_count(runtime) == 1
 
-    settled_ack_hint = settled_replay["scheduler_hint"]["codex_app"]["ack_hint"]
-    assert settled_ack_hint["args"]["turn_instance_id"] == TURN_ID
-    assert settled_ack_hint["cli_args"][-3:] == [
+    # Use the original execution hint: the settled skip packet has no host work.
+    assert original_ack_hint["args"]["turn_instance_id"] == TURN_ID
+    assert original_ack_hint["cli_args"][-3:] == [
         "--turn-instance-id",
         TURN_ID,
         "--execute",
@@ -2361,7 +2362,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     ack_rc, ack = _run_cli(
         registry_path,
         runtime,
-        *settled_ack_hint["cli_args"],
+        *original_ack_hint["cli_args"],
     )
     # A settled Turn remains current until a newer heartbeat is admitted.
     assert ack_rc == 0, ack
@@ -2394,7 +2395,7 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
     assert fresh_turn_rc == 0, fresh_turn
     assert fresh_turn["selected_todo"]["todo_id"] == successor_id
     stale_ack_rc, stale_ack = _run_cli(
-        registry_path, runtime, *settled_ack_hint["cli_args"],
+        registry_path, runtime, *original_ack_hint["cli_args"],
     )
     assert stale_ack_rc == 1, stale_ack
     assert stale_ack["error_code"] == "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_STALE"
