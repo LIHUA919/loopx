@@ -223,7 +223,11 @@ than maintaining separate rules.
 
 This entrypoint does not create Agents, grant bindings or wake an idle Codex
 conversation. The existing host/LoopX continuation policy owns the next lead
-turn. The conversation remains persistent independently of whether autonomous
+turn; for a Goal Chat LoopX lead that is the Chat service's one-time wake after
+acceptance, described in [Goal Chat continuation](goal-chat-continuation.md).
+That wake returns to the conversation whose Turn started the operation, which
+the trusted Chat host records beside the operation; the model supplies no
+routing. The conversation remains persistent independently of whether autonomous
 LoopX mode is enabled. Dashboard, CLI/managed Turn and Lark keep their existing
 conversation and runtime owners; they may consume the shared bounded route
 projection described below, but they do not get another grant or scheduler.
@@ -400,7 +404,7 @@ of the new tool description, not injected into those older threads' shared promp
 仍显式调用 `resume --execute`。分页回读会重新核验 accepted，单条失效显示
 `unavailable`，不能当成失败重派或静默隐藏。`has_more` 表示还有下一页，
 `page_readback_complete` 只表示本页是否均成功读取；二者都不代表整个团队已完成。
-此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。
+此入口不创建 Agent、不扩大授权，也不唤醒闲置的 Codex 对话。Goal Chat LoopX 模式的协调员由 Chat 服务在结果被接受后唤醒一次，且只回到「启动该操作的回合所属会话」——该绑定由受信任的 Chat 宿主写在操作记录旁，模型不提供路由；见 [Goal Chat 续跑](goal-chat-continuation.md)。
 
 ### Check a binding before new work
 
@@ -667,6 +671,31 @@ concurrent executions still use the same kernel lock and original Turn journal.
 | Ark requests a local tool while the host is absent | It waits for the local tool result. Recovery observes the original input/session and executes only previously unstarted tool calls. |
 | Tool execution or send acknowledgement is uncertain | Do not repeat the effect. Preserve the receipt/session for explicit reconciliation. |
 | Task completed but return was interrupted | Read/validate the original task and return; do not rerun the model. |
+| Journal history is unreadable, contradictory or ambiguous | The original operation remains recoverable with an error; no replacement Turn is launched. Reconcile the retained history before resuming the same operation. |
+
+Settlement-addressed recovery and completion capability evidence use the same
+TypeScript journal query and identity/inspection owners. Recovery accepts a
+consistent in-progress journal; capability evidence still requires terminal
+replay legality. The reader also enforces the writer's status/phase constraints:
+for example, `committed` requires the full phase prefix. These are enforced
+checks, not guidance. `turn inspect-journal` reports a contradictory snapshot
+as `replay_blocked` with `journal_status_phase_mismatch`.
+
+A digest-named journal that cannot be read cannot safely be skipped as evidence
+of absence or uniqueness. This also holds when another matching file is readable.
+Non-journal sidecars and identifiable other Turns are ignored; duplicate exact
+identities fail closed. Keep the original files for diagnosis; do not delete a
+receipt or change an operation id to force progress. After verified repair,
+resume the same operation through the existing tools. Capability lookup supplies
+no evidence on an unavailable/conflicting read, preserving ungated fallback.
+Historical capability names are strings; non-string declarations are ignored.
+
+The query reads atomic file versions without creating reader locks or an index.
+It does not take a directory-wide snapshot, establish provider-side absence,
+validate current lease authority, or replace execution single-flight and
+commit-time checks. The File Turn journal is separate from the selected
+coordination authority backend. No new configuration or frontend control is
+needed; existing delegation error/readback and CLI inspection expose the result.
 
 Ark recovery retains the original execution deadline; reconnecting does not
 reset the budget. Lost creation/input-send responses remain reconciliation
