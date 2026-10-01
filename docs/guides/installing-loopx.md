@@ -234,6 +234,16 @@ loopx update plan        # read-only command, validation, and rollback plan
 loopx update apply       # explicit local-environment mutation
 ```
 
+An upgrade does not move local state directories. Existing installations keep
+their selected legacy `$HOME/.codex/loopx` route and registered Goal state;
+fresh installations use `$HOME/.loopx`. Check `local_state_route` in
+`loopx --format json doctor` before and after upgrading. Directory migration is
+optional, separate from `update apply`, and requires the explicit offline
+[preview and recovery procedure](../product/migrations/local-state-path-migration.md).
+If both default runtime roots contain state, implicit routing refuses the
+conflict; use explicit `--registry` and `--runtime-root` for diagnosis or
+independent work until the conflict is resolved.
+
 For archive installs, `update apply` downloads the bootstrap installer to a
 private temporary file before executing it. Downloading is limited to three
 attempts, a 60-second total download budget (or the smaller command timeout),
@@ -383,10 +393,6 @@ python3 -m pip uninstall loopx
 Both host uninstallers preserve same-name files whose content changed after
 LoopX installed them. Project-local `.loopx/`, legacy `.codex/goals/`, evidence, and
 runtime state are not deleted by package uninstall.
-
-New installs place runtime state under `~/.loopx`. An existing legacy-only
-installation continues to use its declared `~/.codex/loopx` route until the
-operator follows the [explicit local-state migration](../product/migrations/local-state-path-migration.md).
 
 Contributors who need a live canary should use a real checkout and
 `scripts/install-local.sh`; see [Getting Started](getting-started.md).
