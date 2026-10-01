@@ -3162,7 +3162,7 @@ def test_host_runtime_profile_selects_spend_source_through_real_settlement(
     # The thin body tells the agent to mint LOOPX_TURN per iteration.
     guard_command = (
         prompt["quota_guard_command"]
-        .replace("$HOME/.codex/loopx/registry.global.json", str(registry_path))
+        .replace(shell_selected_global_registry().strip('"'), str(registry_path))
         .replace('"${LOOPX_TURN:?}"', turn_instance_id)
     )
     assert f"--runtime-profile {runtime_profile}" in guard_command
