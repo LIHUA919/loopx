@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -21,6 +21,8 @@ from threading import Lock
 from typing import IO, Any
 
 from ..file_lock import process_is_alive
+from .runtime.file_reads import iter_binary_file_reads
+from .content_digest import BARE_SHA256_PATTERN
 
 EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION = "loopx_effect_runtime_request_v0"
 EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION = "loopx_effect_runtime_response_v1"
@@ -278,9 +280,16 @@ def _runtime_fingerprint_for_snapshot(
 ) -> str:
     digest = hashlib.sha256()
     source_root = Path(root)
-    for relative, *_metadata in snapshot:
-        digest.update(relative.encode("utf-8"))
-        digest.update((source_root / relative).read_bytes())
+    paths = (source_root / relative for relative, *_metadata in snapshot)
+    # Reads may finish out of order; hash the same relative names and original
+    # bytes in snapshot order. No disk cache or skipped freshness check.
+    with closing(iter_binary_file_reads(paths)) as reads:
+        for (relative, *_metadata), read in zip(snapshot, reads, strict=True):
+            if read.error is not None:
+                raise read.error
+            assert read.data is not None
+            digest.update(relative.encode("utf-8"))
+            digest.update(read.data)
     return digest.hexdigest()
 
 
@@ -662,7 +671,7 @@ def _read_local_snapshot_response(
         size, digest = ref.get("byte_count"), ref.get("sha256")
         if (not isinstance(size, int) or isinstance(size, bool) or size <= 0
                 or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
-                or re.fullmatch(r"[a-f0-9]{64}", digest) is None):
+                or BARE_SHA256_PATTERN.fullmatch(digest) is None):
             raise ValueError("invalid local snapshot reference")
         descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as file:

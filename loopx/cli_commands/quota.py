@@ -20,12 +20,14 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
 from ..control_plane.quota.cli_projection import (
     compact_quota_monitor_poll_cli_payload,
+    compact_quota_plan_cli_payload,
     compact_quota_should_run_cli_payload,
 )
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
+    HeartbeatReceiptIdentityConflictError,
     QuotaCommandValidationError,
 )
 from ..control_plane.quota.heartbeat_receipt import (
@@ -277,6 +279,9 @@ def _dispatch_quota_turn_start_hooks(
             available=args.available_capabilities,
         )
         context_dispatch = dispatch_turn_start_hooks((turn_start_hook(root, registry_path, args.goal_id, args.agent_id),))
+        from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
+        context_dispatch = extend_preferences(context_dispatch, runtime_root=root, registry_path=registry_path,
+            goal_id=args.goal_id, agent_id=args.agent_id)
         dispatch = dict(dispatch)
         for key in ("results", "required_reads", "failures"):
             dispatch[key] = list(dispatch.get(key) or []) + list(context_dispatch.get(key) or [])
@@ -318,6 +323,8 @@ def _project_quota_cli_payload(
     instead of masking it with a crash (issue #3687).
     """
     if not bool(getattr(args, "turn_envelope", False)):
+        if args.quota_command in {"status", "plan"}:
+            return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
         if args.quota_command == "should-run":
             return compact_quota_should_run_cli_payload(
                 payload,
@@ -576,6 +583,10 @@ def handle_quota_command(
         )
     except Exception as exc:  # noqa: BLE001 - CLI fail-safe boundary; error_code is typed below.
         closeout_query_unavailable = isinstance(exc, CloseoutQueryUnavailableError)
+        # A rejected rebind performed no receipt write. Preserve the committed
+        # guard and the identity diagnostic instead of calling it failed IO.
+        if isinstance(exc, HeartbeatReceiptIdentityConflictError):
+            action_selection_preflight_failed = True
         payload = quota_failure_payload(
             args,
             registry_path=registry_path,

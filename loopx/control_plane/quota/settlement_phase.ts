@@ -1,8 +1,10 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import { isCausalBlockedWait } from "./blocked_wait.ts";
 
-/** A typed blocked Turn may close without spend only with a bounded retry. */
+/** A blocked Turn needs a bounded retry or a verified canonical causal wait. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
+  if (isCausalBlockedWait(value, todoId)) return true;
   const retry = jsonObject(value);
   if (!retry || retry.schema_version !== "quota_blocked_retry_v0" ||
       (retry.source !== "todo" && retry.source !== "turn_settlement") ||
@@ -92,6 +94,8 @@ export interface ReceiptBoundReplaySettlementState {
   /** A validated writeback discharges the binding without Todo completion. */
   writeback_completes_binding?: boolean;
   completion_receipt_present: boolean;
+  /** Retirement closes its original Turn, not the replacement or Goal. */
+  supersede_receipt_present?: boolean;
   durable_writeback_present: boolean;
   quota_spend_present: boolean;
   /** Exact typed blocked writeback closes a Turn without a quota debit. */
@@ -104,7 +108,8 @@ export function receiptBoundReplayPhase(
   const bindingComplete = state.binding_kind === "autonomous_replan" ||
       state.writeback_completes_binding === true
     ? state.durable_writeback_present
-    : state.completion_receipt_present;
+    : state.completion_receipt_present ||
+      (state.binding_kind === "todo" && state.supersede_receipt_present === true);
   if (!bindingComplete) return "open";
   return state.durable_writeback_present &&
       (state.quota_spend_present || state.no_spend_closeout_present === true)
