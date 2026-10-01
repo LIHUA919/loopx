@@ -90,7 +90,14 @@ function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: b
   stack.add(value);
   try {
     const keys = Object.keys(value);
-    if (canonicalKeys) keys.sort(authorityUnicodeCompare);
+    if (!canonicalKeys) {
+      // Fill without inherited setters (including __proto__), then normalize
+      // to the same ordinary object as Object.fromEntries. No per-field tuples.
+      const copy: JsonObject = Object.create(null);
+      for (const key of keys) copy[key] = cloneAuthorityJson(value[key], stack, false);
+      return Object.setPrototypeOf(copy, Object.prototype);
+    }
+    keys.sort(authorityUnicodeCompare);
     return Object.fromEntries(
       keys.map((key) => [
         key,
