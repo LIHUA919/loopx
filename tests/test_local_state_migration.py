@@ -91,6 +91,62 @@ def test_default_route_keeps_one_existing_legacy_registry(monkeypatch: pytest.Mo
         paths.resolve_runtime_root({})
 
 
+def test_project_register_explicit_route_survives_two_default_runtimes(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    for root in (home / ".codex" / "loopx", home / ".loopx"):
+        _write_json(root / "registry.global.json", {"schema_version": "0.1", "goals": []})
+    defaults_before = {
+        path: path.read_bytes()
+        for path in (
+            home / ".codex" / "loopx" / "registry.global.json",
+            home / ".loopx" / "registry.global.json",
+        )
+    }
+    project = tmp_path / "independent-project"
+    registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "independent-runtime"
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in {"LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT"}
+    }
+    env.update(HOME=str(home), USERPROFILE=str(home), LOOPX_USAGE_PING="0")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    args = [
+        "project", "register", "--project-id", "independent",
+        "--project-kind", "work", "--knowledge-root", str(project),
+        "--goal-id", "independent-goal", "--objective", "Keep this Goal independent.",
+        "--acceptance", "The project is registered.",
+        "--next-effect", "Inspect the project.", "--stop-condition", "Stop after registration.",
+    ]
+
+    def register(*route: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json", *route, *args],
+            cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+
+    explicit = register("--registry", str(registry), "--runtime-root", str(runtime))
+    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+    payload = json.loads(explicit.stdout)
+    assert payload["ok"] is True and payload["changed"] is True
+    assert registry.exists()
+    assert Path(payload["state_file"]).exists()
+    assert load_project_registry(registry)["common_runtime_root"] == str(runtime)
+    assert all(path.read_bytes() == before for path, before in defaults_before.items())
+
+    repeat = register()
+    assert repeat.returncode == 0, repeat.stdout + repeat.stderr
+    assert json.loads(repeat.stdout)["changed"] is False
+
+    ambiguous = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--format", "json", "extension", "list"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert ambiguous.returncode != 0
+    assert "Both default LoopX registries exist" in ambiguous.stdout + ambiguous.stderr
+    assert all(path.read_bytes() == before for path, before in defaults_before.items())
+
+
 def test_host_global_registry_selector_uses_one_host_route(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
