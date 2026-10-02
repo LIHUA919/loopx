@@ -1,4 +1,4 @@
-import {planUserCompletion} from "../todos/user_completion.ts";
+import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 
 /** Service-owned evidence admission, evaluated against the actual provider
@@ -1210,6 +1210,14 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {terminal_decision: authority},
       "decision_rejection",
     );
+  }
+  if (update === undefined && input.command === "complete" && authority.outcome === "apply") {
+    try {
+      requireCompletionDecisionOutcome(todo, input.decision_outcome);
+    } catch (error) {
+      return terminalFailure("invalid_coordination_todo_terminal_lifecycle",
+        error instanceof Error ? error.message : "invalid completion outcome");
+    }
   }
   const implicitMonitorNoChange =
     normalized.operation_identity.kind === "current_monitor_cycle" && authority.outcome === "no_change";

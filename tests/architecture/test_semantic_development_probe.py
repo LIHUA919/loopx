@@ -345,12 +345,11 @@ def probe_cli(repository: Path) -> Path:
 
 
 def _run_probe_cli(repository: Path) -> subprocess.CompletedProcess[str]:
-    # The child executes copied sources under a disposable loopx/ package. Do
-    # not attribute those temporary files to the checkout's coverage artifact:
-    # shard artifacts are combined after pytest has removed the temp checkout.
+    # The copied CLI runs in a disposable repository. Do not merge its coverage
+    # into the source checkout: pytest removes that repository before CI reports.
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith("COV_CORE_") and key != "COVERAGE_PROCESS_START"
+        if not key.startswith(("COV_CORE_", "COVERAGE_"))
     }
     return subprocess.run(
         [
