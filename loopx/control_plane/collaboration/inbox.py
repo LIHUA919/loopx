@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from ...file_lock import exclusive_file_lock
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
+from ..todos.contract import TODO_ID_PATTERN
 
 if TYPE_CHECKING:
     from .goal_instance_scope import CollaborationGoalScope
@@ -117,12 +118,25 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_source_context(value: str) -> str:
+    """The shared typed owner qualifies source text before persistence."""
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return str(effect_runtime_result(
+            "collaboration.source_context.normalize", {"source_message": value},
+        )["source_message"])
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,
     agent_id: str,
     *,
     cursor: str | None = None,
+    operation_cursor: str | None = None,
     scope: CollaborationGoalScope | None = None,
 ) -> dict:
     cursor_scope = _hash(
@@ -209,8 +223,29 @@ def pending(
     from .peers import returns
 
     peer_returns = returns(runtime_root, goal_id, agent_id, scope=scope)
+    from .operation_handoff import pending_operation_handoffs
+
+    operation_handoffs = pending_operation_handoffs(
+        runtime_root,
+        goal_id,
+        agent_id,
+        registry_path=scope.registry_path if scope is not None else None,
+        scope=scope,
+        cursor=operation_cursor,
+        cursor_scope=cursor_scope,
+    )
     return {
         "ok": True,
+        **(
+            {
+                "operation_handoffs": operation_handoffs["items"],
+                "operation_handoff_pending_count": operation_handoffs["pending_count"],
+                "operation_handoff_overflow": operation_handoffs["overflow"],
+                "operation_handoff_next_cursor": operation_handoffs["next_cursor"],
+            }
+            if operation_handoffs["items"] or operation_cursor is not None
+            else {}
+        ),
         **({"peer_returns": peer_returns} if peer_returns["items"] else {}),
         "items": items[:20],
         "has_more": len(items) > 20,
@@ -432,7 +467,7 @@ def _receipt(root, lane, row):
             raise ValueError("invalid read receipt")
         if lane == "links":
             for key, pattern in [
-                ("todo_ids", re.compile(r"todo_[a-f0-9]{12}")),
+                ("todo_ids", TODO_ID_PATTERN),
                 ("evidence_ids", ENVELOPED_SHA256_PATTERN),
             ]:
                 refs = value.get(key)
