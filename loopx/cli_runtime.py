@@ -44,6 +44,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"doctor",
 		"first-run-report",
 		"usage-ping",
+		"performance-diagnosis",
 		"new-project-prompt",
 		"resolve-agent-thread",
 		"resolve-peer-route",
@@ -64,7 +65,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | {
-	"todo", "quota", "change-window", "delegation", "turn", "doctor", "commands",
+	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "extension", "slash-commands",
 }
 
@@ -237,6 +238,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.quota_registration import register_quota_command
 
 		register_quota_command(subparsers)
+	elif command == "task-lease":
+		from .cli_commands.task_lease import register_task_lease_command
+
+		register_task_lease_command(subparsers, add_subcommand_format)
 	elif command == "change-window":
 		from .capabilities.repository_change_window.cli import register_repository_change_window_commands
 
@@ -280,6 +285,13 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "task-lease":
+		from .cli_commands.task_lease import handle_task_lease_command
+
+		return handle_task_lease_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
 	if args.command == "authority-archive":
 		from .cli_commands.authority_archive import handle_authority_archive_command
 
@@ -303,7 +315,7 @@ def _dispatch_common_command(
 	if args.command == "doctor":
 		from .cli_commands.doctor import handle_doctor_command
 
-		return handle_doctor_command(args, print_payload)
+		return handle_doctor_command(args, print_payload, registry_path=registry_path)
 	if args.command == "commands":
 		from .help_surface import (
 			build_command_reference_payload, render_command_reference_markdown,

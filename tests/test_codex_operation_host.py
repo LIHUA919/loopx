@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.turn_driver.codex_cli import (
-    _lineage,
     load_codex_cli_session,
     run_codex_cli_host,
 )
+from loopx.control_plane.turn_driver.codex_sessions import _lineage
 from loopx.control_plane.turn_driver.codex_operation_host import (
     run_codex_operation_host,
 )
@@ -167,7 +167,7 @@ def test_callback_launch_fence_rejects_drift_before_native_process_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: str,
 ) -> None:
     from loopx.control_plane.turn_driver import codex_operation_host as owner
-    from loopx.control_plane.turn_driver.codex_cli import _store_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     store, claimed, request, options = _claimed_native_fixture(tmp_path)
     if drift == "session":
@@ -530,7 +530,10 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     def forbidden_plain_cli(*args, **kwargs):
         pytest.fail("Operation opt-in must not downgrade to plain Codex exec")
 
-    monkeypatch.setattr("loopx.cli_commands.turn.run_codex_cli_host", forbidden_plain_cli)
+    monkeypatch.setattr(
+        "loopx.cli_commands.turn_run_once.run_codex_cli_host",
+        forbidden_plain_cli,
+    )
     selected_route = {"host_surface": "codex-app", "thread_id": "source-thread"}
     observed_routes = []
 

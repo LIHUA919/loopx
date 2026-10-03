@@ -169,6 +169,16 @@ flowchart LR
 
 主人私有管家使用主人已配置的普通主机 Agent 工具 profile。共享或不可信受众使用能真正约束资源和工具的独立上下文。**先让拥有广泛权限的私人进程读取所有内容，再只过滤输出，不构成隔离。** 群中经过认证的主人请求，在持续策略允许时，可以触发私人工作，再按独立受众权限返回；其他群成员不继承此权限。
 
+**主人管理范围内的权力通过继承传递，不因对话入口而缩减。** 经认证的主人可以指定管家对话，
+包括群聊，以其持续授权管理自己的全部 Agent。在该管理范围内，管家可以查看工作和证据、规划、
+指派并执行已有授权的操作；不能仅因为入口是群就隐藏 Todo 标题/状态或再次索要相同授权。
+后代引用真实主人授权链，保留明确的缩减或撤销，不在每条消息中另造 grant；未来加入管理范围的
+Agent 继承相同范围。既有所有权、claim/lease 和宿主/provider 约束仍由实际效果 owner 执行，
+继承权限不会伪造执行。未管理的资源和未经认证的参与者仍不属于该授权。
+当前读取适配器复用该精确受众已有的 evidence-Goal 授权展示关联 Core 详情。下述已交付的
+managed-Goal 上下文授权只是有界步骤；完整规划/操作权限继承仍需类型化授权链、安装后接收方
+实际采用及原入口闭环验收。
+
 即便经 shell 发起，LoopX 状态也必须经既有 typed command 修改；不绕过控制面直接编辑 registry/authority。仓库修改沿用项目 worktree/review 实践。合并、部署等具体授权可复用，但不能由此推导支付或交易权限。
 
 若需要 approval bridge，它展示具体操作与已有授权的差额，等待真实答案。非交互 `approvalPolicy=never` 的拒绝，不能显示成用户拒绝。宿主策略、provider 拒绝、应用自身限制应分开诊断；本设计不尝试绕过上游安全决定。
@@ -230,6 +240,12 @@ LoopX 不是只有任务队列。交接应让接收方结合权威状态和持�
 | 已评估 | 接收方决策、采纳范围、计划/证据引用或具体延期 |
 | 工作已解决 | 满足请求完成问题的结果，或明确拒绝/取消/终局无法完成 |
 | 答案已送达 | 原路径和答案版本的 provider 回执/读回，与工作解决分开 |
+
+**接收方接续检查点。** 共享 CLI/MCP 读取保留逐请求的评估决定与显式关联的最新 Core 工作，
+由 TS 提供评估、检查工作、返回答案或恢复依据的建议。沙盒 worker 可用 `link_work` 关联已有
+工作；Python 链接适配器归属通用 collaboration，不再由管家专有层拥有。负责人忙于其他工作、
+读取回执或关联 Todo 完成都不能证明请求达成。File/SQLite CLI 与真实 stdio 验证这一上下文和
+工具切片；实际采用、执行效果和原路径回传仍须分别验收，安装版本普通旅程未通过前保持 G0/G1 开放。
 
 把现有 inbox/tracking/roundtrip 记录迁到唯一 collaboration owner，保留有效语义和回执；切换后退役重复的管家专用转移逻辑。先持久化意图再 dispatch，以请求版本和效果身份幂等。不可变身份下不允许改载荷；纠正追加关联版本，执行效果前重核受影响状态。管家可以明确关联讨论同一工作的多条消息，但必须保留各条义务和纠正。不能只用文本哈希合并独立同文请求。
 
@@ -495,6 +511,16 @@ Stage A 替换当前 Todo note，不提供不可变历史版本或私有 memory 
 只有此 adapter 消费通用 request/context，并产生共享 assessment/result/return 关系后，才把 worker→worker 计为 M2 的真实第二消费者；单独 `adopt` 成功不够。复用 Stage A 真实 CLI 用例：context 读回、过期 note/revision、lease 拒绝、工件不可用、普通 foreign-owner claim 拒绝、operation replay、不确定写入恢复。context 与 action/actor/target/revision 必须分离；operational-key collision、scalar/array root 在 mutation 前失败，revision/note/owner/receipts 不变。追加 A5/A7/A13–A16 整合用例：失败方案与后续纠正确实影响接收方规划，历史 replay 不冒充当前所有权，最终结论不依赖管家专用路径也能回传。旧 caller 退役需要这些证据及 TS §5 审阅工件；不以前置建设新通用 continuation framework 才能推进。
 
 ### 5.14 管家接入可复用的对话工作界面
+
+管家的本地注意力接收独立于外部 Channel 配置，与可选 Goal Channel 消费相同的
+canonical 阻塞/决策事实，再结合目标、已有决定和安全续接汇总。同一 Todo 的
+阻塞与请求形成一个对象，避免机械拆成两条；语义合并须保留独立请求身份与条款。
+模型文字不改变授权、不证明送达。见 [Goal Channel 接收 checkpoint](goal-channel-collaboration-v0.zh-CN.md#本地管家接收与可选-channel-投递)。
+有界实现向现有 Turn 提供事实，并将 Channel 模板替换为已配置、restricted 管家生成。
+已核验 gate 消息覆盖对应 blocker revision，生成失败保持待处理；外部生成 transcript
+独立于 live owner Turn。本地自动唤醒、变化 / 已读 / 恢复回执及持续模型质量仍归
+Stage 2 / R3。
+
 
 共用的[对话工作界面](intelligent-review-presentation-surfaces-v0.zh-CN.md#88-可复用的对话工作界面)拥有适应问题的报告、真实事件展示、Turn 级停止/纠偏、重连与跨渠道展示密度，适用于所有 LoopX 对话。本文将同一规则接入管家与主人的对话，负责接收者选择、评估及原路回传。管家专属的回答模板或传输方式不应成为第二套展示权威。
 

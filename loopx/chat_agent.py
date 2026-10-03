@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .chat_activity import CodexActivitySteps
+from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
     CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
     CHAT_REVIEW_CLOSE_TAG,
@@ -308,6 +308,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Use available authorized reads to verify facts that would change the decision; distinguish current authoritative evidence, old records, user claims and inference. "
     "Resolve the exact object and source; an identifier in another repository, an old waiting task or a closed-but-uncompleted object is not proof of the requested outcome. "
     "If current evidence shows the requested outcome is already satisfied, explain that result with its source and do not create work, delegate, propose a protected action or repeat the effect. "
+    "A saved source, read receipt or recorded proposal is not proof that the requested outcome works. Separate source duplication, applicable new information and independently verified completion; an unchanged source may still expose unfinished work, while changed bytes may add no useful information. "
     "A request for explanation, fact checking, comparison or judgment normally needs your analysis, not automatic assignment. "
     "When actual work remains, reuse qualified existing work and its responsible Agent before creating or delegating another request; preserve new corrections without treating them as duplicate intent. "
     "An exact matching Todo or previously assigned owner is not a prerequisite for requested work. Use the authorized directory's responsibilities and context to select a qualified recipient; distinguish that selection from proof of historical ownership. "
@@ -932,6 +933,7 @@ class CodexChatAgentSession:
         attachments: list[dict[str, Any]] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         output_schema: dict[str, Any] | None = None,
+        on_native_item: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         text = " ".join(str(user_message or "").split())
         if not text:
@@ -1029,6 +1031,10 @@ class CodexChatAgentSession:
                 self.current_turn_id = turn_id
             method = str(message.get("method") or "")
             params = message.get("params")
+            if method == "item/completed" and isinstance(params, dict) and on_native_item:
+                native_item = params.get("item")
+                if isinstance(native_item, dict) and native_item.get("type") == "collabAgentToolCall":
+                    on_native_item(native_item)
             if on_event:
                 phase = {
                     "turn/started": "Agent 已开始处理",
