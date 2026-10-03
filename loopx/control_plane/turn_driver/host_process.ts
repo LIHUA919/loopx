@@ -48,7 +48,9 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
 }
 
 export async function runHostProcess(request: HostProcessRequest,
-  output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal): Promise<HostProcessResult> {
+  output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
+  terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
+  openInput?: (write: (text: string) => Promise<void>) => void): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -76,7 +78,7 @@ export async function runHostProcess(request: HostProcessRequest,
     const sent = signalGroup(child, "SIGTERM");
     base.group_signal_sent ||= sent;
     if (sent) {
-      await delay(HOST_PROCESS_TERMINATE_GRACE_MS);
+      await delay(terminationGraceMs);
       signalGroup(child, "SIGKILL");
       // KILL delivery is asynchronous. Closed pipes and a reaped leader do not
       // establish that descendants have stopped executing or writing.
@@ -123,7 +125,19 @@ export async function runHostProcess(request: HostProcessRequest,
   };
   const reads = Promise.all([read("stdout"), read("stderr")]);
   child.stdin.on("error", () => {}); // A Host may close stdin before consuming it.
-  child.stdin.end(request.input);
+  if (openInput) {
+    // The private preflight transport retains stdin between read-only requests.
+    // It owns framing/backpressure, not child lifetime or process-group cleanup.
+    // One-shot managed Hosts retain their original EOF behavior.
+    const write = async (text: string) => {
+      if (child.stdin.destroyed || outcome !== "exited") throw new Error("Host input closed");
+      await new Promise<void>((resolve, reject) => {
+        child.stdin.write(text, error => error ? reject(error) : resolve());
+      });
+    };
+    try { openInput(write); }
+    catch { complete = false; stop("cancelled"); }
+  } else child.stdin.end(request.input);
   try {
     await exited;
     await reads;

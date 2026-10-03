@@ -220,12 +220,15 @@ def main() -> int:
             **os.environ,
             "HOME": str(home),
             "CODEX_HOME": str(codex_home),
+            "LOOPX_REGISTRY": str(home / ".loopx" / "registry.global.json"),
+            "LOOPX_RUNTIME_ROOT": str(home / ".loopx"),
             "OPENCODE_CONFIG_DIR": str(home / ".config" / "opencode"),
             "LOOPX_BIN_DIR": str(bin_dir),
             "LOOPX_SHELL_PROFILE": str(profile),
             "LOOPX_INSTALL_SKILL": "1",
             "LOOPX_PROMOTE_DEFAULT": "1",
             "LOOPX_PYTHON": sys.executable,
+            "LOOPX_USAGE_PING": "0",
             "PATH": os.environ.get("PATH", ""),
             "SHELL": "/bin/zsh",
         }
@@ -446,10 +449,10 @@ def main() -> int:
             "pull_requests[review_action_kind!=null].evidence_commands",
             "Do not pipe the only copy through `jq`",
             "completion_gate",
-            "Never infer `verified` from metadata or CI",
+            "never infer `verified` from metadata or CI",
             "formal `REQUEST_CHANGES`",
             "Read the published review back",
-            "Merge still routes through `loopx-pr-merge`",
+            "Merge routes through `loopx-pr-merge`",
         ):
             assert phrase in pr_review_text, phrase
         assert "Do not use this skill to approve" not in pr_review_text, pr_review_text

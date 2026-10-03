@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationWakeObservation, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -8,6 +8,18 @@ const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", wor
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+test("wake observation preserves conversation and current Goal-reference scope", () => {
+  const goalRef = {goal_id: "goal", goal_instance_id: "original-instance"};
+  const intent = {requester: {goal_id: "goal", agent_id: "lead", goal_ref: goalRef},
+    conversation: {session_id: "origin", turn_id: "original-turn"}};
+  const observer = {goal_id: "goal", agent_id: "lead", goal_ref: goalRef, session_id: "origin"};
+  assert.equal(decideDelegationWakeObservation({intent, observer}).observed, true);
+  for (const delta of [{session_id: "other"}, {goal_id: "other"}, {agent_id: "other"},
+    {goal_ref: {...goalRef, goal_instance_id: "replacement-instance"}}]) {
+    assert.equal(decideDelegationWakeObservation({intent, observer: {...observer, ...delta}}).observed, false);
+  }
+});
 
 const declaration = {validation_command: null, validation_command_argv: ["node", "validate.ts"],
   validation_label: "Independent verification", validation_timeout_seconds: 5};
@@ -301,7 +313,7 @@ test("requester adoption needs accepted downstream use, not reading, revision or
   }
 });
 
-test("preflight reports unavailable canonical authority without pretending to inspect a Turn", () => {
+test("preflight reports unavailable current authority without granting execution", () => {
   const result = delegationPreflight({binding, authority: {ready: false,
     reason: "Goal acceptance requires an existing canonical authority"}, preview: null,
   acceptance: null, validation_files_current: false});
@@ -314,6 +326,8 @@ test("preflight reports unavailable canonical authority without pretending to in
   assert.equal(result.executor, null);
   assert.equal(Object.values(result.effects as Record<string, boolean>).some(Boolean), false);
   assert.match(String(result.authority_reason), /canonical authority/);
+  assert.doesNotMatch(String(result.note), /no Turn or provider was inspected/);
+  assert.match(String(result.note), /no executable permission is returned/);
   const legacy = delegationPreflight({binding, authority: {ready: false,
     reason: "canonical authority absent", state: "promotion_required",
     next_action: "preview_reviewed_goal_authority_promotion"}, preview: null,

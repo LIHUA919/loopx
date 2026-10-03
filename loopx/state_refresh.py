@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import chronology_key, now_local_iso
+from .control_plane.goals.state_resolution import resolve_goal_state as resolve_goal_state
 from .control_plane.runtime.run_artifacts import run_file_stem as run_file_stem
 from .control_plane.work_items.delivery_history import require_consistent_delivery_claim
 from .control_plane.work_items.delivery_batch_scale import (
@@ -30,6 +31,7 @@ from .control_plane.quota.refresh_external_delivery import (
     finish_external_delivery_refresh, refresh_recovery_payload,
 )
 from .control_plane.quota.blocked_retry import require_blocked_retry_wait
+from .control_plane.quota.accounting_admission import quota_accounting_admission
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from .control_plane.quota.settlement import (
@@ -100,8 +102,7 @@ from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
 )
-from .file_lock import exclusive_run_index_lock
-from .registry import registry_goals, resolve_state_file
+from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
 from .runtime import validate_goal_id_path_segment
 from .state_projection import (
     active_state_next_action_entries,
@@ -314,46 +315,6 @@ def section_list_items(lines: list[str]) -> list[str]:
             items.append(cleaned)
         index += 1
     return items
-
-
-def resolve_goal_state(
-    *,
-    registry: dict[str, Any],
-    goal_id: str,
-    project_override: Path | None,
-    state_file_override: Path | None,
-) -> tuple[dict[str, Any] | None, Path | None, Path]:
-    goal = next((item for item in registry_goals(registry) if str(item.get("id")) == goal_id), None)
-    project = project_override.expanduser().resolve() if project_override else None
-    if project is None and goal and goal.get("repo"):
-        project = Path(str(goal.get("repo"))).expanduser()
-
-    registered_state_file = (
-        resolve_state_file(project, goal.get("state_file"))
-        if project and goal and goal.get("state_file")
-        else None
-    )
-    state_file = state_file_override.expanduser() if state_file_override else None
-    if state_file is None and goal:
-        state_file = registered_state_file
-    if state_file is None:
-        raise ValueError("state file is required when the goal is not resolvable from registry")
-    if not state_file.is_absolute():
-        if project is None:
-            raise ValueError("relative state file requires --project or registry repo")
-        state_file = project / state_file
-    state_file = state_file.resolve()
-    if state_file_override is not None:
-        if project is None:
-            raise ValueError("--state-file override requires --project or a registry goal with repo")
-        registered_resolved = (
-            registered_state_file.resolve() if registered_state_file is not None else None
-        )
-        if state_file != registered_resolved and not state_file.is_relative_to(project):
-            raise ValueError(
-                f"--state-file {state_file} escapes project root {project}"
-            )
-    return goal, project, state_file
 
 
 def build_state_refresh_record(
@@ -825,6 +786,7 @@ def refresh_state_run(
     dry_run: bool,
     sync_global: bool = True,
     external_delivery: dict[str, Any] | None = None,
+    goal_ref: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
@@ -901,9 +863,15 @@ def refresh_state_run(
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
     # State-dependent admission through the final append remains serialized.
     # Only pure input validation runs before this transitional persistence lock.
-    with (nullcontext() if dry_run else exclusive_run_index_lock(
-        runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl", operation="refresh-state"
-    )):
+    with quota_accounting_admission(
+        runtime_root=runtime_root,
+        registry_path=registry_path,
+        goal_id=safe_goal_id,
+        goal_ref=goal_ref,
+        operation="refresh-state",
+        lock_legacy_index=not dry_run,
+        handoff_legacy_index=not dry_run,
+    ) as source_admission:
         settlement_identity = None
         settlement_result = None
         delivery_workspace_causality = None
@@ -926,6 +894,10 @@ def refresh_state_run(
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
                 replan_obligation_id=normalized_replan_obligation_id,
+                registry_path=registry_path,
+                goal_ref=goal_ref,
+                source_admission=source_admission,
+                borrow_source_admission=source_admission is not None,
                 refresh_retry=(refresh_retry_request := {
                     "checkpoint_read_context_id": checkpoint_read_context_id,
                     "external_delivery": external_delivery,
@@ -968,7 +940,7 @@ def refresh_state_run(
                 inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=safe_goal_id, dry_run=dry_run,
+                goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
                 return recover_refresh_todo_projection(
@@ -1406,6 +1378,9 @@ def refresh_state_run(
             dry_run=dry_run,
             autonomous_replan_recorded_requested=bool(autonomous_replan_recorded),
         )
+        if goal_ref is not None:
+            for projection in (record, index_record, payload):
+                projection["goal_ref"] = dict(goal_ref)
         # GH-C95 producer boundary: attach the typed run_usage_v0 row before the
         # durable record and index rows are written, so malformed or negative usage
         # fails the whole refresh instead of entering run history. The booking lock
@@ -1418,6 +1393,7 @@ def refresh_state_run(
                     runtime_root=runtime_root, registry_path=registry_path,
                     state_file=resolved_state_file, identity=settlement_identity,
                     read_context_id=checkpoint_read_context_id,
+                    goal_ref=goal_ref,
                 ))
                 for projection in (record, index_record, payload):
                     projection["vision_checkpoint"] = {
@@ -1496,7 +1472,8 @@ def refresh_state_run(
                     saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
                         state_file=resolved_state_file, identity=settlement_identity,
                         refresh_retry=refresh_retry_request, record=record, index_record=index_record,
-                        markdown=render_state_refresh_markdown(payload) + "\n")
+                        markdown=render_state_refresh_markdown(payload) + "\n",
+                        goal_ref=goal_ref, source_admission=source_admission)
                     for projection in (record, index_record, payload):
                         projection["vision_checkpoint"]["read_context"] = saved["context"]
                     for projection in (index_record, payload):
@@ -1598,13 +1575,23 @@ def refresh_state_run(
                 runtime_root, goal_id=safe_goal_id, agent_id=settlement_identity.agent_id,
                 todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
                 replan_obligation_id=settlement_identity.replan_obligation_id,
+                registry_path=registry_path, goal_ref=goal_ref,
+                source_admission=source_admission,
+                borrow_source_admission=source_admission is not None,
             )
             if committed_readback is None:
                 raise RuntimeError("committed refresh settlement readback missing")
-            attach_settlement_progress(payload, committed_readback, registry_path=registry_path, runtime_root=runtime_root)
+            attach_settlement_progress(
+                payload, committed_readback, registry_path=registry_path,
+                runtime_root=runtime_root, goal_ref=goal_ref,
+            )
         return recover_refresh_todo_projection(
             finish_external_delivery_refresh(
-                payload, settlement_readback, runtime_root, dry_run=dry_run,
+                payload,
+                settlement_readback,
+                runtime_root,
+                dry_run=dry_run,
+                goal_ref=goal_ref,
             ),
             registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
             project=resolved_project, state_file=resolved_state_file,

@@ -25,7 +25,7 @@ from .inbox import (
     _write,
     normalize_request,
 )
-from . import conversation_scope
+from .peer_context_observation import require_parent_context_access
 from .goal_instance_scope import (
     collaboration_goal_scope,
     decide_collaboration_lifecycle,
@@ -125,22 +125,9 @@ def request(
                 parent_request_id,
                 scope=goal_scope,
             )
-            if parent.get("source_kind") != "peer":
-                audience_scope = conversation_scope(
-                    {
-                        "channel_id": parent.get("source_channel"),
-                        "goal_id": goal_id,
-                    },
-                    origin=(
-                        "web"
-                        if str(parent.get("source_id", "")).startswith("web:")
-                        else "unknown"
-                    ),
-                )
-                if not audience_scope["private_conversation"]:
-                    raise ValueError(
-                        "external-audience requests cannot be forwarded to peers"
-                    )
+            require_parent_context_access(
+                root, registry, parent, target_agent_id, scope=goal_scope
+            )
             inherited = parent.get("inherited_context") or {
                 "request_id": parent_request_id,
                 "message": parent["message"],
@@ -249,6 +236,8 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
         / _hash(_target(goal_id, agent_id, scope))
     )
     for operation_path in sorted(folder.glob("*.json")):
+        if not BARE_SHA256_PATTERN.fullmatch(operation_path.stem):
+            continue  # Lock holder sidecars are not peer operation records.
         operation = _read(operation_path)
         if (
             operation.get("goal_id") != goal_id
@@ -274,88 +263,96 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
             "source_id"
         ) != operation.get("source_id"):
             raise ValueError("peer return scope mismatch")
-        path = _root(root) / "replies" / row["request_id"] / "conclusion.json"
-        if not path.exists():
-            continue
-        reply = _read(path)
-        if (
-            any(
-                reply.get(k) != row.get(k)
-                for k in (
-                    "request_id",
-                    "goal_id",
-                    "agent_id",
-                    "source_id",
-                    "goal_ref",
-                )
-                if k in row
-            )
-            or reply.get("phase") != "conclusion"
-        ):
-            raise ValueError("peer reply identity conflict")
-        route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
-        if scope is not None:
-            lifecycle = decide_collaboration_lifecycle(
-                scope,
-                operation="peer_return_observe",
-                record=row,
-                route=route,
-            )
-            if lifecycle.get("kind") == "omit":
+        from .inbox import result_paths, result_identity_matches
+
+        for path in result_paths(_root(root) / "replies" / row["request_id"]):
+            if path.stem == "decision":
                 continue
-        consumed = path.parent / "conclusion.consumed.json"
-        if consumed.exists():
-            value = _read(consumed)
-            if any(
-                value.get(k) != v
-                for k, v in {
-                    "request_id": row["request_id"],
-                    "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    **(
-                        {"goal_ref": row["goal_ref"]}
-                        if "goal_ref" in row
-                        else {}
-                    ),
-                }.items()
+            reply = _read(path)
+            if (
+                any(
+                    reply.get(k) != row.get(k)
+                    for k in (
+                        "request_id",
+                        "goal_id",
+                        "agent_id",
+                        "source_id",
+                        "goal_ref",
+                    )
+                    if k in row
+                )
+                or reply.get("phase") != "conclusion"
+                or not result_identity_matches(reply, row, path)
             ):
-                raise ValueError("peer consumption receipt scope mismatch")
-            continue
-        items.append(
-            {
-                "request_id": row["request_id"],
-                "agent_id": row["agent_id"],
-                "parent_request_id": row.get("parent_request_id"),
-                "brief": row["brief"],
-                "text": reply["text"],
-                "decision": reply["decision"],
-                "created_at": reply["created_at"],
-            }
-        )
+                raise ValueError("peer reply identity conflict")
+            route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
+            if scope is not None:
+                lifecycle = decide_collaboration_lifecycle(
+                    scope,
+                    operation="peer_return_observe",
+                    record=row,
+                    route=route,
+                )
+                if lifecycle.get("kind") == "omit":
+                    continue
+            consumed = path.with_name(path.stem + ".consumed.json")
+            if consumed.exists():
+                value = _read(consumed)
+                if any(
+                    value.get(k) != v
+                    for k, v in {
+                        "request_id": row["request_id"],
+                        **({"result_key": path.stem} if "result_key" in reply else {}),
+                        "goal_id": goal_id,
+                        "agent_id": agent_id,
+                        **(
+                            {"goal_ref": row["goal_ref"]}
+                            if "goal_ref" in row
+                            else {}
+                        ),
+                    }.items()
+                ):
+                    raise ValueError("peer consumption receipt scope mismatch")
+                continue
+            items.append(
+                {
+                    "request_id": row["request_id"],
+                    **({"result_key": path.stem} if path.stem != "conclusion" else {}),
+                    "agent_id": row["agent_id"],
+                    "parent_request_id": row.get("parent_request_id"),
+                    "brief": row["brief"],
+                    "text": reply["text"],
+                    "decision": reply["decision"],
+                    "created_at": reply["created_at"],
+                }
+            )
+            if len(items) > 20:
+                break
+            if mark_read:
+                state = path.with_name(path.stem + ".delivery.json")
+                with _request_lock(
+                    root,
+                    row["request_id"],
+                    scope,
+                    path.with_suffix(".lock"),
+                ):
+                    if not state.exists():
+                        _write(
+                            state,
+                            {
+                                "status": "delivered",
+                                **({"result_key": path.stem} if "result_key" in reply else {}),
+                                "delivered_at": _now(),
+                                "kind": "requester_cli_read",
+                                **(
+                                    {"goal_ref": row["goal_ref"]}
+                                    if "goal_ref" in row
+                                    else {}
+                                ),
+                            },
+                        )
         if len(items) > 20:
             break
-        if mark_read:
-            state = path.with_name("conclusion.delivery.json")
-            with _request_lock(
-                root,
-                row["request_id"],
-                scope,
-                path.with_suffix(".lock"),
-            ):
-                if not state.exists():
-                    _write(
-                        state,
-                        {
-                            "status": "delivered",
-                            "delivered_at": _now(),
-                            "kind": "requester_cli_read",
-                            **(
-                                {"goal_ref": row["goal_ref"]}
-                                if "goal_ref" in row
-                                else {}
-                            ),
-                        },
-                    )
     return {"items": items[:20], "has_more": len(items) > 20}
 
 
@@ -368,6 +365,7 @@ def consume_return(
     registry=None,
     caller_goal_ref=None,
     scope=None,
+    result_key="conclusion",
 ):
     if scope is None and registry is not None:
         with collaboration_goal_scope(
@@ -382,6 +380,7 @@ def consume_return(
                 agent_id,
                 request_id,
                 scope=goal_scope,
+                result_key=result_key,
             )
     route = _read(_root(root) / "roundtrips" / (_request_id(request_id) + ".json"))
     if (
@@ -411,10 +410,16 @@ def consume_return(
     ):
         raise ValueError("peer return scope mismatch")
     folder = _root(root) / "replies" / request_id
-    if not (folder / "conclusion.delivery.json").exists():
+    from .inbox import result_paths, result_identity_matches
+
+    result_path = next((p for p in result_paths(folder) if p.stem == result_key and p.stem != "decision"), None)
+    if result_path is None:
+        raise ValueError("read the peer conclusion before acknowledging it; requested result is unavailable")
+    delivery_path = result_path.with_name(result_key + ".delivery.json")
+    if not delivery_path.exists():
         raise ValueError("read the peer conclusion before acknowledging it")
-    reply = _read(folder / "conclusion.json")
-    if reply.get("phase") != "conclusion" or any(
+    reply = _read(result_path)
+    if not result_identity_matches(reply, row, result_path) or reply.get("phase") != "conclusion" or any(
         reply.get(k) != row.get(k)
         for k in (
             "request_id",
@@ -426,8 +431,10 @@ def consume_return(
         if k in row
     ):
         raise ValueError("peer reply identity conflict")
-    delivery = _read(folder / "conclusion.delivery.json")
+    delivery = _read(delivery_path)
     if delivery.get("status") != "delivered" or (
+        "result_key" in reply and delivery.get("result_key") != result_key
+    ) or (
         "goal_ref" in row and delivery.get("goal_ref") != row["goal_ref"]
     ):
         raise ValueError("read the peer conclusion before acknowledging it")
@@ -438,12 +445,13 @@ def consume_return(
             record=row,
             route=route,
         )
-    path = folder / "conclusion.consumed.json"
+    path = folder / (result_key + ".consumed.json")
     with _request_lock(root, request_id, scope, path.with_suffix(".lock")):
         if path.exists() and any(
             _read(path).get(k) != v
             for k, v in {
                 "request_id": request_id,
+                **({"result_key": result_key} if "result_key" in reply else {}),
                 "goal_id": goal_id,
                 "agent_id": agent_id,
                 **(
@@ -459,6 +467,7 @@ def consume_return(
                 path,
                 {
                     "request_id": request_id,
+                    **({"result_key": result_key} if "result_key" in reply else {}),
                     "goal_id": goal_id,
                     "agent_id": agent_id,
                     "consumed_at": _now(),
@@ -473,6 +482,7 @@ def consume_return(
         "ok": True,
         "request_id": request_id,
         "status": "consumed",
+        **({"result_key": result_key} if "result_key" in reply else {}),
         "work_state_changed": False,
     }
 
@@ -521,7 +531,7 @@ def input_readiness(
                 # Nonblocking open plus fstat prevents a FIFO/device reference
                 # from hanging the worker's entire Inbox read.
                 with os.fdopen(
-                    os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb"
+                    os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)), "rb"
                 ) as stream:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise OSError("input is not a regular file")
@@ -591,6 +601,9 @@ def read_inbox(
             result["peer_returns"] = peer_returns
         record_read(root, result["items"], scope=goal_scope)
 
+    from .links import receiver_followthrough
+
+    receiver_followthrough(root, registry, result["items"])
     # Input hashing can touch arbitrary workspace files and does not participate
     # in Goal lifetime admission.
     for item in result["items"]:
@@ -599,6 +612,12 @@ def read_inbox(
                 registry, goal_id, item["brief"], workspace=workspace
             )
     result["followthrough"] = (
+        "Use each request's receiver_followthrough to reconcile it with actual Core work. "
+        "Record an explicit assessment even when continuing other work; a read is not a decision. "
+        "Integrate accepted work into your existing plan using the normal Goal/Todo workflow; "
+        "if deferring or rejecting it, return the reason and any concrete resume condition. "
+        "For adopted work, resume the linked commitment or assess whether this can be answered directly; "
+        "do not manufacture a Todo for a short answer. "
         "Independently assess requests and actual input versions before accepting work. "
         "Use request_peer for help or independent review. Assess peer conclusions against "
         "actual artifacts, then consume_peer_result after using or rejecting the result. "
@@ -618,6 +637,7 @@ def return_result(
     registry=None,
     caller_goal_ref=None,
     scope=None,
+    update_id=None,
 ):
     """Route by the saved recipient, never by an Agent's coordinator role."""
     if scope is None and registry is not None:
@@ -634,6 +654,7 @@ def return_result(
                 request_id,
                 text,
                 scope=goal_scope,
+                update_id=update_id,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     if row.get("source_kind") != "peer":
@@ -662,6 +683,7 @@ def return_result(
             text,
             scope=scope,
             route=route,
+            update_id=update_id,
         ),
         "status": "queued_for_requester",
     }

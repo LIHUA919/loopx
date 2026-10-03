@@ -220,7 +220,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       authority_state: authorityState, authority_next_action: authorityNextAction,
       promotion_from_surface_allowed: false,
       executor: null, effects,
-      note: "Canonical authority is unavailable, so no Turn or provider was inspected or launched. "
+      note: "Current canonical authority cannot be confirmed, so no executable permission is returned. "
+        + "No host was launched and no state was written or quota spent. "
         + "Promote or repair authority explicitly before retrying; inspection never promotes a provider.",
     };
   }
@@ -390,6 +391,23 @@ function delegationWakeIntent(params: JsonObject): JsonObject {
     requester: {goal_id: requester.goal_id, agent_id: requester.agent_id, goal_ref: goalRef},
     conversation,
     operation_id: requester.operation_id, request_id: requester.request_id,
+  };
+}
+
+/** Reading another conversation's result cannot consume its continuation. */
+export function decideDelegationWakeObservation(params: JsonObject): JsonObject {
+  const intent = requireJsonObject(params.intent, "wake intent");
+  const requester = requireJsonObject(intent.requester, "wake requester");
+  const observer = requireJsonObject(params.observer, "wake observer");
+  requireThat([observer.session_id, observer.goal_id, observer.agent_id].every(text),
+    "wake observation requires its conversation and requester");
+  const conversation = intent.conversation == null ? null
+    : requireJsonObject(intent.conversation, "wake conversation");
+  return {
+    observed: conversation?.session_id === observer.session_id
+      && requester.goal_id === observer.goal_id && requester.agent_id === observer.agent_id
+      && canonicalAuthoritySha256(requester.goal_ref ?? null)
+        === canonicalAuthoritySha256(observer.goal_ref ?? null),
   };
 }
 

@@ -1,5 +1,6 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
+import { flushCompileCache } from "node:module";
 import { chmod, readFile, rm, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
@@ -27,10 +28,12 @@ const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
+  "todo.context.page",
   "goal.checkpoint_read_context.source",
   "goal.checkpoint_read_context.evaluate",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
+  "performance_diagnosis.inspect",
 ]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
@@ -258,6 +261,10 @@ server.on("close", () => {
     if (pendingRequests > 0) {
       await new Promise<void>((resolve) => { resolveDrain = resolve; });
     }
+    // Retiring the locator lets a fixture remove the private namespace. Flush
+    // compiled code first, so Node's exit does not recreate a cleaned cache.
+    // This optional optimization never decides whether shutdown is permitted.
+    flushCompileCache();
     await withFileMutationLock(infoPath, async () => {
       let published: Record<string, unknown>;
       try {

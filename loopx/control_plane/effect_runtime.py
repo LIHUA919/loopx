@@ -37,10 +37,12 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
+    "todo.context.page",
     "goal.checkpoint_read_context.source",
     "goal.checkpoint_read_context.evaluate",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
+    "performance_diagnosis.inspect",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
@@ -286,6 +288,12 @@ def _runtime_fingerprint_for_snapshot(
 ) -> str:
     digest = hashlib.sha256()
     source_root = Path(root)
+    # Lazy imports and Python bridges resolve from this physical release. Equal
+    # bytes in another checkout must not reuse a loader whose release may retire.
+    # Resolved aliases still share one owner; source bytes remain fully checked.
+    digest.update(b"loopx_effect_runtime_source_instance_v1\0")
+    digest.update(os.fsencode(os.path.normcase(root)))
+    digest.update(b"\0")
     paths = (source_root / relative for relative, *_metadata in snapshot)
     # Reads may finish out of order; hash the same relative names and original
     # bytes in snapshot order. No disk cache or skipped freshness check.
@@ -856,6 +864,10 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                         _node_executable(),
                         "--no-warnings",
                         "--experimental-strip-types",
+                        "--import",
+                        # ESM specifiers require file URLs on Windows; encode
+                        # reserved path characters on every platform as well.
+                        (_control_plane_root() / "effect_runtime_compile_cache.ts").as_uri(),
                         str(_runtime_server_path()),
                         "--info",
                         str(info_path),

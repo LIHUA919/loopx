@@ -92,6 +92,17 @@ execution, live Lark, frontend journey completion or the remaining M1–M4 work.
 
 ## 4. Current-system contract: audited facts
 
+The review command now projects the exact invoking Codex session's recorded
+model/provider/effort into its existing result template and rereads the metadata
+before publication checking. `control_plane/runtime/execution_identity.ts` owns
+bounded metadata projection and declaration matching; the Python Codex adapter
+only locates the exact thread in the selected home through a read-only store.
+Unknown metadata stays explicit, configuration is not execution evidence, and
+public review text contains no host locator or transcript. This is a GQ03/GQ12
+attribution prerequisite, not evidence of independent review, App adoption,
+receiver execution or R2/G1 completion. Other host adapters and the installed
+conversation journey remain with those existing acceptance owners.
+
 The baseline already has substantial reusable machinery:
 
 | Existing owner | Source / fact | Consequence |
@@ -192,6 +203,34 @@ Resolve a request from authenticated principal, origin/audience, resource scope 
 
 For a trusted owner-private manager, grant the normal host-agent tool profile that the owner configured. For a shared/untrusted audience, run a restricted context with enforceable resource/tool limits. A broad private process followed only by output filtering is **not** sufficient isolation. A verified owner message in a group may trigger private work with a separately scoped return, when a standing policy permits it; other participants do not inherit that policy.
 
+**Owner-managed authority is inherited, not reduced by the chat surface.** An
+authenticated owner may designate a steward conversation, including a group,
+to manage all of their Agents with their standing authority. Within that managed
+scope, the steward can inspect work and evidence, plan, delegate and exercise
+already-authorized effects; being a group is not itself a reason to hide Todo
+titles/status or ask for permission again. Descendants inherit a verifiable
+reference to that owner grant, with any explicit attenuation or revocation,
+rather than a new grant invented at each message. Future managed Agents inherit
+the same scope. Ordinary ownership, claim/lease and host/provider enforcement
+remain the effect boundary; inherited authority does not fabricate execution.
+Unmanaged resources and unauthenticated participants remain outside the grant.
+The current read adapter reuses the exact audience's existing evidence-Goal
+grant for linked Core details. The shipped managed-Goal context grant below is
+a bounded step; full planning/effect inheritance still needs its typed grant
+chain, installed receiver adoption and original-route acceptance.
+
+Use managed Goal scope for an authenticated owner's context-delegation grant:
+all current and future registered Agents within those Goals inherit it. Avoid
+requiring separate enrollment every time a worker joins. Retain exact-recipient
+grants for restricted sources, and explicit recipient revocations that override
+the Goal grant. New Goals, evidence-read scope and execution permissions are
+separate authority; registration or a quoted request cannot expand them.
+The shared `collaboration/source_grants.ts` owner resolves the same current
+policy for the catalog, direct handoff and peer forwarding. The existing local
+operator command can configure a Goal target by omitting `--agent-id`, with
+preview, locked apply and readback. This bounded configuration slice does not
+qualify settings-UI editing, native receiver adoption or the full M1–M3 journey.
+
 LoopX state mutations always use the existing typed command boundary, even if initiated through shell. The manager does not edit registry/authority files behind the control plane. Repository modifications use the project's normal worktree/review practice. Scoped merge/deploy authorization may be reused; unrelated payment or trading authority cannot be inferred from it.
 
 If an approval bridge is needed, it presents the exact operation and existing grant mismatch and waits for a real answer. A noninteractive `approvalPolicy=never` rejection must not be misreported as the user refusing. Host policy, provider rejection and application restrictions remain separate diagnoses. This design does not attempt to bypass an upstream safety decision.
@@ -258,6 +297,16 @@ The user-facing exchange is **received → assessed/working → result**, with m
 | Assessed | Receiver decision, accepted scope, plan/evidence references or specific deferral |
 | Work resolved | Result satisfies the request's completion question, or an explicit rejection/cancellation/terminal inability |
 | Answer delivered | Provider receipt/readback for the original route and answer revision; distinct from resolution |
+
+**Receiver followthrough checkpoint.** Shared CLI/MCP reads now retain each
+request's recorded assessment and fresh explicitly linked Core work, with typed
+advice for assessment, work review, answer return or evidence recovery. Scoped
+workers can link existing work through `link_work`; the Python link adapter is
+shared collaboration code rather than a manager-only owner. Busy unrelated work,
+read receipts and completed linked Todos do not certify the request outcome.
+File/SQLite CLI and real stdio tests qualify this context/tool slice. Receiver
+adoption, actual effects and original-route return remain separate acceptance;
+keep G0/G1 open until the installed ordinary journey proves them.
 
 Migrate current inbox/tracking/roundtrip records into the single collaboration owner; preserve their valid effect semantics and receipts, but retire duplicate manager-specific transition logic after cutover. Persist intent before dispatch; use request revision plus effect identity for idempotency. A changed payload cannot reuse an immutable identity; a correction appends a linked revision and the receiver rechecks relevant state before effectful execution. Multiple messages about one job may be explicitly related by the manager, preserving each original obligation and correction. Do not merge independent same-text requests by a content hash alone.
 
@@ -573,6 +622,20 @@ Qualify worker→worker through this adapter as the concrete second M2 consumer 
 
 ### 5.14 Steward adoption of the reusable conversation work surface
 
+The steward's local attention intake is independent of external channel setup.
+It consumes the same canonical blocker/decision facts as the optional Goal
+Channel, then synthesizes their effect on objectives, prior decisions and safe
+continuation. One Todo's blocker and request form one subject, not two mechanical
+alerts. Semantic grouping preserves distinct request identities and decision
+terms; model prose cannot change authority or certify delivery. See the
+[Goal Channel intake checkpoint](goal-channel-collaboration-v0.md#local-steward-intake-and-optional-channel-delivery).
+The bounded implementation supplies facts to existing Turns and replaces channel
+templates with configured, restricted steward synthesis. Verified gate messages
+cover the matching blocker revision; generation failures remain pending. Local
+autonomous wake, change/read/recovery receipts and sustained model quality remain
+Stage 2/R3 work. The external synthesis transcript is isolated from live owner Turns.
+
+
 The shared [conversation work surface](intelligent-review-presentation-surfaces-v0.md#88-reusable-conversation-work-surface) owns adaptive reports, truthful event presentation, Turn-scoped stop/steer, reconnect and cross-channel density for all LoopX conversations. This RFC applies those same rules to the steward's owner conversation; it owns recipient selection, receiver assessment and the original-route return. A manager-specific answer format or transport must not become a second presentation authority.
 
 Routing uses §5.5 rather than a static Agent name list. For a product-design request addressed to the steward, first inspect authorized current Goal, registration, claimed work and fresh session reachability; then rank eligible receivers by responsibility and context, with model/profile fit and actual capacity as separate constraints. Explain the selected recipient or the exact gap. The receiver must acknowledge and assess the full corrected intent, then either work or defer with an owner and condition. The original conversation receives the assessment and final evidenced result through §5.6; the catalog, a stored inbox request and a spinner are three distinct incomplete states. This must pass with a real active worker plus stopped, registered-only, stale and model-mismatched decoys before advertising automatic delegation.
@@ -700,6 +763,18 @@ provider failure where available; unexpected local preparation errors use
 and an already terminal result win over a late preparation error. Restoring the
 runtime must not replay a failed request; the same ingress identity returns the
 same failure, while a fresh explicit request can run after repair.
+
+**Stopped workers returning late (A23, GQ08):** context preparation and provider
+reads can outlive the bounded interrupt wait. Before dispatch and when a provider
+returns, consult the persisted Turn status and its exact active Session claim
+through the existing typed turn-driver owner. An in-memory cancellation marker
+is insufficient: it may already have been cleared when the stop receipt commits.
+A stopped worker must neither launch a new provider Turn nor deliver a late
+handoff, and it must not borrow a newer Turn's claim. Validate stop through the
+real HTTP endpoint and file store, let a fresh request complete before releasing
+the old reader, and verify one interrupted outcome with no late dispatch or
+handoff. This qualifies that delayed-read boundary; it does not prove provider
+interrupt fidelity or cancellation of an effect already admitted by its owner.
 
 The bounded Python queue repair uses the existing store's fenced failure and
 claim-release operations for all queue callers; Lark only translates the typed

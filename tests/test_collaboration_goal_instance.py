@@ -293,6 +293,30 @@ def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(
         )
 
 
+def test_historical_request_does_not_borrow_work_from_recreated_goal(tmp_path, monkeypatch):
+    from loopx.control_plane.collaboration import links
+
+    registry = _create_source_registry(tmp_path)
+    _, _, receipt = _manager_request(tmp_path, registry)
+    reads = []
+
+    def current_work(**kwargs):
+        reads.append(kwargs["goal_id"])
+        return {"ok": True, "todos": [{"todo_id": "todo_reused_work",
+            "claimed_by": "builder", "status": "done", "text": "Work from the new Goal"}]}
+
+    monkeypatch.setattr(links, "list_goal_todos", current_work)
+    links.link(tmp_path, registry, "delivery", "builder", receipt["request_id"],
+               ["todo_reused_work"], [])
+    _recreate(registry)
+    reads.clear()
+    row = query(tmp_path, registry, goal_ids=["delivery"], owner_scope=True,
+                request_id=receipt["request_id"])["rows"][0]
+    assert row["linked_todos"] == [{"todo_id": "todo_reused_work", "status": "unknown",
+        "title": None, "source": "core_todo_unavailable_or_owner_changed"}]
+    assert reads == []
+
+
 def test_late_prior_instance_result_returns_only_to_its_saved_conversation(
     tmp_path: Path,
 ) -> None:
@@ -705,6 +729,8 @@ def test_long_lived_mcp_keeps_its_captured_instance_after_recreation(
     _recreate(registry)
 
     assert server.tools["read_context"]()["items"] == []
+    with pytest.raises(ValueError, match="historical_mutation_forbidden"):
+        server.tools["link_work"](receipt["request_id"], evidence_ids=["sha256:" + "a" * 64])
     with pytest.raises(ValueError, match="stale_goal_instance"):
         server.tools["request_peer"](
             "reviewer",
@@ -1092,3 +1118,23 @@ def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, dam
     snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
     assert snapshot["messages"] == before
     assert not any(m.get("collaboration") for m in snapshot["messages"])
+
+
+def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _manager_request(tmp_path, registry)
+    rid, goal_ref = receipt["request_id"], receipt["goal_ref"]
+    acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Accepted", registry=registry, caller_goal_ref=goal_ref)
+    report(tmp_path, "delivery", "builder", rid, "conclusion", "Waiting for review.", registry=registry, caller_goal_ref=goal_ref)
+    assert drain(tmp_path, registry, store, None) == 1
+    _recreate(registry)
+    update = report(tmp_path, "delivery", "builder", rid, "conclusion", "Review complete.", registry=registry, caller_goal_ref=goal_ref, update_id="review-complete")
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 1
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
+    snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+    messages = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
+    assert [m["text"].split("\n\n")[-1] for m in messages] == ["Waiting for review.", "Review complete."]
+    assert messages[-1]["return_delivery"]["result_key"] == update["result_key"]
+    assert messages[-1]["return_delivery"]["status"] == "delivered"
+    with pytest.raises((ValueError, FileNotFoundError)):
+        report(tmp_path, "delivery", "builder", rid, "conclusion", "Wrong generation.", registry=registry, caller_goal_ref={"goal_id": "delivery", "goal_instance_id": INSTANCE_B}, update_id="wrong-instance")

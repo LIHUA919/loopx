@@ -232,6 +232,16 @@ export const goalChannelNotificationRowSchema = z.object({
   configured: z.boolean().optional().default(false),
   enabled: z.boolean().optional().default(false),
   human_gate_auto_notify_enabled: z.boolean().optional().default(false),
+  blocked_notice_auto_notify_enabled: z.boolean().optional().default(false),
+  steward_notice_delivery: z.object({
+    pending_count: z.number(),
+    failed_count: z.number(),
+  }).optional(),
+  blocked_notice_delivery: z.object({
+    delivered_count: z.number(),
+    unverified_count: z.number(),
+    resolved_count: z.number(),
+  }).optional(),
   target_ref: z.string().optional().nullable(),
   receipt_count: z.number().optional().default(0),
   last_notified_at: z.string().optional().nullable(),
@@ -353,8 +363,8 @@ export const projectAssetTodoProjectionGapSchema = z.object({
 
 export const nativeChildActivitySchema = z.object({
   schema_version: z.literal("native_subagent_activity_v0"),
-  observation: z.enum(["unknown", "coordinator_reported"]),
-  host_attested: z.literal(false),
+  observation: z.enum(["unknown", "coordinator_reported", "host_observed", "mixed"]),
+  host_attested: z.boolean(),
   configured_limit: z.number().int().nonnegative(),
   launched_count: z.number().int().nonnegative(),
   skipped_count: z.number().int().nonnegative(),

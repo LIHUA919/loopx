@@ -213,7 +213,9 @@ def create_server(
     server = FastMCP("loopx-collaboration")
     register_collaboration_tools(server, root, registry, goal_id, agent_id, workspace)
     if execution_config is not None:
-        register_delegation_tools(server, Delegations(root, registry, goal_id, agent_id, execution_config))
+        register_delegation_tools(server, Delegations(
+            root, registry, goal_id, agent_id, execution_config, reuse_preview=True,
+        ))
     return server
 
 
@@ -266,6 +268,23 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
     @server.tool()
+    def link_work(request_id: str, todo_ids: list[str] | None = None,
+                  evidence_ids: list[str] | None = None) -> dict:
+        """Link this request to your existing Core work or opaque evidence IDs.
+
+        This creates no Todo, claim or execution grant. read_context reads
+        current linked work; busy or completed unrelated work proves nothing
+        about this request. Short answers do not need a Todo link.
+        """
+        check_scope()
+        from .control_plane.collaboration.links import link
+
+        return link(
+            root, registry, goal_id, agent_id, request_id,
+            todo_ids or [], evidence_ids or [], caller_goal_ref=caller_goal_ref,
+        )
+
+    @server.tool()
     def request_peer(
         peer_agent_id: str,
         operation_id: str,
@@ -293,8 +312,11 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         )
 
     @server.tool()
-    def return_result(request_id: str, text: str) -> dict:
-        """Save an evidence-backed conclusion or explicit blocker for the original requester."""
+    def return_result(request_id: str, text: str, update_id: str | None = None) -> dict:
+        """Return a conclusion to the original requester. For a later changed fact,
+        append an update with a stable update_id; retry with the same id and text.
+        Neither a blocker nor a returned result certifies completion of the work.
+        """
         check_scope()
         # The host adapter selects Chat/Lark transport; the shared collaboration
         # owner never depends on presentation or manager capabilities.
@@ -307,19 +329,23 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             request_id,
             "conclusion",
             text,
+            update_id=update_id,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
 
     @server.tool()
-    def consume_peer_result(request_id: str) -> dict:
-        """Acknowledge a peer result after reading and using/rejecting it; no work-state mutation."""
+    def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:
+        """Acknowledge a read peer result, using its result_key for a later update.
+        This consumes only that result and never changes work state.
+        """
         check_scope()
         return consume_return(
             root,
             goal_id,
             agent_id,
             request_id,
+            result_key=result_key,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
@@ -365,10 +391,19 @@ class Delegations:
     share this host entrypoint instead of maintaining a second control-plane CLI.
     """
 
-    def __init__(self, root: Path, registry: Path, goal_id: str, agent_id: str, config: Path):
+    def __init__(self, root: Path, registry: Path, goal_id: str, agent_id: str, config: Path,
+                 *, reuse_preview: bool = False):
         self.root, self.registry = root.resolve(), registry.resolve()
         self.goal_id, self.agent_id, self.config = goal_id, agent_id, config.resolve()
         self._goal_ref_lock = Lock()
+        # Only an entrypoint that owns a reusable service lifetime opts in.
+        # CLI and per-request Goal Chat services keep the original one-shot IO;
+        # starting a supervisor there cannot amortize its cold/cleanup cost.
+        self._preview_transport = None
+        if reuse_preview:
+            from .control_plane.collaboration.delegation_preview_transport import DelegationPreviewTransport
+
+            self._preview_transport = DelegationPreviewTransport()
         try:
             self.goal_ref = capture_collaboration_goal_ref(
                 self.registry,
@@ -450,14 +485,7 @@ class Delegations:
                 current_state if current_state != "available" else "unavailable"
             )
 
-        if workspace_state != "available":
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
-            return workspace_fault(workspace_state)
-        assert workspace_identity is not None
-        try:
-            acceptance = delegation_validation.capture(self, binding)
-        except (OSError, ValueError) as exc:
+        def authority_fault(exc: OSError | ValueError) -> dict[str, object]:
             fault = recheck_workspace()
             if fault is not None:
                 return fault
@@ -487,6 +515,16 @@ class Delegations:
                 },
                 "preview": None, "acceptance": None, "validation_files_current": False,
             })
+
+        if workspace_state != "available":
+            if self.binding(binding_id, require_active=True) != binding:
+                raise ValueError("delegation preflight source changed; retry inspection")
+            return workspace_fault(workspace_state)
+        assert workspace_identity is not None
+        try:
+            acceptance = delegation_validation.capture(self, binding)
+        except (OSError, ValueError) as exc:
+            return authority_fault(exc)
         fault = recheck_workspace()
         if fault is not None:
             return fault
@@ -535,11 +573,10 @@ class Delegations:
             raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
         try:
             current = delegation_validation.capture(self, binding)
-        except (OSError, ValueError):
-            fault = recheck_workspace()
-            if fault is not None:
-                return fault
-            raise
+        except (OSError, ValueError) as exc:
+            # Do not return the first acceptance or an already-read preview
+            # when current authority cannot be confirmed at the final fence.
+            return authority_fault(exc)
         fault = recheck_workspace()
         if fault is not None:
             return fault
@@ -780,30 +817,73 @@ class Delegations:
             "conversation": row.get("conversation"),
         }
 
-    def wake_observed_in_turn(self, operation_id: str) -> dict | None:
+    def wake_observed_in_turn(self, operation_id: str, *, session_id: str) -> dict | None:
         """The requester read this accepted result inside its own Turn; no wake follows."""
         path = self.path(require_operation_id(operation_id))
         if not path.exists():
             return None
+        def observe(wake: dict) -> dict | None:
+            decision = effect_runtime_result("collaboration.delegation.observe_wake", {
+                "intent": wake,
+                "observer": {"session_id": session_id, "goal_id": self.goal_id,
+                             "agent_id": self.agent_id, "goal_ref": self._caller_goal_ref()},
+            })
+            return (wake_receipt(wake, "observed_in_turn", observed_at=time.time())
+                    if decision["observed"] else None)
         try:
-            return record_wake(path, lambda wake: wake_receipt(
-                wake, "observed_in_turn", observed_at=time.time()))
+            return record_wake(path, observe)
         except LockAcquireTimeoutError:
             # The worker or another decision still holds the record; the pump
             # re-reads the current state and the observation remains readable.
             return None
 
-    def _cli(self, binding: dict, *args: str, timeout: int = 60) -> dict:
-        completed = subprocess.run([*_python_module_command("loopx.cli"),
+    def _cli(self, binding: dict, *args: str, timeout: int = 60,
+             delegated_lease: dict | None = None) -> dict:
+        if self._preview_transport is not None and delegated_lease is None and args[:2] == ("turn", "run-once") and not any(
+            flag in args for flag in ("--execute", "--resume-turn-key")
+        ):
+            # Inspection already fences selectors using the original parser;
+            # the worker independently rejects execution/resume/retargeting.
+            # Mutating commands keep the original one-shot or leased Host path.
+            return self._preview_transport.preview(
+                command=_python_module_command(
+                    "loopx.control_plane.collaboration.delegation_preview_worker"
+                ), workspace=Path(binding["workspace"]), release=_release_root(),
+                environment=_pinned_release_environment(), registry=self.registry,
+                runtime_root=self.root, goal_id=self.goal_id,
+                agent_id=binding["agent_id"], todo_id=binding["todo_id"],
+                argv=args, timeout=timeout,
+            )
+        arguments = [
             "--registry", str(self.registry),
             "--runtime-root", str(self.root), "--format", "json", *args,
-        ], cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
-            timeout=timeout, env=_pinned_release_environment())
+        ]
+        if delegated_lease is None:
+            completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
+                cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
+                timeout=timeout, env=_pinned_release_environment())
+            stdout, returncode = completed.stdout, completed.returncode
+        else:
+            from .control_plane.turn_driver.host_process_transport import run_host_process
+
+            chunks = []
+            try:
+                observation = run_host_process(
+                    [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"), *arguments],
+                    project=Path(binding["workspace"]), input_text="", timeout_seconds=timeout,
+                    environment=_pinned_release_environment(), delegated_lease=delegated_lease,
+                    on_stdout=chunks.append,
+                )
+            except RuntimeError as exc:
+                raise ValueError("delegation managed CLI supervision unavailable; reconcile the original Turn") from exc
+            if observation["outcome"] != "exited" or not observation["output_complete"]:
+                raise ValueError(f"delegation lease supervision stopped ({observation['outcome']}); reconcile the original Turn")
+            stdout, returncode = "".join(chunks), observation["returncode"]
         try:
-            value = json.loads(completed.stdout)
+            value = json.loads(stdout)
         except ValueError as exc:
             raise ValueError("delegation CLI returned no structured result") from exc
-        if completed.returncode and "turn" not in args:
+        if returncode and "turn" not in args:
             raise ValueError(
                 str(
                     value.get("error")
@@ -1034,6 +1114,8 @@ class Delegations:
             runtime_root=self.root,
             goal_id=self.goal_id,
         ):
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation canonical authority disappeared; reconcile the original execution")
             row["task_lease"] = {"required": False, "handoff_mode": "legacy"}
             _write(path, row)
             return row["task_lease"]
@@ -1043,6 +1125,8 @@ class Delegations:
             goal_id=self.goal_id,
         )["handoff_mode"]
         if handoff_mode != "hard_lease":
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("delegation authority mode changed; reconcile the original execution")
             row["task_lease"] = {
                 "required": False,
                 "handoff_mode": handoff_mode,
@@ -1050,23 +1134,8 @@ class Delegations:
             _write(path, row)
             return row["task_lease"]
         lease_key = self._turn_instance_id(row)
-        result = self._cli(
-            binding,
-            "todo",
-            "claim",
-            "--goal-id",
-            self.goal_id,
-            "--todo-id",
-            binding["todo_id"],
-            "--claimed-by",
-            binding["agent_id"],
-            "--agent-id",
-            binding["agent_id"],
-            "--claim-operation-id",
-            "delegation-claim-" + row["identity"]["request_id"][:32],
-            "--task-lease-idempotency-key",
-            lease_key,
-        )
+        claim = self._delegation_claim_arguments(row, binding)
+        result = self._cli(binding, *claim)
         lease = result.get("lease")
         if (
             result.get("ok") is not True
@@ -1086,11 +1155,44 @@ class Delegations:
         row["task_lease"] = {
             "required": True,
             "handoff_mode": "hard_lease",
-            "idempotency_key": lease_key,
-            "version": lease["version"],
+            "lease": lease,
         }
         _write(path, row)
         return row["task_lease"]
+
+    def _delegation_claim_arguments(self, row: dict, binding: dict) -> list[str]:
+        return [
+            "todo",
+            "claim",
+            "--goal-id",
+            self.goal_id,
+            "--todo-id",
+            binding["todo_id"],
+            "--claimed-by",
+            binding["agent_id"],
+            "--agent-id",
+            binding["agent_id"],
+            "--claim-operation-id",
+            "delegation-claim-" + row["identity"]["request_id"][:32],
+            "--task-lease-idempotency-key",
+            self._turn_instance_id(row),
+        ]
+
+    def _delegated_lease_context(self, row: dict, binding: dict) -> dict | None:
+        """Private commands carry the original claim intent, never a model grant."""
+        lease = row.get("task_lease", {})
+        if lease.get("required") is not True:
+            return None
+        prefix = [*_python_module_command("loopx.cli"), "--registry", str(self.registry),
+                  "--runtime-root", str(self.root), "--format", "json"]
+        selected = ["--goal-id", self.goal_id, "--todo-id", binding["todo_id"]]
+        return {
+            "lease": lease["lease"],
+            "ttl_seconds": lease["lease"].get("acquire_ttl_seconds"),
+            "renew_argv": [*prefix, "task-lease", "renew", *selected, "--owner", binding["agent_id"],
+                           "--idempotency-key", lease["lease"]["idempotency_key"]],
+            "read_argv": [*prefix, *self._delegation_claim_arguments(row, binding)],
+        }
 
     def _complete_delegated_todo(self, row: dict, binding: dict) -> None:
         lease = row.get("task_lease")
@@ -1113,11 +1215,48 @@ class Delegations:
             "Bounded delegated work; requester owns synthesis.",
         ]
         if lease.get("required") is True:
+            # Atomic claim replay verifies current eligibility and the original
+            # key/epoch; it cannot reacquire an expired execution. Renewal has
+            # changed its version, so the historical acquisition is not CAS.
+            if "completion_lease_version" not in row:
+                # The Host supervisor has stopped. Renew the original execution
+                # before validation captures its provider revision; renewing
+                # during validation would invalidate that source witness. The
+                # canonical TS lease owner decides admission and replay. This
+                # adapter journals one intent, not a new lease or a longer TTL.
+                if "completion_lease_renewal_version" not in row:
+                    proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
+                    if proof.get("ok") is not True:
+                        raise ValueError("delegation current execution proof lost before completion")
+                    row["completion_lease_renewal_version"] = proof["lease"]["version"]
+                    _write(self.path(row["identity"]["operation_id"]), row)
+                renewed = self._cli(
+                    binding, "task-lease", "renew", "--goal-id", self.goal_id,
+                    "--todo-id", binding["todo_id"], "--owner", binding["agent_id"],
+                    "--idempotency-key", lease["lease"]["idempotency_key"],
+                    "--expected-version", str(row["completion_lease_renewal_version"]),
+                    "--ttl-seconds", str(lease["lease"]["acquire_ttl_seconds"]),
+                )
+                if renewed.get("ok") is not True:
+                    raise ValueError("delegation original lease renewal rejected before completion")
+                # A renewal receipt can be historical after a lost reply. Read
+                # current authority before freezing the terminal intent below.
+                proof = self._cli(binding, *self._delegation_claim_arguments(row, binding))
+                current = proof.get("lease", {})
+                if (proof.get("ok") is not True or current.get("owner") != binding["agent_id"]
+                        or current.get("idempotency_key") != lease["lease"]["idempotency_key"]
+                        or current.get("lease_epoch") != lease["lease"].get("lease_epoch")):
+                    raise ValueError("delegation current execution proof lost before completion")
+                # Persist the exact terminal intent before crossing the effect
+                # boundary. A lost completion reply must replay its receipt,
+                # even after that legitimate completion released the lease.
+                row["completion_lease_version"] = current["version"]
+                _write(self.path(row["identity"]["operation_id"]), row)
             arguments += [
                 "--task-lease-idempotency-key",
-                str(lease["idempotency_key"]),
+                str(lease["lease"]["idempotency_key"]),
                 "--task-lease-expected-version",
-                str(lease["version"]),
+                str(row["completion_lease_version"]),
             ]
         # A bounded member task returns to its requester; it is not terminal
         # Goal intent. Ordinary completion may precede its original Turn's
@@ -1142,6 +1281,10 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 self._acquire_delegation_lease(path, row, binding)
                 self._observe(path, row, "running")
+            if row.get("task_lease", {}).get("required") is True and "lease" not in row["task_lease"]:
+                # Upgrade a still-current operation record by replaying its
+                # original claim, not by inventing a replacement execution.
+                self._acquire_delegation_lease(path, row, binding)
             if row["status"] == "running":
                 turn_key = self._matching_turn_key(row, binding)
                 selector = (
@@ -1155,7 +1298,8 @@ class Delegations:
                     ]
                 )
                 result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
-                                   "--execute", timeout=binding["timeout_seconds"] + 60)
+                                   "--execute", timeout=binding["timeout_seconds"] + 60,
+                                   delegated_lease=self._delegated_lease_context(row, binding))
                 self._record_turn_result(path, row, result)
         finally:
             # The compatibility bootstrap is private host input.  Keeping it
