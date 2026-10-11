@@ -1,3 +1,4 @@
+import {isBoundedBlockedRetry} from "../quota/settlement_phase.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {countTodoWork, decodeMonitorSchedule, monitorIsDue, monitorHasScheduleGap,
   type MonitorSchedule} from "./summary_lanes.ts";
@@ -324,7 +325,7 @@ function utcIso(micros: bigint): string {
   const date = new Date(Number(seconds * 1000n)).toISOString().slice(0, -5);
   return `${date}${fraction ? `.${String(fraction).padStart(6, "0")}` : ""}+00:00`;
 }
-function projectTodoFrontierDeadline(summary: JsonObject, now: bigint): JsonObject | null {
+function projectTodoFrontierDeadline(summary: JsonObject, now: bigint, agent: string | null): JsonObject | null {
   const projected = object(summary.frontier_deadline);
   const projectedTime = timestamp(projected?.next_due_at);
   if (projected && projectedTime !== null && projectedTime > now) return {...projected};
@@ -343,7 +344,16 @@ function projectTodoFrontierDeadline(summary: JsonObject, now: bigint): JsonObje
       seen.add(key);
       if (earliest === null || due < earliest) {
         earliest = due;
-        selected = {identity: id, source: source(row, lane), next_due_at: utcIso(due)};
+        const retry = object(row.blocked_retry);
+        const receiptRetry = row.status === "open" && row.task_class === "advancement_task" &&
+          row.resume_ready === false && retry?.source === "turn_settlement" &&
+          typeof retry.turn_instance_id === "string" && !!retry.turn_instance_id &&
+          retry.agent_id === agent && agent !== null && typeof retry.goal_id === "string" &&
+          (!row.claimed_by || row.claimed_by === retry.agent_id) &&
+          row.resume_when === retry.resume_when && timestamp(retry.due_at) === due &&
+          isBoundedBlockedRetry(retry, typeof row.todo_id === "string" ? row.todo_id : null);
+        selected = {identity: id, source: receiptRetry ? "turn_settlement" : source(row, lane),
+          next_due_at: utcIso(due), ...(receiptRetry ? {blocked_retry: retry} : {})};
       }
     }
   }
@@ -394,7 +404,7 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
     frontier_deadline: request.frontier_deadline ?? null,
     monitor_open_items: lanes.monitor_items,
     gate_open_items: lanes.gate_items,
-  }, now);
+  }, now, agent);
   // The full gate lane stays inside this batch. Transport only the original
   // three-row display after deadline selection, rather than duplicating bodies.
   if (now !== null) lanes.gate_items = (lanes.gate_items as JsonObject[]).slice(0, 3);

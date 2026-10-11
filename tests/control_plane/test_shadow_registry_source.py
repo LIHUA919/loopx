@@ -250,7 +250,7 @@ def test_stale_caller_goal_is_not_bound_to_a_new_registry_digest(tmp_path: Path)
 def test_registry_change_during_python_projection_is_rejected(
     tmp_path: Path, monkeypatch
 ):
-    from loopx.control_plane.coordination import runtime_shadow
+    from loopx.control_plane.coordination import authority_source_capture as runtime_shadow
 
     state, runtime, registry, goal, data = workspace(tmp_path)
     original = runtime_shadow._build_runtime_shadow_source_snapshot

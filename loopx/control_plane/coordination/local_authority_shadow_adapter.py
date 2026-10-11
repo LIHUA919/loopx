@@ -25,15 +25,12 @@ from .coordination_state_contract_generated import (
 from .local_authority_shadow_projection import (
     head_digest,
 )
-from .runtime_shadow import (
-    resolve_coordination_runtime_shadow_config,
-    todo_partition_projector as todo_partition_projector,
-)
+from .configuration import resolve_coordination_runtime_shadow_config, local_authority_shadow_summary
+from .authority_source_capture import todo_partition_projector as todo_partition_projector
 from .shadow_management import read_shadow_capture_binding, shadow_management_state_path
 from .shadow_goal_scope import shadow_goal_scope
 
 
-from .runtime_shadow import local_authority_shadow_summary
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +49,6 @@ LOCAL_AUTHORITY_SHADOW_EVIDENCE_SCHEMA_V1 = (
 INLINE_DRAIN_MAX_ENTRIES = 16
 INLINE_DRAIN_BUDGET_SECONDS = 2.0
 INLINE_DRAIN_LOCK_TIMEOUT_SECONDS = 0.25
-CLI_DRAIN_LOCK_TIMEOUT_SECONDS = 5.0
 SHADOW_DRAIN_SCHEMA = "loopx_shadow_drain_v0"
 SHADOW_EXACT_DRAIN_SCHEMA = "loopx_shadow_drain_v1"
 RETENTION_PRESSURE_BYTES = 8 * 1024 * 1024
@@ -428,7 +424,6 @@ def capture_evidence(
 
 __all__ = [
     "effective_runtime_root",
-    "CLI_DRAIN_LOCK_TIMEOUT_SECONDS",
     "INLINE_DRAIN_BUDGET_SECONDS",
     "INLINE_DRAIN_LOCK_TIMEOUT_SECONDS",
     "INLINE_DRAIN_MAX_ENTRIES",

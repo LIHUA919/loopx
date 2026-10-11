@@ -1721,6 +1721,11 @@ def build_interaction_contract(
             quiet_noop_allowed=quiet_noop_allowed,
             capability_reentry=capability_reentry,
         )
+    retry_wait = execution_obligation.get("wait")
+    if execution_obligation.get("kind") == EffectiveAction.BLOCKED_WAIT.value and isinstance(retry_wait, dict):
+        agent_channel["wait"] = retry_wait
+        agent_channel["primary_action"] = execution_obligation["reason"]
+        user_channel["non_gating_notice"] = True
     contract: dict[str, Any] = {
         "schema_version": INTERACTION_CONTRACT_SCHEMA_VERSION,
         "mode": mode,

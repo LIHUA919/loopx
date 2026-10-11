@@ -70,7 +70,7 @@ class GoalStorageRequestMixin:
             current = result.get("current")
             if result.get("ok") and isinstance(current, dict) and current.get("canonical") is False:
                 from ..control_plane.coordination.local_authority_shadow_projection import source_effect_runtime_result
-                from ..control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
+                from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
                 from ..state_refresh import resolve_goal_state
 
                 _, _, state_path = resolve_goal_state(registry=registry, goal_id=goal_id,
@@ -140,7 +140,7 @@ class GoalStorageRequestMixin:
                 "action": action, "runtime_root": str(root), "goal_id": goal_id, "operation_id": operation}
             if action == "prepare":
                 from ..control_plane.goals.state_resolution import resolve_goal_state
-                from ..control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
+                from ..control_plane.coordination.authority_source_capture import build_runtime_shadow_source_snapshot
                 from ..control_plane.coordination.cold_source_backup import read_cold_source_backup
                 from ..state_backup import build_state_backup_plan, execute_state_backup_plan
 

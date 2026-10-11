@@ -19,7 +19,7 @@ from ..coordination.coordination_state_contract_generated import (
     TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA,
     TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA,
 )
-from ..coordination.runtime_shadow import resolve_coordination_runtime_shadow_config
+from ..coordination.configuration import resolve_coordination_runtime_shadow_config
 from ..goals.legacy_event_source import (
     state_event_log_candidates as _state_event_log_candidates,
 )

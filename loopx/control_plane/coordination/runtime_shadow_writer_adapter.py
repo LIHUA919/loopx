@@ -12,7 +12,7 @@ from .legacy_writer_fence import (
     ActiveStateAuthorityMutationError as ActiveStateAuthorityMutationError,
     require_prose_state_write_allowed as require_prose_state_write_allowed,
 )
-from .runtime_shadow import resolve_coordination_runtime_shadow_config
+from .configuration import resolve_coordination_runtime_shadow_config
 from .shadow_goal_scope import shadow_goal_scope
 from .shadow_management import ShadowManagementError, read_shadow_capture_binding, require_shadow_primary_write_allowed
 
@@ -30,6 +30,7 @@ def begin_todo_runtime_shadow_capture(
 
     active_binding = read_shadow_capture_binding(runtime_root, goal_id)["status"] == "active"
     goal_ref: dict[str, str] | None = None
+    projector = None
     try:
         with shadow_goal_scope(registry_path, goal_id=goal_id) as scope:
             goal_ref = (
@@ -39,19 +40,20 @@ def begin_todo_runtime_shadow_capture(
                 active_binding
                 or resolve_coordination_runtime_shadow_config(scope.goal).enabled
             )
-            from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-            from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
-            from .local_authority_shadow_adapter import todo_partition_projector
+            if enabled:
+                from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+                from ..todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
+                from .local_authority_shadow_adapter import todo_partition_projector
 
-            events = load_rollout_events(
-                rollout_event_log_path(runtime_root, goal_id),
-                limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-            )
-            projector = todo_partition_projector(
-                scope.goal,
-                state_path=state_path,
-                rollout_events=events,
-            )
+                events = load_rollout_events(
+                    rollout_event_log_path(runtime_root, goal_id),
+                    limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
+                )
+                projector = todo_partition_projector(
+                    scope.goal,
+                    state_path=state_path,
+                    rollout_events=events,
+                )
     except Exception:
         enabled = active_binding
         projector = None

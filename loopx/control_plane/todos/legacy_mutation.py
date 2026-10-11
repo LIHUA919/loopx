@@ -13,7 +13,6 @@ from ...agent_registry import (
     require_registered_agent_id,
 )
 from ...state_refresh import now_local
-from ...status import MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
 from .contract import (
     TODO_STATUS_DONE,
     TODO_STATUS_OPEN,
@@ -58,7 +57,11 @@ from .active_state_editing import (
     todo_blocks,
 )
 from .addition import matching_todo_block, require_replan_successor_rebinding
-from .completed_archive import archive_completed_todo_lines
+from .completed_archive import (
+    DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM,
+    DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
+    archive_completed_todo_lines,
+)
 from .completion_policy import (
     completion_policy_from_transaction,
 )
@@ -113,7 +116,7 @@ from ..work_items.task_lease import (
 
 
 ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = max(
-    0, MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - 2
+    0, DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE - DEFAULT_COMPLETED_TODO_ARCHIVE_HEADROOM
 )
 
 
@@ -208,31 +211,41 @@ def add_todo_to_lines(
     note: str | None = None,
     evidence: str | None = None,
     updated_at: str | None = None,
+    _prepared: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .line_update import upsert_todo_metadata
 
-    validation_argv = _validate_legacy_add_declaration(
-        role=role,
-        task_class=task_class,
-        blocks_agent=blocks_agent,
-        excluded_agents=excluded_agents,
-        capability_binding_ref=capability_binding_ref,
-        global_gate=global_gate,
-        validation_command=validation_command,
-        validation_command_json=validation_command_json,
-        validation_timeout_seconds=validation_timeout_seconds,
-    )
-    todo_text = normalize_new_todo(text)
-    normalized_status = normalize_todo_status(status) if status else TODO_STATUS_OPEN
-    if status and not normalized_status:
-        raise ValueError("todo status must be one of: open, done, blocked, deferred")
-    assert normalized_status is not None
-    normalized_resume_when = require_supported_todo_resume_when(resume_when)
-    normalized_monitor_metadata = todo_monitor_metadata.require_monitor_metadata_scope(
-        monitor_metadata=monitor_metadata,
-        role=role,
-        task_class=task_class, generated_at=updated_at,
-    )
+    # Only public add supplies its same-call typed draft. Standalone line
+    # codecs and successor creation still validate their own complete input.
+    if _prepared is not None:
+        validation_argv = _prepared["validation_argv"]
+        todo_text = _prepared["todo_text"]
+        normalized_status = _prepared["normalized_status"]
+        normalized_resume_when = _prepared["normalized_resume_when"]
+        normalized_monitor_metadata = _prepared["normalized_monitor_metadata"]
+    else:
+        validation_argv = _validate_legacy_add_declaration(
+            role=role,
+            task_class=task_class,
+            blocks_agent=blocks_agent,
+            excluded_agents=excluded_agents,
+            capability_binding_ref=capability_binding_ref,
+            global_gate=global_gate,
+            validation_command=validation_command,
+            validation_command_json=validation_command_json,
+            validation_timeout_seconds=validation_timeout_seconds,
+        )
+        todo_text = normalize_new_todo(text)
+        normalized_status = normalize_todo_status(status) if status else TODO_STATUS_OPEN
+        if status and not normalized_status:
+            raise ValueError("todo status must be one of: open, done, blocked, deferred")
+        assert normalized_status is not None
+        normalized_resume_when = require_supported_todo_resume_when(resume_when)
+        normalized_monitor_metadata = todo_monitor_metadata.require_monitor_metadata_scope(
+            monitor_metadata=monitor_metadata,
+            role=role,
+            task_class=task_class, generated_at=updated_at,
+        )
     bounds = section_bounds(lines, role)
     section = bounds[2] if bounds else TODO_SECTION_HEADINGS[role]
     existing_blocks = (
@@ -575,6 +588,7 @@ def _add_goal_todo_legacy(
             monitor_metadata=normalized_monitor_metadata,
             note=note,
             updated_at=updated_at,
+            _prepared=_prepared,
         )
         added = bool(add_result["added"])
         metadata_updated = bool(add_result["metadata_updated"])

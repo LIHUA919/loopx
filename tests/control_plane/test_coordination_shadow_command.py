@@ -4,6 +4,8 @@ from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
 
+from loopx.control_plane.coordination import runtime_shadow as shadow
+from loopx.control_plane.coordination.authority_source_capture import build_todo_runtime_shadow_projection
 from loopx.cli import build_parser
 from loopx.cli_commands import coordination_shadow as command
 from loopx.control_plane.coordination.shadow_goal_scope import (
@@ -67,7 +69,7 @@ def _run(
     )
     monkeypatch.setattr(command, "resolve_goal_state", lambda **kwargs: (goal, tmp_path, tmp_path / "ACTIVE_GOAL_STATE.md"))
     monkeypatch.setattr(command, "build_runtime_shadow_source_snapshot", lambda **kwargs: (
-        command.build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[
+        build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[
             _canonical_todo("todo_b", status="open"), _canonical_todo("todo_a", status="done")],
             leases=[{"todo_id": "todo_b", "owner": "agent-a"}]),
         {"state_path": str(tmp_path / "ACTIVE_GOAL_STATE.md")},
@@ -117,7 +119,7 @@ def test_coordination_shadow_inspect_is_read_only_and_compact(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: {
             "status": "missing",
@@ -126,7 +128,7 @@ def test_coordination_shadow_inspect_is_read_only_and_compact(
         },
     )
     monkeypatch.setattr(
-        command,
+        shadow,
         "bootstrap_coordination_runtime_shadow",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not bootstrap")),
     )
@@ -159,7 +161,7 @@ def test_coordination_shadow_bootstrap_requires_execute_and_reads_back_parity(
         ]
     )
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: next(inspections),
     )
@@ -169,7 +171,7 @@ def test_coordination_shadow_bootstrap_requires_execute_and_reads_back_parity(
         bootstrap_request.update(kwargs)
         return {"status": "applied", "decision_read_from_shadow": False}
 
-    monkeypatch.setattr(command, "bootstrap_coordination_runtime_shadow", bootstrap)
+    monkeypatch.setattr(shadow, "bootstrap_coordination_runtime_shadow", bootstrap)
 
     result, payload = _run(
         monkeypatch,
@@ -206,7 +208,7 @@ def test_coordination_shadow_bootstrap_uses_source_session_goal_ref(
     }
     bootstrap_request: dict[str, object] = {}
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: {
             "status": "matched",
@@ -219,7 +221,7 @@ def test_coordination_shadow_bootstrap_uses_source_session_goal_ref(
         bootstrap_request.update(kwargs)
         return {"status": "applied", "decision_read_from_shadow": False}
 
-    monkeypatch.setattr(command, "bootstrap_coordination_runtime_shadow", bootstrap)
+    monkeypatch.setattr(shadow, "bootstrap_coordination_runtime_shadow", bootstrap)
 
     result, payload = _run(
         monkeypatch,
@@ -324,7 +326,7 @@ def test_coordination_shadow_reads_parity_matched_todo_candidate(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: {
             "status": "matched",
@@ -345,7 +347,7 @@ def test_coordination_shadow_reads_parity_matched_todo_candidate(
         }
 
     monkeypatch.setattr(
-        command,
+        shadow,
         "read_coordination_runtime_shadow_todo_candidate",
         read_candidate,
     )
@@ -372,7 +374,7 @@ def test_coordination_shadow_qualify_applies_coverage_policy(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: {
             "status": "matched",
@@ -390,7 +392,7 @@ def test_coordination_shadow_qualify_applies_coverage_policy(
             "decision_read_from_shadow": False,
         }
 
-    monkeypatch.setattr(command, "qualify_coordination_runtime_shadow", qualify)
+    monkeypatch.setattr(shadow, "qualify_coordination_runtime_shadow", qualify)
     result, payload = _run(
         monkeypatch,
         tmp_path,
@@ -415,7 +417,7 @@ def test_coordination_shadow_promote_previews_and_applies_only_through_review_ow
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: {
             "status": "matched",
@@ -436,7 +438,7 @@ def test_coordination_shadow_promote_previews_and_applies_only_through_review_ow
         }
 
     monkeypatch.setattr(
-        command,
+        shadow,
         "review_local_coordination_authority_promotion",
         promote,
     )
@@ -500,7 +502,7 @@ def test_coordination_shadow_rollback_passes_exact_selector_to_management_owner(
         ]
     )
     monkeypatch.setattr(
-        command,
+        shadow,
         "inspect_coordination_runtime_shadow",
         lambda **_kwargs: next(inspections),
     )
@@ -514,7 +516,7 @@ def test_coordination_shadow_rollback_passes_exact_selector_to_management_owner(
             "decision_read_from_shadow": False,
         }
 
-    monkeypatch.setattr(command, "rollback_coordination_runtime_shadow", rollback)
+    monkeypatch.setattr(shadow, "rollback_coordination_runtime_shadow", rollback)
 
     result, payload = _run(
         monkeypatch,

@@ -1,6 +1,8 @@
 """Real CLI consumers with SQLite authority and no Markdown source."""
 import hashlib
 import json
+import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -141,7 +143,8 @@ def test_promotion_failure_evidence_survives_real_python_runtime(tmp_path, monke
     assert not list((runtime / "authority-transition").rglob("legacy-writer-fence-*.json"))
 
 
-def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old_producers_present", [True, False])
+def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_path, monkeypatch, old_producers_present):
     """Join the shipped creation, ordinary work and reversible-exit owners."""
     from loopx.control_plane.effect_runtime import restart_effect_runtime
 
@@ -150,10 +153,24 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(tmp_pa
     project.mkdir()
     registry = project / ".loopx/registry.json"
     goal, agent, turn = "trial-goal", "trial-agent", "trial-turn"
+    package = Path(os.environ.get("LOOPX_COLD_IMPORT_PACKAGE", str(Path(__file__).resolve().parents[2] / "loopx")))
+    receiver = tmp_path / "receiver"
+    shutil.copytree(package, receiver / "loopx", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    if not old_producers_present:
+        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
+                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
+            (receiver / "loopx/control_plane/coordination" / name).unlink()
+    # Isolated interpreter, real full entrypoint, and verified copied-package
+    # provenance on every command; no fallback to the test runner's checkout.
+    entry = (
+        f"import sys; sys.path.insert(0, {str(receiver)!r}); import loopx; "
+        f"assert loopx.__file__ == {str(receiver / 'loopx/__init__.py')!r}; "
+        "from loopx.entrypoint import main; raise SystemExit(main())"
+    )
 
     def command(*args, expected_code=0):
         result = subprocess.run(
-            [sys.executable, "-I", "-m", "loopx.entrypoint", "--registry", str(registry),
+            [sys.executable, "-I", "-c", entry, "--registry", str(registry),
              "--runtime-root", str(runtime), "--format", "json", *args],
             cwd=project, capture_output=True, text=True, timeout=90,
         )

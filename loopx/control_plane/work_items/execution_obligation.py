@@ -17,6 +17,7 @@ def build_execution_obligation(
     external_evidence_observation: dict[str, Any] | None = None,
     user_gate_owns_frontier: bool = False,
     successor_replan_mode: str = SUCCESSOR_REPLAN_REQUIRED_MODE,
+    blocked_retry_wait: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Separate the worker execution contract from user-facing notification."""
 
@@ -216,6 +217,19 @@ def build_execution_obligation(
             "reason": (
                 "should_run=true means a Codex-actionable turn exists; heartbeat notify "
                 "only controls whether to interrupt the user"
+            ),
+        }
+    if should_run and blocked_retry_wait:
+        return {
+            "must_attempt_work": False,
+            "kind": EffectiveAction.BLOCKED_WAIT.value,
+            "delivery_allowed": False,
+            "notify_is_execution_gate": False,
+            "wait": blocked_retry_wait,
+            "reason": (
+                "the unfinished Todo has a receipt-owned bounded retry; recheck "
+                "its original due time and all current gates before delivery. "
+                "The separate user-action notice is non-blocking"
             ),
         }
     if should_run:

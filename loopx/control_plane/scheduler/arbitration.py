@@ -76,6 +76,7 @@ def _classify_disposition(
     must_attempt: bool,
     quiet_noop_allowed: bool,
     agent_scope_frontier_actions: Collection[str],
+    non_gating_notice_retry: bool = False,
 ) -> tuple[SchedulerDisposition, str]:
     agent_scope_modes = {str(value) for value in agent_scope_frontier_actions}
     if mode == "terminal_no_followup":
@@ -84,6 +85,8 @@ def _classify_disposition(
         return SchedulerDisposition.PEER_COORDINATION_WAIT, mode
     if mode == "agent_monitor_only":
         return SchedulerDisposition.AGENT_MONITOR_ONLY_WAIT, mode
+    if user_required and not must_attempt and non_gating_notice_retry:
+        return SchedulerDisposition.QUIET_WAIT, "blocked_wait"
     if user_required and not must_attempt:
         return SchedulerDisposition.HUMAN_GATE, "interaction_blocking_user_gate"
     if mode == "monitor_quiet_skip":
@@ -177,6 +180,8 @@ def build_scheduler_arbitration(
         must_attempt=must_attempt,
         quiet_noop_allowed=quiet_noop_allowed,
         agent_scope_frontier_actions=agent_scope_frontier_actions,
+        non_gating_notice_retry=(user_channel.get("non_gating_notice") is True and
+            _mapping(agent_channel.get("wait")).get("source") == "turn_settlement"),
     )
 
     if errors:

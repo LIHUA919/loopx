@@ -12,7 +12,7 @@ from typing import Any
 import uuid
 import hashlib
 
-from ...chat_store import _atomic_write_json, _read_json
+from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...file_lock import exclusive_file_lock
 
@@ -118,7 +118,9 @@ class ChatConversationBindings:
             if readback != result["state"]:
                 raise OSError("conversation binding publication did not verify")
             binding = next(row for row in readback["bindings"] if row["transport_ref"] == transport_ref)
-            return binding
+        if previous and previous["binding_id"] != binding["binding_id"]:
+            self._stop_revoked_binding(previous["binding_id"])
+        return binding
 
     def disconnect(self, binding_id: str, *, expected_revision: int) -> dict[str, Any]:
         with exclusive_file_lock(self.path, operation="disconnect_chat_conversation_binding"):
@@ -130,7 +132,48 @@ class ChatConversationBindings:
                 _atomic_write_json(self.path, result["state"])
             if self.read() != result["state"]:
                 raise OSError("conversation binding revocation did not verify")
-            return dict(result["state"])
+        self._stop_revoked_binding(binding_id)
+        return dict(result["state"])
+
+    def _stop_revoked_binding(self, binding_id: str) -> None:
+        """Apply the committed grant decision through existing exact Turn control.
+
+        Never wait for a worker while holding the grant publication fence. Drop
+        its queued work before stopping the active Turn; other audiences and
+        local Turns in a shared attached Session retain their own authority.
+        Retrying disconnect with the current revision retries an unconfirmed stop.
+        """
+        if self.controller is None:
+            return
+        store = self.controller.store
+        failures = []
+        for row in store.list_sessions():
+            session = store.load_session(row["session_id"])
+            if session is None:
+                continue
+            bound = any(isinstance(session.get(key), dict)
+                and session[key].get("binding_id") == binding_id
+                for key in ("project_context", "steward_context"))
+            turns = store.queued_turns(session["session_id"])
+            active = store.load_turn(session["session_id"], session["active_turn_id"]) if session.get("active_turn_id") else None
+            if active:
+                turns.append(active)
+            for turn in turns:
+                target = turn.get("external_agent_target") or {}
+                if (not bound and (target.get("context") or {}).get("binding_id") != binding_id
+                        or turn.get("status") in TERMINAL_TURN_STATES):
+                    continue
+                try:
+                    stopped = self.controller.interrupt_turn(session_id=session["session_id"], turn_id=turn["turn_id"])
+                    if stopped.get("status") not in TERMINAL_TURN_STATES:
+                        raise RuntimeError("Turn stop did not settle")
+                except Exception as exc:
+                    # Revocation remains published even when a host lacks stop
+                    # control. Continue stopping other exact targets, then report
+                    # failure without exposing private transport diagnostics.
+                    failures.append(exc)
+        if failures:
+            raise OSError("Conversation grant revoked; execution stop is not confirmed. Retry stop for this binding.") from failures[0]
 
     def resolve(self, *, binding_id: str, source_ref: str, sender_ref: str,
                 private_human_message: bool, session_context: dict[str, Any] | None = None,
@@ -300,6 +343,40 @@ class ChatConversationBindings:
         return self._core("collaboration.conversation.agent_target", {"binding": selected["binding"],
             "context": selected["context"], "target": target,
             "target_observation": self.agent_observation(target["session_id"])})
+
+
+    def stop_recoveries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project revoked execution from canonical Turns, never recreate a grant.
+
+        Session and external-target context retain the exact binding identity
+        across restart. No second stop ledger or provider diagnostics are needed.
+        A recovery disappears only when the existing Turn owner settles it.
+        """
+        if self.controller is None:
+            return []
+        authorized = {row["binding_id"] for row in current["bindings"]}
+        store = self.controller.store
+        pending: dict[str, dict[str, Any]] = {}
+        for row in store.list_sessions():
+            session = store.load_session(row["session_id"])
+            if session is None:
+                continue
+            turns = store.queued_turns(session["session_id"])
+            active = store.load_turn(session["session_id"], session["active_turn_id"]) if session.get("active_turn_id") else None
+            if active:
+                turns.append(active)
+            for turn in turns:
+                if turn.get("status") in TERMINAL_TURN_STATES:
+                    continue
+                target = turn.get("external_agent_target") or {}
+                context = target.get("context") or session.get("project_context") or session.get("steward_context") or {}
+                binding_id = context.get("binding_id")
+                if not binding_id or binding_id in authorized:
+                    continue
+                recovery = pending.setdefault(binding_id, {"binding_id": binding_id,
+                    "project_ref": context.get("project_ref", ""), "pending_count": 0})
+                recovery["pending_count"] += 1
+        return [pending[key] for key in sorted(pending)]
 
 
 def validate_external_agent_turn(*, store: Any, session: dict[str, Any],

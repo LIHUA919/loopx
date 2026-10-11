@@ -1917,7 +1917,39 @@ const automationCadenceSourceSchema = z.object({
   agent_id: z.string().nullable(),
   automation_id: z.string().nullable(),
   min_interval_minutes: z.number().int().nonnegative(),
+  revision: z.number().int().nonnegative(),
 });
+
+const automationCadenceEligibilitySchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("unconfigured"),
+    reason: z.literal("unconfigured"),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+  z.object({
+    state: z.literal("eligible"),
+    reason: z.literal("owner_minimum_interval"),
+    eligible_now: z.literal(true),
+    next_eligible_at_ms: z.number().int().nonnegative().nullable(),
+  }),
+  z.object({
+    state: z.literal("waiting"),
+    reason: z.literal("minimum_interval_wait"),
+    eligible_now: z.literal(false),
+    next_eligible_at_ms: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal("unavailable"),
+    reason: z.enum([
+      "agent_scope_required",
+      "runtime_root_unavailable",
+      "owner_read_failed",
+    ]),
+    eligible_now: z.null(),
+    next_eligible_at_ms: z.null(),
+  }),
+]);
 
 export const automationCadenceSchema = z.object({
   ok: z.literal(true),
@@ -1927,6 +1959,7 @@ export const automationCadenceSchema = z.object({
   automation_id: z.string().nullable(),
   configuration_revision: z.number().int().nonnegative(),
   min_interval_minutes: z.number().int().nonnegative(),
+  eligibility: automationCadenceEligibilitySchema,
   enabled: z.boolean(),
   enforcement: z.string(),
   pre_model_admission: z.string(),
@@ -2433,8 +2466,11 @@ const privateConversationSchema = z.object({
   pending_count: z.number().int(), recovery_count: z.number().int(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
+const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
+  project_title: z.string(), pending_count: z.number().int().positive()});
+export type PrivateConversationStopRecovery = z.infer<typeof privateConversationStopRecoverySchema>;
 const privateConversationsSchema = z.object({ok: z.literal(true), revision: z.number().int(),
-  connections: z.array(privateConversationSchema)});
+  connections: z.array(privateConversationSchema), stop_recoveries: z.array(privateConversationStopRecoverySchema).default([])});
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export async function fetchPrivateConversations() {
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations"));
