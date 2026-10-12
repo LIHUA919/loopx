@@ -12,7 +12,7 @@ import {
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 import { AlertCircle, Bot, CalendarClock, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X } from "lucide-react";
 
 import {
@@ -1094,6 +1094,9 @@ export function PersonalWorkspacePage({
   const quickPromptBlocked = steering || sending || conversationTurnRunning;
   // The Goal overview is for reading; its composer folds to one line until asked for.
   const [overviewComposerOpen, setOverviewComposerOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (overviewComposerOpen) composerRef.current?.focus();
+  }, [overviewComposerOpen]);
   useEffect(() => setOverviewComposerOpen(false), [selectedGoalId, selectedGoalTab]);
   const composerCollapsed = Boolean(selectedGoal) && selectedGoalTab === "overview" && !overviewComposerOpen
     && !composer.trim() && !actionDraft && !imageAttachments.length && !imageAttachmentError && !sending && !conversationTurnRunning;
@@ -2244,7 +2247,7 @@ export function PersonalWorkspacePage({
             <div className={composerCollapsed ? "personal-composer-folded" : undefined}>
             {composerCollapsed && selectedGoal ? <>
               <button className="personal-composer-pill" data-testid="overview-composer-pill" type="button"
-                onClick={() => { setOverviewComposerOpen(true); window.requestAnimationFrame(() => composerRef.current?.focus()); }}>
+                onClick={() => setOverviewComposerOpen(true)}>
                 <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPrompt")}</span>
               </button>
             </> : null}
