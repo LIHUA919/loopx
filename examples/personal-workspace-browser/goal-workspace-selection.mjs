@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {mkdtemp, readFile, rename, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {basename, resolve} from "node:path";
+import {basename, dirname, resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
@@ -13,7 +13,7 @@ export const goalWorkspaceSelectionScenario = {
   async run({browser, collectCoverage, url}) {
     const root = await mkdtemp(resolve(tmpdir(), "loopx-goal-workspace-"));
     const child = spawn(resolveTestPython(), ["-u", resolve(repoRoot, "examples/personal-workspace-browser/goal-workspace-backend.py"), root],
-      {cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"]});
+      {cwd: repoRoot, env: {...process.env, PYTHONPATH: repoRoot, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
     const lines = createInterface({input: child.stdout});
     let diagnostics = "", context;
     child.stderr.on("data", chunk => {diagnostics = (diagnostics + chunk).slice(-6000);});
@@ -76,7 +76,12 @@ export const goalWorkspaceSelectionScenario = {
       await page.getByText("确认执行", {exact: true}).waitFor();
       assert.equal(requests.at(-1).normalized_parameters.workspace_ref, "research-monitor");
       // The review names the directory the Goal will use, without its path.
-      await page.getByText(`${basename(backend.second)} · 与已有 Goal 共用`, {exact: false}).first().waitFor();
+      // Both fixture Goals use a directory with the same name, so the review
+      // adds the parent directory that tells them apart.
+      assert.equal(basename(backend.first), basename(backend.second));
+      const secondLabel = `${basename(dirname(backend.second))}/${basename(backend.second)}`;
+      await page.getByText(`${secondLabel} · 与已有 Goal 共用`, {exact: false}).first().waitFor();
+      assert.equal(await page.getByText(`${basename(dirname(backend.first))}/${basename(backend.first)} · 与已有 Goal 共用`, {exact: false}).count(), 0);
       assert.equal(await page.getByText(backend.second, {exact: false}).count(), 0);
       assert.equal(JSON.parse(await readFile(backend.registry, "utf8")).goals.length, 2, "Preview created a Goal");
       const confirm = page.getByRole("button", {name: /创建 Goal.*开始首轮/});

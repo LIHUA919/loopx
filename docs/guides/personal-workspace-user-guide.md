@@ -170,7 +170,7 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner -
 共用），以及是否为默认解析结果；确认后的 Goal 一定在预览所示目录中创建，执行权限仍由表单中的
 权限选择与后端校验决定。对话草稿也会显示同样的执行工作区，并可通过「修改」打开同一个表单改选。
 如果检查配置失败，目标文本与目录选择会保留供重试；失效或不可用的目录不会自动换成另一目录。
-预览只显示目录名称，不显示本机完整路径；同名目录会附带上一级目录名以便区分。
+预览只显示目录名称，不显示本机完整路径；同名目录（包括已有 Goal 的目录）会逐级附带上级目录名，直到可以区分。
 
 要管理多个项目，可在启动时一次配置多个目录，之后每次创建 Goal 时分别选择：
 
@@ -195,7 +195,8 @@ exactly that directory, under the selected execution permission and the existing
 Conversational drafts show the same field, and **Edit** opens the form to choose another directory.
 A failed preview retains the text and selection for retry; unavailable selections never silently
 redirect to another directory. The review shows directory names, not local paths; two directories
-with the same name are told apart by their parent directory's name.
+with the same name, including existing Goals' directories, gain parent directory names until they
+read apart.
 
 To work on several projects, start the Dashboard once with each directory and pick one per Goal:
 

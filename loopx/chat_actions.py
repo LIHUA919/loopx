@@ -124,18 +124,28 @@ def goal_workspace_ref(root: Path) -> str:
     return f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"
 
 
-def goal_workspace_labels(roots: Sequence[Path]) -> dict[Path, str]:
-    """Owner-facing names for workspace roots, without checkout paths.
+def goal_workspace_labels(directories: Sequence[Path]) -> dict[Path, str]:
+    """Owner-facing names for workspace directories, without checkout paths.
 
-    The directory name identifies a workspace; a parent name is added only when
-    two roots would otherwise read the same.
+    A directory is named by its own name; parent names are added, one at a
+    time, only while two different directories would otherwise read the same.
+    The filesystem anchor is never shown.
     """
 
-    names = [root.name or str(root) for root in roots]
-    return {
-        root: (f"{root.parent.name}/{name}" if names.count(name) > 1 and root.parent.name else name)
-        for root, name in zip(roots, names)
-    }
+    unique = list(dict.fromkeys(directories))
+    parts = {path: path.parts[1:] if path.anchor else path.parts for path in unique}
+    depth = dict.fromkeys(unique, 1)
+    while True:
+        labels = {path: "/".join(parts[path][-depth[path]:]) or str(path) for path in unique}
+        readers: dict[str, list[Path]] = {}
+        for path, label in labels.items():
+            readers.setdefault(label, []).append(path)
+        ambiguous = [path for group in readers.values() if len(group) > 1
+                     for path in group if depth[path] < len(parts[path])]
+        if not ambiguous:
+            return labels
+        for path in ambiguous:
+            depth[path] += 1
 
 
 def _normalize_cadence(value: Any) -> str:
@@ -505,7 +515,7 @@ class ChatActionService(
                 }
         if source_goal is None:
             available = [root for root in self.workspace_roots if root.is_dir()]
-            labels = goal_workspace_labels(available)
+            labels = self.workspace_labels()
             candidates = [
                 {"workspace_ref": goal_workspace_ref(root), "label": labels[root]}
                 for root in available
@@ -537,6 +547,20 @@ class ChatActionService(
             )
         return project, source_goal
 
+    def workspace_labels(self) -> dict[Path, str]:
+        """Names for every directory a Goal creation can target.
+
+        Configured roots and registered Goal workspaces are named together, so
+        two choices never read the same in the form, a gate or a review.
+        """
+
+        directories = [root for root in self.workspace_roots if root.is_dir()]
+        for goal in registry_goals(self._registry()):
+            repo = str(goal.get("repo") or "").strip()
+            if repo:
+                directories.append(Path(repo).expanduser().resolve())
+        return goal_workspace_labels(directories)
+
     def _goal_workspace_binding(
         self, project: Path, source_goal: Mapping[str, Any], *, requested_ref: str
     ) -> dict[str, Any]:
@@ -547,8 +571,7 @@ class ChatActionService(
         """
 
         goal_id = str(source_goal.get("id") or "")
-        roots = [root for root in self.workspace_roots if root.is_dir()]
-        label = (goal_workspace_labels(roots).get(project) if project in roots else None) or project.name
+        label = self.workspace_labels().get(project) or project.name
         return {
             "schema_version": "loopx_goal_workspace_binding_v0",
             "workspace_ref": goal_id or goal_workspace_ref(project),

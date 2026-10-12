@@ -142,3 +142,30 @@ def test_workspace_choices_are_named_by_directory_not_token(tmp_path):
     gate = error.value.gate
     assert [candidate["label"] for candidate in gate["candidates"]] == ["team-a/app", "team-b/app", "docs"]
     assert "--scan-path" in gate["next_action"]
+
+
+def test_same_named_goal_directories_review_apart(tmp_path):
+    # Two existing Goals in .../first/project and .../second/project, plus a
+    # configured workspace: each review names its own directory distinctly.
+    first, second, docs = tmp_path / "first" / "project", tmp_path / "second" / "project", tmp_path / "docs-site"
+    for directory in (first, second, docs):
+        directory.mkdir(parents=True)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [
+        {"id": "first-goal", "repo": str(first)}, {"id": "second-goal", "repo": str(second)},
+    ]}))
+    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"),
+        registry_path=registry, workspace_roots=[docs])
+    bindings = [preview(service, goal_id, key=goal_id)["workspace_binding"] for goal_id in ("first-goal", "second-goal")]
+    assert [binding["label"] for binding in bindings] == ["first/project", "second/project"]
+    assert [resolve(service, binding["workspace_ref"])[0] for binding in bindings] == [first, second]
+    assert service.workspace_labels()[docs] == "docs-site"
+
+
+def test_labels_add_parents_only_until_directories_differ(tmp_path):
+    from loopx.chat_actions import goal_workspace_labels
+
+    a, b, c = tmp_path / "a" / "x" / "app", tmp_path / "b" / "x" / "app", tmp_path / "solo"
+    labels = goal_workspace_labels([a, b, c, a])
+    assert labels == {a: "a/x/app", b: "b/x/app", c: "solo"}
+    assert not any(label.startswith(("/", "\\")) for label in labels.values())

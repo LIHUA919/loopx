@@ -1392,11 +1392,12 @@ class ChatRequestHandler(
         if path == "/api/chat/projects":
             contexts = self.server.runtime_controller.project_contexts.available()
             roots = [Path(context["workspace_path"]) for context in contexts]
-            labels = goal_workspace_labels(roots)
+            service = getattr(self.server, "action_service", None)
+            labels = service.workspace_labels() if service is not None else goal_workspace_labels(roots)
             # The same roots admit Goal creation; their creation reference lets
-            # the Goal form offer them without a second workspace listing.
+            # the Goal form offer them by the name a review will show.
             self._send_json({"ok": True, "projects": [
-                {"project_ref": context["project_ref"], "title": labels[root],
+                {"project_ref": context["project_ref"], "title": labels.get(root, root.name),
                  "grant": context["grant"], "goal_workspace_ref": goal_workspace_ref(root)}
                 for context, root in zip(contexts, roots)
             ]})
