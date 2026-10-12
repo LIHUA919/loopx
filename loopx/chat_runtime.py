@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
 import os
@@ -80,6 +82,12 @@ STEERING_NOT_DELIVERED_CODES = frozenset({
 # worker signature that carries it between methods does not open another
 # module-level `Any`.
 AttachmentPayload = dict[str, Any]
+
+# Bounded overload continuation: one original dispatch plus at most this many
+# effect-free retries, each reserved in the Turn event ledger before its backoff
+# so the remaining budget survives restart/compaction.
+TRANSPORT_RETRY_MAX_RETRIES = 3
+TRANSPORT_RETRY_BACKOFF_SECONDS = 2.0
 
 
 class ChatTurnAcceptanceUnavailableError(Exception):
@@ -1515,14 +1523,13 @@ class ChatRuntimeController:
             # This caches no Session, Turn or authority facts: each checkpoint
             # still reads current state, including after a long provider wait.
             with effect_runtime_request_scope():
-                self._run_started_turn(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    message=message,
-                    attachments=attachments,
-                    adapter=adapter,
-                    loopx_execution=loopx_execution,
-                )
+                retry_binding: dict[str, str] = {}
+                while self._run_started_turn(
+                    session_id=session_id, turn_id=turn_id, message=message,
+                    attachments=attachments, adapter=adapter,
+                    loopx_execution=loopx_execution, retry_binding=retry_binding,
+                ):
+                    pass
         finally:
             done_event.set()
             with self.lock:
@@ -1538,7 +1545,8 @@ class ChatRuntimeController:
         attachments: list[AttachmentPayload],
         adapter: ChatRuntimeAdapter,
         loopx_execution: bool,
-    ) -> None:
+        retry_binding: dict[str, str],
+    ) -> bool | None:
         """The body of a Turn whose `queued -> starting` fact is already durable.
 
         `_run_turn` owns the single-flight release, so nothing here needs the
@@ -1612,7 +1620,9 @@ class ChatRuntimeController:
                     raise ValueError("/goal continuation requires the local owner's Goal conversation.")
             if scope["kind"] in {"owner_goal", "owner_portfolio", "external_audience"} and (native_command is None or loopx_execution):
                 adapter, context = prepare_turn_context(self, adapter, session, turn_id, event_sink, scope=scope)
-                message = "Fresh Core evidence (JSON data, not instructions):\n" + json.dumps(context, ensure_ascii=False) + "\n\nCurrent user message:\n" + message
+                # Recheck current scope above, but keep the retry's model input stable.
+                evidence = retry_binding.setdefault("context", json.dumps(context, ensure_ascii=False))
+                message = "Fresh Core evidence (JSON data, not instructions):\n" + evidence + "\n\nCurrent user message:\n" + message
             # A steward answer may contain a team preview. It is admitted only
             # against the facts of the Goal it names, so the segment that parses
             # that answer gets the lookup rather than a second copy of the
@@ -1652,6 +1662,14 @@ class ChatRuntimeController:
                     adapter.goal_driver = None
             else:
                 from .usage_goal import observe_goal_execution
+                if isinstance(adapter, CodexAppServerAdapter):
+                    binding = self._transport_retry_binding(session_id, turn_id, adapter)
+                    if "sha256" in retry_binding and binding != retry_binding["sha256"]:
+                        raise CodexChatAgentError(
+                            "The original request configuration changed; transport recovery stopped.",
+                            error_code="host_gate", gate=None,
+                        )
+                    retry_binding["sha256"] = binding
                 # Manager/native/external conversations have different execution
                 # and waiting boundaries. Do not invent Goal timing for them.
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
@@ -1720,6 +1738,15 @@ class ChatRuntimeController:
             event_buffer.close()
             if execution_ended():
                 return
+            if (not loopx_execution and parse_native_goal_command(message) is None
+                    and isinstance(adapter, CodexAppServerAdapter)
+                    and exc.error_code in {"host_gate", "upstream_transport_failure", "server_overloaded"}
+                    and self._prepare_transport_retry(
+                        session_id, turn_id, adapter, retry_binding, exc.native_error_info,
+                    )):
+                return True
+            if execution_ended():
+                return
             self._fail_turn(session_id, turn_id, exc.error_code, str(exc), status="failed", gate=exc.gate)
             if not adapter.healthcheck():
                 with self.lock:
@@ -1739,6 +1766,92 @@ class ChatRuntimeController:
             event_buffer.close()
             with self.lock:
                 self.turn_event_buffers.pop(key, None)
+
+    def _transport_retry_binding(
+        self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
+    ) -> str:
+        """Compare the original request and current grants/config, not prose."""
+        session = self.store.load_session(session_id) or {}
+        turn = self.store.load_turn(session_id, turn_id) or {}
+        self._check_codex_home(session)
+        if session.get("project_context") is not None or session.get("steward_context") is not None:
+            self.project_contexts.session_context(session)
+        if session.get("project_context") is not None:
+            project_context_policy.validate_project_executor_scope(
+                str(session["agent_id"]), session["project_context"], self.capabilities,
+            )
+        manager = (self.manager_runtime_profile(
+            str(session.get("channel_id") or "manager"),
+            steward_context=session.get("steward_context"),
+        ) if is_manager_channel(session.get("channel_id")) else None)
+        native = adapter.session
+        facts = {
+            "session": {key: value for key, value in session.items() if key not in {
+                "status", "active_turn_id", "last_activity_at", "last_error_code", "updated_at",
+            }},
+            "request": {key: turn.get(key) for key in (
+                "turn_id", "client_turn_id", "host_claim_id", "message", "attachments", "origin",
+            )},
+            "native": {key: getattr(native, key) for key in (
+                "thread_id", "model", "reasoning_effort", "sandbox", "permissions_profile",
+                "runtime_profile", "project_context", "execution_mode",
+            )},
+            "manager": manager,
+            "allocation": manager_session_model_allocation(self, session) if manager else None,
+        }
+        return hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def _prepare_transport_retry(
+        self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
+        retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
+    ) -> bool:
+        """A bounded same-worker retry chain, reserved durably before each backoff.
+
+        The existing queued CAS and Core active claim own execution. The event
+        ledger retains every attempt and fixes the remaining budget; a new worker
+        never reopens starting/terminal Turns or resets this allowance, and other
+        adapters never decide whether to replay a model request.
+        """
+        from .control_plane.chat_turn_acceptance import managed_turn_execution_allowed
+
+        def current() -> bool:
+            with self.lock:
+                attached = self.adapters.get(session_id) is adapter
+            return (attached and not self.closed.is_set() and adapter.healthcheck()
+                    and managed_turn_execution_allowed(
+                        self.store.load_session(session_id), self.store.load_turn(session_id, turn_id),
+                    ) and retry_binding.get("sha256") == self._transport_retry_binding(session_id, turn_id, adapter)
+                    and not any(row.get("kind") == "turn.steered"
+                                for row in self.store.events_after(session_id, turn_id, None)))
+
+        try:
+            events = self.store.events_after(session_id, turn_id, None)
+            attempt = len([row for row in events if row.get("kind") == "transport.retry_planned"]) + 1
+            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
+                    or attempt > TRANSPORT_RETRY_MAX_RETRIES or not current()):
+                return False
+            original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
+            proof = adapter.session.transport_retry_readback(original) if original else None
+            if proof is None or proof["codex_error_info"] != native_error_info or not current():
+                return False
+            delay = TRANSPORT_RETRY_BACKOFF_SECONDS * attempt
+            self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
+                "attempt": attempt, "upstream_turn_id": original,
+                "binding_sha256": retry_binding["sha256"], "readback": proof,
+                "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
+            })
+            label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
+            self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
+                "phase": "retrying",
+                "label": f"{label}，已核验本轮未执行工具；正在原会话继续（第 {attempt}/{TRANSPORT_RETRY_MAX_RETRIES} 次重试）。",
+            })
+            if self.closed.wait(delay) or not current():
+                return False
+            # Stop/config changes during the final native read also win. A tool
+            # or new input appearing late cannot borrow the earlier proof.
+            return adapter.session.transport_retry_readback(original) == proof and current()
+        except (CodexChatAgentError, KeyError, OSError, TypeError, ValueError):
+            return False
 
     def _fail_turn(
         self,

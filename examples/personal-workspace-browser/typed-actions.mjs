@@ -1074,7 +1074,7 @@ export const typedActionsScenario = {
       }
       if (await page.locator(".personal-capability-editor-status").count()) throw new Error("Editable Goal settings must not show internal editor-contract notices");
       const expectedGoalCapabilities = [
-        "变更质量验证", "Goal 复核周期", "探索图谱", "探索 Harness", "飞书事件收件箱",
+        "变更质量验证", "Goal 复盘与步幅", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "已退役的 Authority 观测", "自适应子 Agent 容量",
         "已注册 Peer 任务协调", "周期报告", "Reward Memory 实验",
       ];
@@ -1294,7 +1294,7 @@ export const typedActionsScenario = {
           || api.machineConfigurationRequests.length !== requestsBeforeReadOnly) {
         throw new Error("Other machine settings mixed Goal-only or steward controls into the catalog");
       }
-      await machineCatalog.getByRole("button", { name: /^Goal 复核周期/ }).click();
+      await machineCatalog.getByRole("button", { name: /^Goal 复盘与步幅/ }).click();
       const reviewUnit = page.getByLabel(/^复核计数依据/u);
       const reviewCount = page.getByLabel("两次复核间的数量", { exact: true });
       await reviewUnit.waitFor({ state: "visible" });
@@ -1913,6 +1913,9 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
+      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) {
+        throw new Error("Closing a configuration draft lost the open shortcut menu across composer folding");
+      }
       await page.getByRole("button", {name: "配置定时检查"}).click();
       const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;

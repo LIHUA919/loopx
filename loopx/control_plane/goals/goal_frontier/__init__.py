@@ -64,9 +64,10 @@ from .ack_policy import (
     autonomous_replan_ack_satisfies_obligation,
     replan_successor_transition_ack,
 )
-from .fallback_disposition import (
+from .fallback_source import (
     VISION_FRONTIER_TODO_DELTA_ACTIONS,  # noqa: F401
     FallbackDeclaration,  # noqa: F401
+    FallbackTodoSource,
     agent_scoped_selectable_advancement_todo_ids,  # noqa: F401
     declared_fallback_gap_from_agent_vision,
     parse_fallback_declarations,  # noqa: F401
@@ -84,6 +85,7 @@ from .semantic_history import (
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
 )
 from .semantic_history import (
+    _latest_runs_for_goal,
     latest_agent_vision_from_status_payload,
     latest_autonomous_replan_ack_from_status_payload,
     latest_missing_vision_checkpoint_from_status_payload,
@@ -1002,6 +1004,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     current_transition_replan_ack: dict[str, Any] | None = None,
     acceptance_gaps: list[dict[str, Any]] | None = None,
     monitor_lane_semantically_valid: bool = True,
+    capability_obligation: dict[str, Any] | None = None,
     vision_settlement_query: bool = False,
     _frontier_counts: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
@@ -1115,6 +1118,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             current_agent_blocker_count=safe_non_negative_int(
                 (agent_todo_summary or {}).get("current_agent_blocker_count")
             ),
+            capability_gap_pending=bool(capability_obligation and capability_obligation.get("required") is True),
             monitor_no_change_streak_triggered=(
                 monitor_no_change_trigger is not None
             ),
@@ -1134,6 +1138,8 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     )
     if not replan_rule.derives_obligation:
         return None
+    if replan_rule.rule is GoalFrontierReplanRule.CAPABILITY_EVIDENCE_GAP:
+        return capability_obligation
     if replan_rule.rule is GoalFrontierReplanRule.TODO_SUCCESSION_GAP:
         settlement_items = succession_gap_items[:3]
         settlement_todo_ids = [
@@ -1495,10 +1501,13 @@ def build_goal_frontier_projection_context_from_status(
     work_lane_contract: dict[str, Any] | None,
     neutral_replan_ack_classifications: set[str],
     agent_todo_source_items: list[dict[str, Any]] | None = None,
+    fallback_todo_source_items: FallbackTodoSource = None,
+    available_capabilities: Any = None,
     registered_agent_ids: list[str] | None = None,
     goal_status: str | None = None,
     agent_profile: dict[str, Any] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
+    receipt_bound_guard_recorded_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the quota-facing goal-frontier read model.
 
@@ -1639,6 +1648,12 @@ def build_goal_frontier_projection_context_from_status(
                 latest_agent_vision,
                 agent_todo_summary=agent_todo_summary,
                 agent_id=agent_id,
+                agent_todo_source_items=fallback_todo_source_items,
+                rollout_events=_latest_runs_for_goal(
+                    status_payload,
+                    goal_id=goal_id,
+                ),
+                available_capabilities=available_capabilities,
             ),
         )
         if isinstance(gap, dict)
@@ -1694,8 +1709,13 @@ def build_goal_frontier_projection_context_from_status(
         monitor_lane_semantically_valid=not goal_vision_state_is_closed(
             (latest_agent_vision or {}).get("state")
         ),
+        capability_obligation=(status_payload.get("bounded_research_frontier") or {}).get("obligation"),
     )
-    frontier_transition_ack = replan_successor_transition_ack(
+    capability_transitions = (status_payload.get("bounded_research_frontier") or {}).get("settlement_transitions") or []
+    frontier_transition_ack = next((candidate.get("ack") for candidate in capability_transitions
+        if candidate.get("obligation", {}).get("obligation_id") == (frontier_replan_obligation or {}).get("obligation_id")), None) if (
+        frontier_replan_obligation or {}
+    ).get("capability_guard") else replan_successor_transition_ack(
         agent_todo_summary,
         agent_id=agent_id,
         replan_obligation=frontier_replan_obligation,
@@ -1717,6 +1737,21 @@ def build_goal_frontier_projection_context_from_status(
                 agent_todo_items=agent_todo_source_items,
             )
             frontier_transition_candidate = {"obligation": source, "ack": source_ack}
+
+    lifecycle_candidate = None
+    if receipt_bound_replan_obligation_id and receipt_bound_guard_recorded_at:
+        from ...work_items.lifecycle_recovery import receipt_bound_lifecycle_candidate
+        lifecycle_candidate = receipt_bound_lifecycle_candidate(
+            selected_obligation_id=receipt_bound_replan_obligation_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at, agent_id=agent_id,
+            items=agent_todo_source_items or [],
+            derive=lambda summary: derive_goal_frontier_replan_obligation_from_summaries(
+                user_todo_summary=user_todo_summary, agent_todo_summary=summary,
+                work_lane_contract=work_lane_contract, agent_id=agent_id,
+                existing_replan_obligation=None, agent_todo_source_items=agent_todo_source_items,
+                _frontier_counts=frontier_counts,
+            ),
+        )
 
     if (
         frontier_replan_obligation
@@ -1765,6 +1800,7 @@ def build_goal_frontier_projection_context_from_status(
             goal_id=goal_id,
             agent_id=agent_id,
             newest_first_runs=(), source_status=status_payload,
+            stride_strategy=((project_asset or {}).get("execution_profile") or {}).get("stride_strategy", "off"),
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         )
 
@@ -1795,7 +1831,12 @@ def build_goal_frontier_projection_context_from_status(
         "projected_replan_ack": projected_replan_ack,
         "replan_transition_ack": replan_transition_ack,
         "run_replan_transition_ack": run_replan_transition_ack,
-        "replan_transition_candidates": [run_transition_candidate, frontier_transition_candidate],
+        "replan_transition_candidates": [
+            run_transition_candidate,
+            frontier_transition_candidate,
+            *capability_transitions,
+            *([lifecycle_candidate] if lifecycle_candidate else []),
+        ],
     }
 
 

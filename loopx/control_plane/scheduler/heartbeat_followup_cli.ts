@@ -92,7 +92,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (valueOptions.has(option)) {
       const [value, next] = optionValue(argv, index, option);
       index = next;
-      if (!value) {
+      if (!value && option !== "--app-automation-current-rrule") {
         throw new EffectRuntimeRequestError(`${option} must not be empty`, "invalid_scheduler_followup_argv");
       }
       if (option === FACTS_FLAG) chunks.push(value);
@@ -218,6 +218,13 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     );
   }
   const values = parsed.values;
+  if (expectedOperation === "ack" &&
+      parsed.booleans.has("--host-match-observed") !== (facts.host_match_observed === true)) {
+    throw new EffectRuntimeRequestError(
+      "Host-match flag does not match its bound ACK facts",
+      "scheduler_host_facts_identity_mismatch",
+    );
+  }
   const neutralObservedRrule = values["--app-automation-current-rrule"] ?? "";
   const legacyCodexObservedRrule = values["--codex-app-current-rrule"] ?? "";
   if (neutralObservedRrule && legacyCodexObservedRrule && neutralObservedRrule !== legacyCodexObservedRrule) {
@@ -250,7 +257,7 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
   if (expectedOperation === "host_failure" && values["--failed-rrule"]) {
     matchingText(facts, "expected_rrule", values["--failed-rrule"], "--failed-rrule");
   }
-  if (neutralObservedRrule || legacyCodexObservedRrule) {
+  if (expectedOperation === "host_failure" && (neutralObservedRrule || legacyCodexObservedRrule)) {
     matchingText(
       facts,
       "observed_host_rrule",
@@ -273,6 +280,13 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
       reason_summary: values["--reason-summary"] ?? null,
       host_facts: {
         ...facts,
+        ...(expectedOperation === "ack" && (
+          facts.surface === "codex_app" ||
+          Object.hasOwn(values, "--app-automation-current-rrule") ||
+          Object.hasOwn(values, "--codex-app-current-rrule")
+        )
+          ? { observed_host_rrule: neutralObservedRrule || legacyCodexObservedRrule }
+          : {}),
         operation: expectedOperation,
         runtime_root: parsed.runtime_root,
         execute: parsed.booleans.has("--execute"),

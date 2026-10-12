@@ -257,6 +257,35 @@ Host、写状态、ACK 或扣额度。打包 App 显示可用 Codex 与不可用
 或悄悄另建 Session 来通过。真实模型完成、自然试用、其他 runtime、Lark 与冻结
 D2 的失败/未测继续分开，复用既有 R5/T4 Todo；启动成功不代表入组或发布默认。
 
+The ordinary lifecycle checkpoint compares the unconfigured SQLite candidate
+with an explicitly configured canonical File control through the same full CLI
+entrypoint. `test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit`
+joins creation, unleased-claim refusal, leased claim/update, quota admission,
+refresh/spend, completion, supersession, archival and current-state conversion
+in both directions. Exact historical reads retain the archived records, latest
+metadata and successor; original add/update/complete/spend retries neither revive
+archived work nor append another settlement or authority revision.
+
+This bounded synthetic journey passes at source `df8262639` on CPython 3.14.8
+and the installed package `c51ec1a60` on CPython 3.12.15, both on macOS arm64
+with Node 24.21.0 / SQLite 3.53.4. Each command reopens an isolated real backend
+and verifies the copied package's provenance. It extends CLI recovery evidence;
+it does not qualify the packaged App interaction, actual model work, natural
+cohort operation, latency/resource growth or other installation profiles.
+The [D2 record](https://github.com/loopx-project/loopx/issues/4224#issuecomment-5965294711)
+still has no completed applicable elapsed-soak certificate. Retain each older
+report's source and failed/missing rows; do not restart its elapsed clock or
+replace it with this functional comparison.
+
+普通生命周期 checkpoint 以同一完整 CLI 入口比较未配置时的 SQLite 候选与显式
+canonical File 对照，贯通创建、无 lease claim 拒绝、持 lease 的 claim/update、
+quota admission→refresh/spend、完成、替代、归档及双向导出当前状态。精确历史
+读取保留归档记录、最新元数据与 successor；原 add/update/complete/spend 重试
+不能复活旧任务、再次结算或追加 authority revision。上述源码与安装包 profile
+通过的是隔离真实 backend 的有界合成旅程；App 交互、真实模型、自然试用、
+延迟/资源增长及其他安装 profile 继续未测。D2 旧报告按原 source 保留失败/缺失，
+尚无适用的自然时间完成证书；本次功能对照不重启其时钟，也不替代该证书。
+
 ### One reusable validation matrix
 
 Record candidate and independent control revisions, actual runtime, complete
@@ -847,18 +876,18 @@ on macOS arm64 / Node 24.21.0 reduce a 16-receipt File batch median from
 346.2 to 21.3 ms; the unchanged SQLite control measures 111.3 and 111.1 ms.
 Receipt results and authority heads match within each provider. These are warm
 component timings, not equivalent provider-integrity work, whole-restore latency,
-cold-read or D2/default qualification. File still rewrites the retained envelope
-on each restored commit; a prior full-history restore exceeded its caller's
-300-second timeout and later published an exact matching acknowledgement.
-That remaining recovery cost is not closed by this receipt-read optimization.
+cold-read or D2/default qualification. A prior full-history File restore exceeded
+its caller's 300-second timeout and later published an exact matching
+acknowledgement. That failure remains; receipt-read optimization alone did not
+close the recovery cost.
 The CLI now distinguishes an ambiguous restore response from a known failure
 and returns the read-only `authority-archive restore-receipt` command. This
 observes the existing goal/digest/provider-bound historical completion receipt
 using bounded metadata reads, without another replay or archive scan. Missing
 receipts do not imply a running or failed worker. Current integrity still needs
 the existing audit; no provider activation or D2/default gate changes. The next
-recovery-cost work remains the measured full-envelope rewrite and decode path,
-not another timeout increase or a second receipt/state format.
+recovery-cost work uses the same archive and original receipt/state format,
+not another timeout increase.
 
 The next measured File increment reuses `AuthorityStateReplay` while decoding
 one checkpoint window, instead of rebuilding a replay owner and canonicalizing
@@ -869,10 +898,32 @@ On one detached 2,107-commit File history, three fresh Node 24.21.0 processes pe
 arm on macOS arm64 reduce cold-load medians from 35.6 to 25.9 seconds (27%).
 Complete heads, revisions and cursors match. These consecutive sample groups
 do not flush OS caches or control other host activity; they are not p95, a
-provider comparison or a whole-restore result. File's full-envelope rewrite
-and remaining revision hashing cost still need their existing recovery work;
+provider comparison or a whole-restore result. That cold-read result alone does not qualify full restore;
 no D2/default or legacy-writer retirement exit is closed by this measurement.
 The #4224 soak was started; its final evidence and applicability remain pending.
+
+The full File recovery path now appends up to 16 verified logical transactions
+before atomically publishing the updated retained envelope. One target
+identity/CAS and the existing writer lock protect a page; independent journal
+and original-receipt proof precedes the next page. Every original transaction,
+projection, cursor, revision and receipt remains separate. Normal commits and
+the persisted format are unchanged. SQLite/PostgreSQL retain scalar writes;
+reviewed local migration and the existing Goal storage editor reuse this path.
+Before/after rename interruption and response-loss tests prove retained-prefix
+recovery without speculative repeats. A receipt-stripping mutation fails the
+actual CLI recovery oracle.
+
+On the same detached 3,516-transaction archive, two fresh uninstrumented Node
+24.21.0 processes per arm on macOS arm64 measured scalar File restore at
+732.4–733.5 seconds and page publication at 143.5–173.2 seconds. Full history,
+events, receipts and metadata are compared independently. OS caches were not
+flushed; other validation overlapped early samples. These are bounded recovery
+observations, not p95, a controlled resource-growth certificate or D2/default
+qualification. File still rewrites the retained envelope once per page; larger
+histories and sustained operation retain their existing qualification. The
+CLI's 300-second budget, unknown-outcome readback, separate adoption fences,
+legacy-writer retirement and formal failed/missing D2 evidence remain intact.
+
 
 ### Runtime retirement drains admitted effects
 

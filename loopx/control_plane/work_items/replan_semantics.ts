@@ -3,6 +3,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import {normalizeStrideDecision, normalizeStrideStrategy, strideControlContract, stridePlanningGuidance} from "./stride_policy.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -12,8 +13,10 @@ const VISION_OUTCOMES = [
   "fresh_vision_path_outcome", "new_runnable_successor", "new_concrete_blocker",
   "coverage_backed_exploration_exhausted", "coverage_backed_no_followup",
 ] as const;
-type SemanticOutcome = typeof PROGRESS_OUTCOMES[number] | typeof VISION_OUTCOMES[number];
-const KNOWN_OUTCOMES: ReadonlySet<string> = new Set([...PROGRESS_OUTCOMES, ...VISION_OUTCOMES]);
+// Capability-owned evidence is never a default generic progress exit.
+const CAPABILITY_OUTCOMES = ["capability_evidence_observed", "capability_duty_retired"] as const;
+type SemanticOutcome = typeof PROGRESS_OUTCOMES[number] | typeof VISION_OUTCOMES[number] | typeof CAPABILITY_OUTCOMES[number];
+const KNOWN_OUTCOMES: ReadonlySet<string> = new Set([...PROGRESS_OUTCOMES, ...VISION_OUTCOMES, ...CAPABILITY_OUTCOMES]);
 // Outcomes that a renamed identifier alone can produce. An external progress
 // review found the evaluated identifiers not serving the goal, so for that
 // source they discharge only behind evidence ids absent from the whole
@@ -24,7 +27,7 @@ const VISION_TRIGGERS = new Set([
   "vision_successor_required", "required_agent_vision_missing",
 ]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
-const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
+export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
 const VISION_CLI_ARGS = "--agent-vision-json '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>'";
 
@@ -42,7 +45,8 @@ const REPLAN_PLANNING_GUIDANCE = [
     "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
     "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
     "or rewrite criteria after failure.",
-  "Before widening repeated validation, check that the changed intervention reaches the " +
+  "Compare expected goal/information gain with full marginal cost. " +
+    "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +
     "Reuse still-applicable evidence instead of repeating checks without a new uncertainty.",
@@ -94,6 +98,70 @@ function projectTurnTransition(request: JsonObject): JsonObject {
   return {semantic_delta: delta};
 }
 
+/** Reconstruct only the exact lifecycle source which could be open at admission.
+ * Canonical no-follow-up reentry preserves the original completion identity.
+ * The selected obligation digest additionally binds Todo and completion identities.
+ */
+function lifecycleSource(request: JsonObject): JsonObject {
+  const agent = optionalNonEmptyString(request.agent_id, "agent_id");
+  const admitted = typeof request.guard_recorded_at === "string"
+    ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
+  if (!agent || admitted === null || !Array.isArray(request.items)) return {items: [], settled: false};
+  // Canonical Todo updates use whole seconds. A closeout in the admission
+  // second is possible; the exact obligation digest must still prove identity.
+  // Older terminal rows were already absent from the admitted frontier.
+  const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  const items = request.items.map(object).filter(item => {
+    const completed = typeof item.completed_at === "string" ? parseTodoTimestampMicros(item.completed_at) : null;
+    const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
+    return item.status === "done" && item.done === true &&
+      (item.archive_state ?? "active") === "active" && item.task_class === "advancement_task" &&
+      item.claimed_by === agent && item.last_actor_agent_id === agent &&
+      completed !== null && completed <= admitted &&
+      strings(item.successor_todo_ids).length === 0 && !item.superseded_by &&
+      (item.no_followup !== true || (item.completion_recovery === "lifecycle_reentry_terminal_closeout" &&
+        updated !== null && updated >= admissionSecond));
+  }).sort((left, right) => {
+    // Terminal reentry changes updated_at, never the original completed_at.
+    // Restore the original summary's ordering before its three-trigger bound.
+    const a = parseTodoTimestampMicros(String(left.completed_at))!;
+    const b = parseTodoTimestampMicros(String(right.completed_at))!;
+    return a === b ? Number(right.index ?? 0) - Number(left.index ?? 0) : a > b ? -1 : 1;
+  });
+  const settled = items.length > 0 && items.slice(0, 3).every(item =>
+    item.no_followup === true && item.completion_continuation === "no_followup" &&
+    typeof item.todo_id === "string" && !!item.todo_id &&
+    typeof item.completion_turn_key === "string" && !!item.completion_turn_key &&
+    item.completion_recovery === "lifecycle_reentry_terminal_closeout");
+  return {items, settled};
+}
+
+function lifecycleObligation(request: JsonObject): JsonObject | null {
+  const obligation = object(request.obligation);
+  if (obligation.obligation_id !== request.selected_obligation_id ||
+      obligation.resolution_mode !== "todo_lifecycle_settlement") return null;
+  const source = lifecycleSource(request);
+  const items = source.items as JsonObject[];
+  const triggers = Array.isArray(obligation.triggers) ? obligation.triggers.map(object) : [];
+  if (source.settled !== true || triggers.length !== Math.min(3, items.length) ||
+      triggers.some((trigger, index) => trigger.kind !== "completed_advancement_without_successor" ||
+        trigger.agent_id !== request.agent_id || trigger.todo_id !== items[index].todo_id ||
+        trigger.completion_turn_key !== items[index].completion_turn_key)) return null;
+  const reason = "The exact completed Todo lifecycle is settled. Reassess the original acceptance with evidence, then write back and settle this Turn once; do not repeat the original work.";
+  return {...obligation, required: true, selection_binding: "heartbeat_receipt",
+    resolution_mode: "receipt_bound_replan_settlement", satisfying_semantic_outcomes: [...VISION_OUTCOMES],
+    recommended_action: reason, todo_actions: [], guidance_actions: [reason],
+    settlement_action_packet: {
+      schema_version: "replan_action_packet_v0", obligation_id: obligation.obligation_id,
+      decision: "vision_outcome_checkpoint_required", settlement_only: true,
+      required_outcome: "durable_writeback_receipt", semantic_delta: null,
+      writeback_contract: {preferred_input: "evidence_linked_vision_path",
+        cli_semantic_args: VISION_CLI_ARGS, vision_authoring: visionAuthoringContract(),
+        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
+        path_outcomes: [...FRESH_PATH_DISPOSITIONS], rule: reason},
+    }};
+}
+
 /** A changed frontier cannot rebind work already admitted by a Turn receipt.
  * Current canonical transition candidates must carry their original source
  * obligation. After validated writeback the settlement owner's replay phase,
@@ -114,6 +182,11 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   for (const value of request.transition_candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
+    if (request.guard_scoped && candidate.lifecycle_settled === true) {
+      const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
+        selected_obligation_id: selected, agent_id: request.agent_id});
+      if (recovered) return {obligation: recovered};
+    }
     if (obligation.obligation_id !== selected || !requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
     const result = projectTurnTransition({guard_scoped: request.guard_scoped,
       selected_obligation_id: selected, transition_acks: [candidate.ack]});
@@ -166,6 +239,10 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
   if (declared.length) {
     if (declared.some(value => !KNOWN_OUTCOMES.has(value))) {
       throw new EffectRuntimeRequestError("satisfying_semantic_outcomes contains an unknown typed outcome");
+    }
+    if (declared.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value)) &&
+      object(obligation.capability_guard).schema_version !== "semantic_replan_capability_guard_v0") {
+      throw new EffectRuntimeRequestError("capability evidence requires a bound owning capability");
     }
     if (acceptanceHold && declared.some(value => !["new_runnable_successor", "new_concrete_blocker"].includes(value))) {
       throw new EffectRuntimeRequestError("acceptance recovery cannot widen its typed outcomes");
@@ -242,6 +319,12 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
 
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation === "lifecycle_source") return lifecycleSource(request);
+  if (request.operation === "lifecycle_obligation") {
+    const obligation = lifecycleObligation(request);
+    if (!obligation) throw new EffectRuntimeRequestError("lifecycle source does not match the admitted obligation");
+    return {obligation};
+  }
   if (request.operation === "vision_ack") return acknowledgeVisionEvidence(request);
   if (request.operation === "turn_transition") return projectTurnTransition(request);
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
@@ -249,7 +332,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
-    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE],
+    const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
+    return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE,
+      ...stridePlanningGuidance(object(obligation.replan_context).stride_strategy)],
+      ...(strideControl ? {stride_control: strideControl} : {}),
       ...writebackProjection(required, externalReview)};
   }
   if (request.operation !== "qualify") {
@@ -261,7 +347,18 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const vision = object(request.agent_vision);
   const patch = object(vision.vision_patch);
   const path = object(vision.path_delta);
+  const context = object(obligation.replan_context);
+  const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
+  const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
+  const freshPath = Boolean(String(patch.acceptance_summary ?? "").trim() &&
+    FRESH_PATH_DISPOSITIONS.has(String(path.outcome ?? "").trim()) && strings(path.evidence_refs).length);
+  const missingStride = structuredReview && freshPath && !strideDecision;
+  const staleStride = !!strideDecision && structuredReview &&
+    strideDecision.reference_obligation_id !== obligation.obligation_id;
   let outcomes = strings(observation.delta_kinds);
+  if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
+    throw new EffectRuntimeRequestError("capability evidence must be qualified by its owning capability, not generic progress");
+  }
   if (outcomes.some(outcome => !KNOWN_OUTCOMES.has(outcome))) {
     throw new EffectRuntimeRequestError("observation_delta contains an unknown typed outcome");
   }
@@ -283,11 +380,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const inconsistentTerminal = outcomes.includes("coverage_backed_no_followup") &&
     (vision.state !== "no_followup" || path.outcome !== "stop");
   if (inconsistentTerminal) outcomes = outcomes.filter(outcome => outcome !== "coverage_backed_no_followup");
-  if (String(patch.acceptance_summary ?? "").trim() &&
-      FRESH_PATH_DISPOSITIONS.has(String(path.outcome ?? "").trim()) &&
-      strings(path.evidence_refs).length && !outcomes.includes("fresh_vision_path_outcome")) {
+  if (freshPath && !missingStride && !staleStride && !outcomes.includes("fresh_vision_path_outcome")) {
     outcomes.push("fresh_vision_path_outcome");
   }
+  if (staleStride || missingStride) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
   const satisfying = inconsistentTerminal ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
   const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;
   const identityRefused = identityWithoutEvidence && !satisfying.length && !inconsistentTerminal;
@@ -296,13 +392,17 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes, satisfying_outcomes: satisfying, required_any_of: required,
     observation_fingerprint: observation.observation_fingerprint ?? null,
     reason: satisfying.length ? "writeback changes an outcome accepted by this obligation source"
+      : missingStride ? "enabled stride review requires agent_vision.stride_decision from the delivered control contract"
+      : staleStride ? "stride decision must reference the admitted replan obligation; reassess against its evidence"
       : inconsistentTerminal ? "coverage-backed no-follow-up requires agent_vision.state=no_followup and path_delta.outcome=stop"
       : replayRefused ? (knownBlocker
         ? "replan does not accept a blocker already recorded in its baseline, window or coverage ledger"
         : "external progress review does not accept a typed observation already claimed in the obligation window")
       : identityRefused ? "external progress review accepts a new surface, hypothesis or probe family only with evidence ids absent from the evaluated baseline and every claim in the obligation window"
       : "writeback does not satisfy this obligation's typed outcomes",
-    ...(inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}
+    ...(missingStride && !satisfying.length ? {reason_code: "stride_decision_required"}
+      : staleStride && !satisfying.length ? {reason_code: "stride_reference_obligation_mismatch"}
+      : inconsistentTerminal ? {reason_code: "no_followup_vision_path_inconsistent"}
       : replayRefused ? {reason_code: "progress_observation_replayed"}
       : identityRefused ? {reason_code: "progress_identity_without_new_evidence"} : {}),
   };

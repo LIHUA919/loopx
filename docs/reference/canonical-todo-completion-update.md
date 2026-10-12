@@ -551,6 +551,30 @@ Whole-writer retirement still needs the declared support cutoff, last callers
 and pending outbox disposition; this separation does not force an upgrade or
 change a provider default.
 
+Production callers import those same owners directly: `mutation_api` for the
+five operations and archive constant, `list_readback` for complete Todo reads,
+`path_resolution` for configured source routing, and `active_state_editing` for
+supported source-display parsing. This includes CLI registration, quota/planning,
+capability consumers and Lark. The historic `loopx.todos` public surface remains
+an alias to the same function objects; no source-format support is withdrawn.
+The consumer oracle adds physical facade removal to whole-writer/four-producer
+removal in source and normal-wheel copies. It reuses the lifecycle, creation,
+lease/once-only settlement and Monitor negative/replay oracles, plus real App
+HTTP cold import, later mutations and server restart. The Lark dry-run refuses
+remote execution; Explore projection replays without duplicate events. These
+local extension checks do not qualify live Lark adoption. Restoring imports is
+a code rollback with no new schema, provider selection or receipt conversion.
+
+生产调用方直接导入相同 owner：`mutation_api` 负责五种操作及归档常量，
+`list_readback` 负责完整 Todo 读取，`path_resolution` 负责已配置的源路径，
+`active_state_editing` 负责受支持的源显示解析；覆盖 CLI 注册、quota／规划、能力
+消费者与 Lark。历史 `loopx.todos` 仍重导出相同函数对象，旧格式支持未撤销。
+消费者检查在源码及正常 wheel 中同时物理移除 facade、整个 writer 和四个 producer，
+复用生命周期、创建、租约／恰好一次结算及 Monitor 负例／重放，另验真实 App HTTP
+冷导入、后续写入与服务重启。Lark dry-run 不执行远端命令，Explore 重放不重复事件，
+这些本地扩展检查不认证 live Lark 采用。回滚只恢复代码导入，不转换 schema、provider
+选择或回执；有真实调用的旧源 IO 和历史恢复仍保留。
+
 The retained field adapter preserves blank Python resume values as omission,
 timezone normalization, explicit clears and rejection before source mutation.
 Invalid supplied conditions use the typed owner's actionable diagnostic. This
@@ -616,28 +640,58 @@ receiver adoption 或执行权。
 
 ## Monitor source-writer isolation
 
-Canonical Monitor polling also loads no Markdown line writer or source Todo
-capture producer. The legacy adapter imports those functions only for a new
-unpromoted batch; reading a pre-promotion operation receipt remains available
-without them. Monitor decisions, lease proofs and original-operation replay
-continue through the existing TypeScript batch and canonical provider owners.
+Canonical Monitor polling does not load the live `legacy_monitor_poll.py`
+writer. Immutable pre-promotion receipt codecs and replay now live in the
+scheduler's `monitor_batch_receipts.py`, shared by the router and the supported
+legacy writer. The TypeScript batch planner still validates the original
+operation and supplies its unchanged writeback. There is no new decision owner,
+receipt format, provider setting or execution authority.
 
-The same real File/SQLite CLI oracle runs with the old functions present and
-physically absent: no-change and material-change observations, provider outage
-and restoration, replay after lease release, one event and no quota spend or
-duplicate successor. Existing interrupted Markdown batch and shadow/outbox
-recovery tests remain required. This qualifies another caller boundary, not
-removal of the supported writer, historical receipt readers or backup recovery,
-and changes no provider default or existing Goal's upgrade requirement.
+On historical replay, the router checks promotion before loading shadow IO.
+After cutover, even ambiguous retained source outbox bytes remain inert: replay
+must not drain them into the current authority. Before cutover, an ordinary
+retry still loads the existing drain owner when an outbox is present, recovering
+one markerless prepared batch after the atomic Markdown replacement. That
+valuable recovery path and the live legacy instrumentation seam remain.
 
-canonical Monitor poll 同样不加载 Markdown 行写入器或旧源 Todo capture producer。
-旧适配器仅在未迁移 Goal 的新 batch 写入时导入这些函数；晋升前原操作回执的读取
-仍保留。决策、租约证明和原操作重放继续复用既有 TS batch 与 canonical provider。
-相同真实 File/SQLite CLI 检查覆盖旧函数存在／物理缺席两臂、无变化／实质变化、
-provider 失效后恢复、释放租约后的重放、一次 event、无额度消耗和重复 successor。
-未迁移 Markdown 的原子 batch、shadow/outbox 中断恢复仍须通过原反例。本批只完成
-该调用方隔离，不删除仍受支持的 writer、历史回执和备份恢复，不切换默认或强制
-已有 Goal 升级。
+Real File/SQLite CLI checks physically remove the entire Monitor writer from a
+copied source package or a normally installed wheel, together with all four
+shadow producer modules after CLI startup isolation. They cover no-change and
+material-change polling, provider outage/restoration, lease-release replay and
+recovery of an interrupted pre-promotion operation after newer canonical work.
+Recovery preserves the original successor identities, current provider revision,
+state and retained outbox bytes, with one event and no quota spend. A fresh
+production provider call proves these dependencies are not loaded even when
+the modules are present. Existing malformed-receipt, intent-conflict, writer-fence and
+unpromoted outbox recovery counterexamples remain required.
+
+This qualifies the Monitor caller boundary, not removal of the still-supported
+source writer or all capture producers. Retain historical readers, backup/import
+recovery and original outbox disposition until their own exits pass. No default,
+existing Goal upgrade requirement, PostgreSQL transaction or Host lifecycle
+changes. Reverting this isolation restores imports without rewriting receipts;
+it does not restore legacy write authority after cutover.
+
+canonical Monitor poll 不再加载整个 `legacy_monitor_poll.py` 活跃 writer。
+晋升前的 immutable 回执 codec／replay 归入 scheduler 的
+`monitor_batch_receipts.py`，路由及旧 writer 共用；TS batch planner 继续校验
+原操作并返回相同 writeback，不新增决策源、回执格式、provider 配置或执行权。
+历史重放先检查晋升状态再加载 shadow IO。晋升后，含歧义的原 outbox 字节仍须
+保持静止，不导入当前 authority；晋升前的普通重试则在 outbox 存在时调用原 drain
+owner，恢复一次 Markdown 原子替换后未写 commit marker 的 prepared batch。
+保留这条有效恢复路径和现有 legacy 故障注入入口。
+
+真实 File/SQLite CLI 检查在复制源码／正常安装 wheel 中物理移除整个 Monitor
+writer，并在 CLI 启动隔离后移除四个 shadow producer module；覆盖无变化／实质
+变化、provider 失效恢复、释放租约后重放，以及旧操作
+中断后晋升、继续写入、再恢复原操作。原 successor 身份、当前 revision、state
+及原 outbox 字节保持，一次 event 且无 quota spend。冷 production provider 调用
+另证明模块仍存在时也不加载旧 writer／drain。损坏回执、意图冲突、writer fence
+和未晋升 outbox 恢复反例仍须通过。
+本批只验收 Monitor 调用边界，不删除受支持的源 writer／全部 capture producer；
+历史 reader、备份导入恢复及原 outbox 处置各保留自己的出口。不改变默认、已有
+Goal 升级要求、PostgreSQL 事务或 Host 生命周期。回滚只恢复导入关系，不改写
+回执，也不恢复晋升后的 legacy 写权限。
 
 ## Frontier classification retirement
 

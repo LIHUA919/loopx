@@ -8,6 +8,7 @@ import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
 import type { TodoItem } from "../../data/status";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
+import type { DigestAttentionSummary } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 export type WorkspaceGoalState =
   | "需修复"
   | "等你"
@@ -36,6 +37,7 @@ export type WorkspaceAgentTodo = {
   completedAt?: string | null;
   resumeWhen?: string | null;
   resumeReady?: boolean | null;
+  resumeInvalidReason?: string | null;
   resumeReceiptId?: string | null;
   blockedReason?: string | null;
   claimedBy?: string | null;
@@ -52,8 +54,8 @@ export type WorkspaceAgentTodo = {
   requestText?: string;
   /** The authority id, absent when a legacy projection needs a display-only id. */
   sourceTodoId?: string | null;
-  /** Local map fallback: exact request reading without current-state actions. */
-  detailMode?: "request_only";
+  /** Local inspection mode: exact request only, or a previously current item lost from readback. Neither authorizes actions. */
+  detailMode?: "request_only" | "missing_current";
   text: string;
   todoId: string;
   validationDigest?: string | null;
@@ -88,6 +90,8 @@ export function workspaceAgentTodoFromItem(todo: Pick<TodoItem,
     completedAt: todo.completed_at ?? null,
     resumeWhen: todo.resume_when ?? null,
     resumeReady: todo.resume_ready ?? null,
+    resumeInvalidReason: typeof todo.resume_condition?.invalid_state === "string"
+      ? todo.resume_condition.invalid_state : null,
     resumeReceiptId: typeof receiptId === "string" && receiptId.trim() ? receiptId.trim() : null,
     validationDigest: todo.completion_validation_sha256 ?? null,
     validationRevision: todo.completion_validation_revision ?? null,
@@ -168,6 +172,8 @@ export type WorkspaceGoal = {
   boundHostSurfaces?: string[];
   /** Completed agent Todo count from the status payload; item lists only carry open Todos. */
   doneTodoCount?: number;
+  /** Open agent Todo count projected beside a possibly bounded item list. */
+  openTodoCount?: number;
   execution?: WorkspaceGoalExecution;
   goalId: string;
   /** Bound host threads as observed from the host's own records. */
@@ -175,6 +181,7 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
   state: WorkspaceGoalState;
@@ -333,6 +340,7 @@ export type WorkspaceActionPreview = {
   // See proposal-recency.ts.
   createdAt?: string;
   previewId: string;
+  regeneratedFrom?: string | null;
   primaryLabel?: string;
   errorMessage?: string;
   status: "draft" | "ready" | "applying" | "applied" | "gated" | "stale" | "error" | "rejected" | "deferred";
@@ -509,6 +517,7 @@ export type PersonalWorkspaceCallbacks = {
     changed: boolean;
     configuration: WorkspaceGoalSubagentConfiguration;
     previewId: string;
+  regeneratedFrom?: string | null;
   }>;
   onApplyGoalSubagentConfiguration?: (
     request: WorkspaceGoalSubagentConfiguration & { goalId: string; previewId: string },
@@ -547,6 +556,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectAgent?: (agentId: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
+  onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;

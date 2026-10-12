@@ -221,6 +221,15 @@ creates a new submission. Older clients may lack result lookup; unavailable
 commands, missing sessions and missing results remain unresolved feedback,
 and never justify blind resubmission. This does not add restart persistence.
 
+New non-game native trials include brief guidance to keep researching the original
+task objective, treating implementation, passing checks and submission as milestones.
+The same text reaches the startup prompt, workspace `AGENTS.md` and LoopX Goal;
+the complete original task remains the planning input. Trial budgets and deadlines
+stay with the existing runner, without extra agent-facing budget instructions.
+This changes guidance for new native attempts across all five workers, preserving
+grading, cooldown, selection, blind/best-only controls, game prompts and frozen runs.
+Instruction readback does not establish model adoption or outcome gains.
+
 | Mode | Agent-visible evaluator feedback | Evaluation access |
 | --- | --- | --- |
 | native | Exact score, pass rate, counts, summary, metrics and failed names; `--details` exposes per-check messages; `--list` shows active-submission history | Agent may submit within the native cooldown/budget; automatic samples are hidden |
@@ -429,6 +438,25 @@ The shared control plane counts settled work Turns, not tool calls or idle wakes
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
 record the resolved cadence. Only newly launched attempts use the new default;
 keep existing runs and archived settings pinned.
+
+### Optional structured stride strategy
+
+Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`
+or `heartbeat-explore` trial to opt into the existing Goal review strategy.
+The runner writes the option together with the resolved cadence and checks
+the real Goal configuration before planning or execution. The install,
+worker-profile and runtime receipts record an explicitly selected version.
+Omitting the option preserves ordinary off commands and receipt shapes;
+`--stride-strategy off` explicitly selects the disabled treatment. Plain and
+native-goal profiles reject this option before creating a trial. Unknown
+versions also fail before registration or execution.
+
+The [Goal review contract](../../docs/reference/protocols/goal-vision-replan-contract-v0.md)
+defines structured proposals and the three independently controlled axes.
+Strategy configuration grants no new execution authority, evaluator feedback,
+budget or submissions. Freeze it with exact sources under a new run ID; do not
+change live workers. Receipts qualify requested configuration, while actual
+review, proposal adoption and task gains require trajectory evidence.
 
 ## Optional short-context treatment
 

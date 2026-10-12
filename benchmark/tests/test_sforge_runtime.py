@@ -454,6 +454,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("native-goal", ["--replan-after-todos", "3"]),
     ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
     ("heartbeat-explore", ["--replan-after-todos", "0"]),
+    ("official", ["--stride-strategy", "off"]),
+    ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
+    ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')
@@ -505,6 +508,10 @@ def test_edgebench_receipt_records_resolved_entry_and_enabled_treatment(tmp_path
         assert kwargs["agent"].resume_cmd is None
         assert kwargs["timeout"] == kwargs["config"].agent_timeout == expected
         assert kwargs["eval_interval"] == interval
+        agent = kwargs["agent"]
+        assert "total trial budget" not in agent.workspace_instructions
+        assert agent.task_objective in agent.workspace_instructions
+        assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)
     args = ["--task", task, "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),

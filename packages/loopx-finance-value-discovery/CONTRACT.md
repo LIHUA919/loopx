@@ -585,3 +585,153 @@ authentication, lifecycle/PIT, financial admission and trading remain false.
 Existing period and cash operations are unchanged; old providers reject this
 new schema. App/Lark interaction, source-consumer adoption and financial utility
 are independent remaining qualifications.
+
+# Stock instant change (extension 0.8.12)
+
+`finance_stock_change_input_v1` explicitly compares stocks. The root contains
+exactly `schema_version`, `later`, `earlier`, and `compatibility`. Each operand
+contains `source_digest`, original nullable `context`, nullable `point`, the
+existing nullable eight-field `statement_basis`, `aggregation_kind`, and
+`accuracy`. The shared temporal vocabulary is unchanged; only `stock` qualifies.
+
+A point has exactly `context_source_digest`, `evidence_ref`, `role`, and
+`instant`. References/digests retain the existing period owner's bounds.
+`instant` is null or an explicit dateTime; the economic role is an exact token.
+The original context must encode an instant with a known timezone, and its
+normalized boundary must equal the declared point. XBRL date-only end-of-day
+conversion and offsets reuse `assess_period_encoding`; column labels cannot
+supply absent original context or timezone. The earlier point must be strictly
+before the later one; equal or reversed instants refuse a qualified change.
+These are balance instants, not new first-public or observation clocks.
+
+Subjects, declared metrics and currency/scale units must match. Distinct column
+scopes can belong to one source/filing/version. Other source/version joins need
+explicit `compatibility` with exactly `evidence_ref`, `later`, and `earlier`;
+each pin contains the exact current `source_digest`, `filing_ref`, `version_ref`,
+and `scope_ref`. This reuses the cumulative-flow version-compatibility owner.
+Neither matching names nor matching numbers proves scope comparability or
+completeness. A producer owns those meanings, withdrawals and conflicts.
+
+The v1 requires producer-declared exact accuracy for both amounts. Finite or
+missing precision remains visible and holds the qualified change. There is no
+implicit rounding policy, token-quantity unit conversion or inferred cash
+identity. Unknown unit does not become USD, and a composite metric does not
+become pure cash. Different metrics/subjects/units and nonstocks suppress even
+the diagnostic candidate.
+
+`finance_stock_change_assessment_v1` retains original operands, point and
+accuracy assessments, current compatibility pins, canonical input digest and
+sorted reasons. `candidate_lexical_difference` is diagnostic bounded Decimal
+subtraction when the declared stock identities and amounts are known.
+`stock_change` and `change_window` are emitted only when
+`change_evidence_eligible` is true. A window records two instants, not a duration
+flow. `cash_flow_derived` and `causes_of_change_assessed` are always false:
+stock change cannot establish acquisitions, financing, spending or its causes.
+Source authentication, lifecycle/PIT, financial admission and trading also
+remain false. Upstream source admission remains independent.
+
+```sh
+loopx-finance-value-discovery assess-stock-change \
+  --input-json packages/loopx-finance-value-discovery/examples/stock-change-v1.json
+```
+
+The same schema selects this operation on the installed provider's stdin
+runtime. Missing evidence is a successful assessment with a held result;
+malformed closed shapes use the existing error packet/nonzero exit. Optional
+provider lifecycle remains unchanged. Disable through `loopx extension disable
+loopx-finance-value-discovery --execute`; rollback uses the prior provider and
+its original input versions. Old providers reject the new schema, while old
+cash, duration comparison v1/v2, and flow difference v1 inputs keep their
+original behavior and replay clocks. No new catalog or Core authority exists.
+
+This stage delivers CLI/runtime computation. Its App/Lark interaction and the
+source provider's production consumer are still companion qualifications;
+installation and this calculation do not establish financial utility.
+
+# Same-event funding cash (candidate extension 0.8.13)
+
+`finance_funding_event_pair_input_v1` has exactly `schema_version`, a zoned
+`decision_at`, two nullable `legs`, and nullable `costs`. The packaged input and
+response schemas describe the closed shapes; Finance owns bounded number,
+timestamp and semantic validation. Its enums are local to this versioned
+Finance provider, not new Core states or a catalog capability. Specialized
+Decimal arithmetic reuses Finance's numeric bounds, finite clock decoder and
+canonical input digest; no financial-statement/XBRL duration is manufactured.
+
+Each non-null leg declares `source`, `instrument`, `side`, `rate`, nullable
+`calculation_basis` and nullable `settlement`. Source ref/digest/field/version,
+producer-as-of and original capture bounds are separate. Instrument venue,
+identity/version, base unit, quote currency and mapping evidence are explicit.
+Only declared `linear_quote_notional` is supported; inverse, quanto and unknown
+units withhold cash. Quantity unit and price base must match that instrument's
+base, and payment currency must match the declared quote currency. No FX,
+collateral substitution, quantity rounding or contract inference occurs.
+
+Rate `original_literal` is retained verbatim. `value` is the caller's parsed
+finite decimal lexeme with explicit `fraction`, `percent` or `basis_points`
+unit. Parsing/source correspondence remains caller-declared. Kind is `forecast`
+or `realized`, otherwise null/unknown. Payment convention is explicitly
+`positive_long_pays` or `positive_short_pays`; side is `long` or `short`.
+Signed lexical arithmetic for positive-long-pays is `+quantity*price*rate` for
+a short and its negative for a long; positive-short-pays reverses it. A
+negative rate reverses payment direction again. This is conditional declared
+linear arithmetic, not a verified venue contract or execution price.
+
+The native economic period has explicit zoned start/end, evidence and declared
+`accrual_ends_no_later_than_payment` relation. The event has an exact common
+venue/event ref, settlement dateTime and evidence. Periods must be positive and
+end no later than their event. Chart intervals, observation clocks, historical
+rates and guessed next timestamps cannot supply these fields or event counts.
+Capture/producer/payment/cost clocks are normalized for absolute comparisons,
+including offsets and fractional seconds, while original input remains intact.
+Capture must be no later than decision, and producer/start no later than capture
+end. These clocks and refs remain caller assertions, not PIT authentication.
+
+This operation adds **same-event cash**, not naked rates. Equal event timestamps
+alone do not establish the common venue/event identity or each native period.
+Once both legs independently qualify, different native accrual periods may
+still contribute same-currency cash paid at the same declared event; 1h versus
+8h does not itself forbid addition. `native_period_relation` reports that
+distinction without comparing or annualizing rates. Event/currency/kind
+mismatch withholds the pair while retaining independently qualified leg output.
+Repeated same-venue payment identity refuses double counting.
+
+A forecast requires an event strictly after decision and no claimed settled
+payment. `conditional_signed_estimate`, gross and net estimates are separate
+outputs; **`net_cash` stays null**, even with fully declared forecast inputs.
+A realized leg needs a nonfuture event and explicit payment ref, zoned
+settlement time, signed amount, currency and evidence. Payment cannot precede
+its event or follow decision. The declared amount must equal the bounded
+lexical calculation; rounding/error propagation is unsupported and conflicting
+amounts hold. Eligible cash is still declared, not authenticated settlement.
+
+Costs require amount, currency, kind (`conditional`/`realized`), observation
+clock and evidence. Null does not mean zero; explicit zero with evidence is
+allowed. Missing costs preserve eligible gross output but withhold net output.
+Only realized costs can produce declared realized `net_cash`; a forecast may
+use declared conditional costs for its estimate. No profitability threshold,
+strategy recommendation, market-risk neutrality or fill guarantee is assessed.
+
+The result preserves the complete input and canonical hash, each leg's reasons,
+diagnostic candidate arithmetic, qualified forecast/realized outputs, event and
+period relations, and sorted pair reasons. Unknown dimensions suppress even
+candidate multiplication. Missing evidence is an `ok:true` assessment with held
+outputs; malformed shapes, unsupported literals or numeric bounds fail through
+the existing error packet. Replay is deterministic calculation, not current
+source validation. Source/payment authentication, lifecycle/PIT, financial
+admission, trading and external read/write flags always remain false.
+
+For managed calls, read Core's typed run receipt and provider result together.
+A provider refusal uses `status=provider_failed` and preserves its nonzero
+`exit_code`; an admission refusal before invocation is a different path. Do not
+assume every unsuccessful managed call exits with code 2. A held `ok:true`
+assessment is neither kind of process failure and never grants financial use.
+
+`assess-funding-event --input-json` and schema-selected installed stdin call the
+same owner. Old input versions keep their original results. Disable via the
+existing extension lifecycle; a pinned 0.8.12 rollback rejects this new schema
+and preserves its original stock/cash/period behavior. The package includes a
+synthetic same-event 1h/8h example. This stage is the CLI/runtime prerequisite;
+the existing Investment Research App/Lark interaction, source-provider consumer
+and independent financial utility remain companion qualifications. No default
+activation, account access or parallel authority is introduced.

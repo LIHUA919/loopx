@@ -11,6 +11,7 @@ import type { AttentionDetails } from "../features/personal-workspace/attention-
 import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnapshots, workspaceReadPlan, type WorkspaceProgress, type WorkspaceLoadError, type WorkspaceReadScope } from "../data/workspace-progressive-status";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
+import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 
 import { dashboardRoute } from "../router";
 import {
@@ -382,14 +383,14 @@ function firstOpenTodo(todos?: TodoGroup | null) {
 function todosFromProjectAssetSummary(
   summary?: { items?: TodoItem[]; total?: number; open?: number; done?: number; advancement_done_count?: number; source_section?: string | null } | null,
   fallback?: TodoGroup | null,
-  _label = "todos",
+  role: "user" | "agent" = "agent",
 ): TodoGroup | null {
-  if (summary?.items?.length) {
+  if (summary?.items && (summary.items.length > 0 || (role === "user" && summary.open !== undefined))) {
     return {
       advancement_done_count: summary.advancement_done_count ?? fallback?.advancement_done_count,
-      done_count: summary.done ?? summary.items.filter((item) => item.done).length,
+      done_count: summary.done ?? fallback?.done_count,
       items: summary.items,
-      open_count: summary.open ?? summary.items.filter((item) => !item.done).length,
+      open_count: summary.open ?? fallback?.open_count,
       total_count: summary.total ?? summary.items.length,
     };
   }
@@ -462,12 +463,14 @@ type PersonalGoalItem = {
   agentId: string;
   agentSentence: string;
   agentTodos: WorkspaceAgentTodo[];
-  doneTodoCount: number;
+  doneTodoCount?: number;
+  openTodoCount?: number;
   goalId: string;
   latestActivity?: string;
   needsYou?: string | null;
   needsYouActionKind?: string | null;
   needsYouBlocking?: boolean;
+  attentionSummary?: DigestAttentionSummary;
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
   nextSentence: string;
@@ -698,8 +701,8 @@ function personalVisibleAgentMessage(value: string) {
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
   const projectAsset = item.project_asset;
   return role === "user"
-    ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, "project_asset.user_todos")
-    : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, "project_asset.agent_todos");
+    ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, role)
+    : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, role);
 }
 
 function personalTodoText(todo: TodoItem) {
@@ -795,7 +798,7 @@ function mergePersonalAgentTodos(
  * recent-completed lane. Queue items may also include completed Todos.
  */
 function personalAgentTodoFacts(row: GoalDirectoryRow): {
-  doneTodoCount: number;
+  doneTodoCount?: number;
   nextTodoText: string | null;
   recentCompleted: WorkspaceAgentTodo[];
 } {
@@ -807,8 +810,9 @@ function personalAgentTodoFacts(row: GoalDirectoryRow): {
     ?? assetTodos?.done
     ?? queueTodos?.done_count
     ?? null;
-  const doneFromItems = items.filter((todo) => todo.done && todo.status !== "deferred").length;
-  const doneTodoCount = Math.max(doneFromCount ?? 0, doneFromItems);
+  const doneFromItems = items.filter((todo) => todo.done && todo.status !== "deferred" && todo.task_class !== "continuous_monitor").length;
+  // Items are bounded observations. They cannot supply a missing whole-Goal total.
+  const doneTodoCount = doneFromCount === null ? undefined : Math.max(doneFromCount, doneFromItems);
   const seenTodoIds = new Set(
     items
       .map((todo) => todo.todo_id?.trim())
@@ -994,10 +998,20 @@ function buildPersonalHomeModel(
   );
   const usageById = shareUsageById(payload.usage_summary);
   const agentRows = buildAgentManagementRows(rows, payload.todo_index, payload.agent_management_projection);
+  const attentionSummaries = new Map<string, DigestAttentionSummary>();
   const attentionHistory = payload.attention_queue.items.flatMap((item, sourceOrder) => {
     if (stoppedGoalIds.has(item.goal_id)) return [];
     const blocking = ["user_or_controller", "controller"].includes(item.waiting_on);
-    return (personalTodosForQueueItem(item, "user")?.items ?? [])
+    const group = personalTodosForQueueItem(item, "user");
+    const listedOpen = group?.items.filter((todo) => !todo.done).length ?? 0;
+    const open = group?.open_count;
+    const count = typeof open === "number" && Number.isSafeInteger(open) && open >= listedOpen ? open : null;
+    attentionSummaries.set(item.goal_id, {
+      blocking: count === null ? null : blocking ? count : 0,
+      optional: count === null ? null : blocking ? 0 : count,
+      coverage: count === null ? "unknown" : count > listedOpen ? "partial" : "complete",
+    });
+    return (group?.items ?? [])
       .map((todo, todoOrder): PersonalNeedsYouItem & { sourceOrder: number; todoOrder: number; projectedDone: boolean } => ({
         projectedDone: todo.done,
         details: attentionDetailsFromSnapshot(todo, item.user_todos?.items ?? [], item.goal_id),
@@ -1014,8 +1028,17 @@ function buildPersonalHomeModel(
   });
   const projectedUserTodos = attentionHistory.filter((todo) => !todo.projectedDone);
   const projectedGoalIds = new Set(projectedUserTodos.map((todo) => todo.goalId));
+  for (const [goalId, summary] of attentionSummaries) {
+    if ((summary.blocking ?? 0) + (summary.optional ?? 0) > 0) projectedGoalIds.add(goalId);
+  }
   const pendingOperatorGates = rows.flatMap((row, rowOrder) => {
     if (stoppedGoalIds.has(row.goal.id) || projectedGoalIds.has(row.goal.id) || !personalGoalHasPendingOperatorGate(row)) return [];
+    // An independently observed run gate is one decision, even without a Todo.
+    // An unreadable User Todo group keeps its unknown total rather than hiding it.
+    const summary = attentionSummaries.get(row.goal.id);
+    if (summary?.coverage === "complete") attentionSummaries.set(row.goal.id, {
+      ...summary, blocking: (summary.blocking ?? 0) + 1,
+    });
     return [{
       details: attentionDetails({ task_class: "user_gate", status: "open", note: row.latestRun?.operator_gate?.reason_summary }),
       actionKind: "gate.resolve",
@@ -1090,6 +1113,7 @@ function buildPersonalHomeModel(
       boundHostSurfaces: Array.from(new Set((goal.coordination?.thread_agent_bindings ?? [])
         .flatMap((binding) => binding.host_surface ? [binding.host_surface] : []))),
       doneTodoCount: agentTodoFacts.doneTodoCount,
+      openTodoCount: row.queueItem?.agent_todos?.open_count ?? row.queueItem?.project_asset?.agent_todos?.open,
       hostThreadActivity: goal.host_thread_activity ? {
         completeness: goal.host_thread_activity.completeness,
         threads: goal.host_thread_activity.threads.map((thread) => ({
@@ -1104,6 +1128,9 @@ function buildPersonalHomeModel(
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
       needsYouBlocking: needsYouTodo?.blocking ?? false,
+      attentionSummary: goal.activation_state === "stopped"
+        ? { blocking: 0, optional: 0, coverage: "complete" } satisfies DigestAttentionSummary
+        : attentionSummaries.get(goal.id),
       needsYouTaskClass: needsYouTodo?.taskClass ?? null,
       needsYouTodoId: needsYouTodo?.todoId ?? null,
       nextSentence,
@@ -1209,6 +1236,8 @@ function buildPersonalHomeModel(
 function PersonalGoalHome({
   goalArchiveLoadState,
   selectedView,
+  selectedTodoId,
+  onSelectTodo,
   onSelectView,
   isLoading,
   onGoalActivationStateChange,
@@ -1229,6 +1258,8 @@ function PersonalGoalHome({
 }: {
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
   selectedView?: WorkspaceGoalTab;
+  selectedTodoId?: string | null;
+  onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   isLoading: boolean;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -3065,6 +3096,7 @@ function PersonalGoalHome({
           onSelectAgent: chooseAgent,
           onSelectGoal: (goalId, view) => { onSelectGoal(goalId ?? "", view); setMobilePanel("chat"); },
           onSelectView,
+          onSelectTodo,
           onSendMessage: async (message, agentId, targetContextId, attachments) => sendManagerQuestion(message, { agentId, contextId: targetContextId, attachments }),
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
@@ -3072,6 +3104,7 @@ function PersonalGoalHome({
         }}
         goalArchiveLoadState={goalArchiveLoadState}
         selectedView={selectedView}
+        selectedTodoId={selectedTodoId}
         managerChannelBinding={managerChannelBinding}
         managerRuntime={managerRuntime}
         conversationSessionId={runtimeBindings[contextId]?.sessionId}
@@ -3546,13 +3579,14 @@ export function DashboardPage() {
         ...current,
         goalId,
         workspace: undefined,
+        todo: undefined,
         view: view === "chat" ? "conversation" : view,
       }),
     });
   }
 
   function selectWorkspace(projectRef: string | null) {
-    void navigate({ search: (current) => ({ ...current, goalId: "", workspace: projectRef ?? undefined, view: "conversation" }) });
+    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workspace: projectRef ?? undefined, view: "conversation" }) });
   }
 
   if (statusRequestActive) {
@@ -3571,6 +3605,12 @@ export function DashboardPage() {
   return (
     <PersonalGoalHome
       goalArchiveLoadState={goalArchiveLoadState}
+      selectedTodoId={search.todo ?? null}
+      onSelectTodo={(todoId) => {
+        const goalId = search.goalId, statusUrl = search.statusUrl;
+        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+          ? {...current, todo: todoId ?? undefined} : current});
+      }}
       selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "chat" : "overview"}
       onSelectView={(view) => {
         void navigate({ search: current => ({ ...current, view: view === "chat" ? "conversation" : view }) });

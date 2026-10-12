@@ -86,10 +86,12 @@ class SForgeWorker(CodexAgent):
                  feedback_prompt: str | None = None,
                  feedback: str = "native",
                  workspace_instructions: str | None = None,
+                 task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  replan_after_turns: int | None = None,
-                 replan_after_todos: int | None = None):
+                 replan_after_todos: int | None = None,
+                 stride_strategy: str | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -128,6 +130,12 @@ class SForgeWorker(CodexAgent):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
+        if stride_strategy is not None and not profile.startswith("heartbeat-"):
+            raise ValueError("stride_strategy requires a heartbeat profile")
+        if stride_strategy is not None:
+            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+            stride_strategy = normalize_stride_strategy(stride_strategy)
+        self.stride_strategy = stride_strategy
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
             raise ValueError("Unknown feedback mode")
@@ -138,9 +146,15 @@ class SForgeWorker(CodexAgent):
             or feedback_prompt is None or not feedback_prompt.startswith(workspace_instructions)
         ):
             raise ValueError("Workspace feedback instructions must match the native task wrapper")
+        if task_objective is not None and (
+            not isinstance(task_objective, str) or not task_objective.strip()
+            or workspace_instructions is None or task_objective not in workspace_instructions
+        ):
+            raise ValueError("Task objective must occur in the native workspace instructions")
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions
+        self.task_objective = task_objective
         self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
@@ -207,6 +221,8 @@ class SForgeWorker(CodexAgent):
                 turn_envelope=self.turn_envelope,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
+                stride_strategy=self.stride_strategy,
+                task_objective=self.task_objective,
             )
             asyncio.run(self.runtime.install(self.environment))
         # Prompt replacement describes the policy; the feedback mode owns access.

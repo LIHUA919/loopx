@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 
 import pytest
 
@@ -46,7 +47,7 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     package_root = tmp_path / "package"
     package = package_root / "loopx"
-    command = [sys.executable, "-m", "loopx.cli"]
+    command = [sys.executable, "-S", "-m", "loopx.cli"]
     if request.param == "source":
         shutil.copytree(Path(__file__).resolve().parents[2] / "loopx", package,
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -59,10 +60,13 @@ def isolated_todo_distribution(tmp_path, monkeypatch, request):
         assert installed.returncode == 0, installed.stdout + installed.stderr
         entry = package_root / "bin/loopx"
         assert entry.is_file()
-        command = [sys.executable, str(entry)]
-    monkeypatch.setenv("PYTHONPATH", str(package_root))
+        command = [sys.executable, "-S", str(entry)]
+    # Keep dependencies available without processing editable-install .pth files.
+    # Their import finder can silently borrow a deleted module from the checkout.
+    dependencies = dict.fromkeys(sysconfig.get_paths()[key] for key in ("purelib", "platlib"))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(package_root), *dependencies]))
     provenance = json.loads(subprocess.check_output(
-        [sys.executable, "-c", "import json,loopx; from importlib import metadata; "
+        [sys.executable, "-S", "-c", "import json,loopx; from importlib import metadata; "
          "print(json.dumps({'module':loopx.__file__, "
          "'distribution':str(metadata.distribution('loopx').locate_file(''))}))"],
         cwd=tmp_path, text=True,
@@ -99,6 +103,13 @@ def _remove_source_todo_writers(package):
     capture_adapter.write_text("".join(lines))
 
 
+def _remove_monitor_source_modules(package):
+    (package / "control_plane/scheduler/legacy_monitor_poll.py").unlink()
+    for name in ("runtime_shadow", "runtime_shadow_writer_adapter",
+                 "local_authority_shadow_adapter", "local_authority_shadow_outbox"):
+        (package / f"control_plane/coordination/{name}.py").unlink()
+
+
 @pytest.mark.parametrize("window", ["before_commit", "after_commit"])
 @pytest.mark.parametrize("corrupt_cursor", [False, True], ids=["recover", "reject-unproved-cursor"])
 def test_pending_source_outbox_survives_producer_retirement(
@@ -115,7 +126,7 @@ def test_pending_source_outbox_survives_producer_retirement(
 
     def history():
         result = subprocess.run(
-            [sys.executable, "-c",
+            [sys.executable, "-S", "-c",
              "import json,sys;from pathlib import Path;"
              "from loopx.control_plane.coordination.local_authority_shadow_adapter "
              "import read_local_authority_shadow;"
@@ -246,7 +257,7 @@ def test_handoff_mode_without_source_todo_writers(tmp_path, provider, without_so
 
     def cli(*args, succeeds=True, override=False):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+            [*without_source_todo_writers, "--format", "json", "--registry", str(registry),
              *(["--runtime-root", str(runtime)] if override else []), *args, "--goal-id", "goal-a"],
             cwd=caller, capture_output=True, text=True, timeout=45,
         )
@@ -445,6 +456,7 @@ def test_explicit_source_writer_import_preserves_the_existing_seam(tmp_path):
     result = subprocess.run(
         [sys.executable, "-c", """
 import sys
+import sysconfig
 import loopx.todos as todos
 assert 'loopx.control_plane.todos.line_update' not in sys.modules
 assert 'loopx.control_plane.todos.legacy_mutation' not in sys.modules
@@ -478,6 +490,7 @@ def test_monitor_recovery_with_source_writer_isolation(
     _package, command = isolated_todo_distribution
     if not source_writers_present:
         command = request.getfixturevalue("without_source_todo_writers")
+        _remove_monitor_source_modules(_package)
     registry, runtime, display, monitor = _canonical(
         tmp_path, native=True, provider=provider, lease=LEASE,
     )

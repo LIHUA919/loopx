@@ -6,6 +6,7 @@ import runpy
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -19,6 +20,9 @@ from loopx.extensions.lark.goal_topic_runtime import (
     LarkGoalTopicTurnFailed, answer_lark_goal_topic,
 )
 from loopx.extensions.lark.manager_context import manager_failure_reply
+
+# Bound deliberate RPC silence, while allowing a loaded worker to launch Python.
+STARTUP_TIMEOUT_SECONDS = 3.0
 
 
 def session_runtime(tmp_path, *, channel="goal.public-research"):
@@ -92,7 +96,7 @@ attempts.write_text(json.dumps([*previous, os.getpid()]))''')
         store, sid, _ = session_runtime(tmp_path)
         store.update_session(sid, upstream_thread_id="durable-thread",
                              coordination_context_version=PROJECT_CONTEXT_VERSION)
-        runtime = ChatRuntimeController(store=store, codex_bin=str(fake), startup_timeout_sec=0.5)
+        runtime = ChatRuntimeController(store=store, codex_bin=str(fake), startup_timeout_sec=STARTUP_TIMEOUT_SECONDS)
         runtimes.append(runtime)
         return store, sid, runtime
 
@@ -109,7 +113,7 @@ def test_resumed_startup_timeout_recovers_original_queued_request(codex_startup,
     store, sid, runtime = start("once", stage=stage)
     turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="original", message="Research",
                                    work_dir=tmp_path, objective="Research")
-    result = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=5)
+    result = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=15)
     assert result["status"] == "completed", result
     assert store.load_session(sid)["upstream_thread_id"] == "durable-thread"
     assert store.load_session(sid)["active_turn_id"] is None
@@ -145,7 +149,7 @@ def test_startup_recovery_does_not_replay_gate_fresh_or_started_requests(
             adapter = CodexAppServerAdapter.start(
                 codex_bin=runtime.codex_bin, work_dir=tmp_path, goal_id="public-research",
                 objective="Research", resume_thread_id="durable-thread" if resumed else None,
-                startup_timeout_sec=0.5,
+                startup_timeout_sec=STARTUP_TIMEOUT_SECONDS,
             )
             adapter.start_turn("Research", lambda *args: None)
     finally:
@@ -161,7 +165,7 @@ def test_persisted_stop_wins_after_resumed_startup_retry(codex_startup, tmp_path
     store, sid, runtime = start("stop")
     turn, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="stop", message="Research",
                                    work_dir=tmp_path, objective="Research")
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 10
     while not entered.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert entered.exists(), "second startup was not reached"
@@ -252,8 +256,8 @@ def test_stop_wins_over_late_preparation_failure(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("delay_stage", ["context", "provider"])
-def test_http_stop_remains_effective_after_worker_wait_expires(tmp_path, monkeypatch, delay_stage):
-    """A late worker cannot dispatch or hand off after the stop receipt commits."""
+def test_http_stop_retains_fence_until_late_worker_acknowledges(tmp_path, monkeypatch, delay_stage):
+    """A failed stop retains authority; retry settles only after the worker exits."""
     import loopx.chat_coordination as coordination
     from loopx.capabilities import manager_context
 
@@ -304,17 +308,27 @@ def test_http_stop_remains_effective_after_worker_wait_expires(tmp_path, monkeyp
             f"http://127.0.0.1:{server.server_port}/api/chat/sessions/{sid}/turns/{tid}/interrupt",
             data=b"{}", headers={"Content-Type": "application/json"}, method="POST",
         )
+        with pytest.raises(urllib.error.HTTPError) as rejected:
+            urllib.request.urlopen(request, timeout=10)
+        assert rejected.value.code == 424
+        rejected.value.close()
+        assert not old_worker_done.is_set(), "the late worker must still be blocked"
+        assert (sid, tid) in runtime.cancelled_turns
+        assert store.load_turn(sid, tid)["status"] == "interrupting"
+        assert store.load_session(sid)["active_turn_id"] == tid
+        assert not any(e["kind"] == "turn.interrupted" for e in store.events_after(sid, tid, None))
+        replay, created = runtime.submit_turn(session_id=sid, client_turn_id="old-request", message="Old request", work_dir=tmp_path, objective="Research")
+        assert not created and replay["status"] == "interrupting"
+        release.set()
+        assert old_worker_done.wait(3)
         with urllib.request.urlopen(request, timeout=10) as response:
             assert response.status == 200
             assert json.load(response)["status"] == "interrupted"
-        assert not old_worker_done.is_set(), "the late worker must still be blocked"
         assert (sid, tid) not in runtime.cancelled_turns
-        fresh, _ = runtime.submit_turn(session_id=sid, client_turn_id="fresh-request", message="Fresh request", work_dir=tmp_path, objective="Research")
-        assert runtime.wait_for_turn(session_id=sid, turn_id=fresh["turn_id"], timeout_sec=3)["response"]["message"] == "Fresh result"
         replay, created = runtime.submit_turn(session_id=sid, client_turn_id="old-request", message="Old request", work_dir=tmp_path, objective="Research")
         assert not created and replay["status"] == "interrupted"
-        release.set()
-        assert old_worker_done.wait(3)
+        fresh, _ = runtime.submit_turn(session_id=sid, client_turn_id="fresh-request", message="Fresh request", work_dir=tmp_path, objective="Research")
+        assert runtime.wait_for_turn(session_id=sid, turn_id=fresh["turn_id"], timeout_sec=3)["response"]["message"] == "Fresh result"
         assert len(dispatches) == (1 if delay_stage == "context" else 2)
         assert handoffs == []
         assert store.load_turn(sid, tid)["status"] == "interrupted"

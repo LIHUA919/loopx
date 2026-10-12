@@ -7,6 +7,16 @@ recovery; new requests cannot select it, even as a no-op. Existing Goals are not
 silently changed, and creation/Host defaults remain unchanged in this stage.
 This is an ownership policy, not a capability grant or a storage provider.
 
+The App's Task list and Task details use the same reviewed completion entry.
+When the terminal owner requires a lease or its current execution proof, the
+App explains that completion is unavailable from this caller. The responsible
+Agent must complete from its execution with the current proof; refresh the Task
+to read back that result. A recorded claim or a lease existing in the store is
+not a proof supplied by this caller. The App does not borrow a key, acquire a
+lease or change ownership policy to make the completion succeed. Other preview
+failures retain their own diagnostics. This explains an unavailable operation;
+it does not qualify App completion under `hard_lease`.
+
 ## Choose the policy independently of storage
 
 Use `soft_claim` for an explicitly single executor without parallel takeover.
@@ -128,6 +138,11 @@ migration/recovery boundary.
 历史回执恢复输入，不能再作为新请求的目标；已有 Goal 和创建／Host 默认值不被
 静默改写。soft 用于明确的单执行者，hard 用于本机并行 Agent／automation 和云端
 共享；默认策略切换前还需验证 Host 的 acquire、renew、release 和阻塞结算。
+App 的任务列表和详情共用审核完成入口。终态 owner 要求租约或当前执行证明时，
+页面明确说明此调用方无法代为完成；负责 Agent 须从原执行提交当前证明，之后刷新
+任务读回结果。已有 claim 或 store 中存在租约不等于页面持有执行证明；App 不借用
+key、自动 acquire 或更改策略绕过拒绝。其他预览失败保留原诊断。此项只完善不可用
+状态说明，不代表 `hard_lease` 下 App 手动完成已经合格。
 存储晋升与所有权分开：新 CLI promote 默认 `preserve`，显式 hard 才审核策略升级；
 旧 v0 保存计划仍按原合同恢复。
 
@@ -193,6 +208,22 @@ under a fresh operation and current revision. Other execution fences remain:
 | `soft_claim` with released same-owner history, ordinary owner copy edit | Omit lease proof; keep the history. No replacement lease is needed or allowed. |
 | Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
+
+The existing `open -> blocked -> open` lifecycle also accepts a typed
+prerequisite wait: use `todo update --status blocked --resume-when
+todo_done:<dependency-todo> --reason '<bounded cause>'` after the active holder
+releases its execution lease. This explicit wait form is newly supported for
+native hard-lease Todos; the prior clear-wait pause form is unchanged. A live
+lease or bundled execution proof still rejects the transition. Resume with
+`--status open --clear-resume-when --reason '<resume basis>'`; neither transition
+grants execution authority, and the next execution requires a fresh lease.
+
+既有 `open -> blocked -> open` lifecycle 也支持 typed 前置任务等待：active
+holder 先释放执行 lease，再用 `todo update --status blocked --resume-when
+todo_done:<dependency-todo> --reason '<bounded cause>'` 暂停。此显式 wait 形式
+新增支持 native hard-lease Todo；原 clear-wait pause 形式保持不变。有效 lease
+或附带执行 proof 仍被拒绝。用 `--status open --clear-resume-when --reason
+'<resume basis>'` 恢复；两次转换都不授予执行权限，下一次执行仍需新 lease。
 
 The recovery descriptor uses the standalone `loopx task-lease acquire` command.
 Combined `todo claim --task-lease-idempotency-key` is restricted to `hard_lease`

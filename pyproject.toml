@@ -70,6 +70,7 @@ include = ["loopx*"]
 "loopx.control_plane.collaboration" = ["*.ts"]
 "loopx.control_plane.coordination" = ["*.ts", "*.json"]
 "loopx.control_plane.goals" = ["*.ts"]
+"loopx.control_plane.goals.goal_frontier" = ["*.ts"]
 "loopx.control_plane.quota" = ["*.ts"]
 "loopx.control_plane.runtime" = ["*.ts"]
 "loopx.control_plane.scheduler" = ["*.ts"]
@@ -172,8 +173,8 @@ include = ["loopx*"]
 
 [tool.pytest.ini_options]
 markers = ["stage2c_e2e: real process Stage 2C correctness and recovery acceptance"]
-# Private snapshots are not source tests; optional provider tests run in ark-turn.yml.
-norecursedirs = [".local", "deprecate", "packages/loopx-ark-turn"]
+# Private snapshots and packaging copies are not source tests; optional provider tests run in ark-turn.yml.
+norecursedirs = [".local", "build", "dist", "deprecate", "packages/loopx-ark-turn"]
 
 [tool.coverage.run]
 source = ["loopx"]

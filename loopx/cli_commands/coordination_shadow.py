@@ -264,7 +264,11 @@ def handle_coordination_shadow_command(
                     include_all_archived_todos=True)
                 request.update(action="prepare", projection=projection, source_snapshot=snapshot,
                     target_handoff_mode=args.target_handoff_mode, target_provider=args.provider,
-                    source_backup=read_cold_source_backup(args.backup_manifest))
+                    source_backup=read_cold_source_backup(args.backup_manifest, source_paths=[
+                        Path(snapshot["state_path"]), Path(snapshot["registry_source"]["path"]),
+                        *(Path(item["path"]) for item in snapshot["evidence_files"]),
+                        runtime_root / "goals" / args.goal_id / "task-leases",
+                    ]))
             else:
                 request.update(action="apply" if args.coordination_shadow_command == "apply-import" else "recover",
                     expected_plan_sha256=args.plan_sha256)
@@ -344,8 +348,6 @@ def handle_coordination_shadow_command(
             }
             print_payload(payload, output_format(args), _render)
             return 1
-        # Only explicit, enabled legacy shadow actions load the producer.
-        from ..control_plane.coordination import runtime_shadow as shadow
 
         _, _, state_path = resolve_goal_state(registry=registry, goal_id=args.goal_id,
             project_override=args.project, state_file_override=args.state_file)
@@ -357,13 +359,19 @@ def handle_coordination_shadow_command(
         projection_version = _projection_version(projection)
         projected_todos = projection.get("todos")
         projected_leases = projection.get("leases")
-        inspection = {"status": "not_evaluated"} if args.coordination_shadow_command == "rollback" else shadow.inspect_coordination_runtime_shadow(
-            goal=goal,
-            runtime_root=runtime_root,
-            goal_id=args.goal_id,
-            projection=projection,
-            source_snapshot=source_snapshot,
-        )
+        inspection = {"status": "not_evaluated"}
+        if args.coordination_shadow_command != "rollback":
+            # Registration, disabled shadow and cold import do not consume this
+            # reader. Load it only inside the selected action's error boundary.
+            from ..control_plane.coordination import local_authority_shadow_readback as observation
+
+            inspection = observation.inspect_coordination_runtime_shadow(
+                goal=goal,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                projection=projection,
+                source_snapshot=source_snapshot,
+            )
         payload: dict[str, object] = {
             "ok": inspection.get("status") != "failed",
             "schema_version": "loopx_coordination_shadow_admin_v0",
@@ -388,6 +396,8 @@ def handle_coordination_shadow_command(
             "decision_read_from_shadow": False,
         }
         if args.coordination_shadow_command == "bootstrap" and args.execute:
+            from ..control_plane.coordination import runtime_shadow as shadow
+
             from ..control_plane.coordination.shadow_management import read_shadow_management_state
             management = read_shadow_management_state(runtime_root, args.goal_id)
             if management is not None and management["status"] in {"bootstrapping", "active"}:
@@ -412,7 +422,7 @@ def handle_coordination_shadow_command(
             payload["executed"] = True
             payload["bootstrap"] = bootstrap
             if bootstrap.get("status") in {"applied", "replayed", "recovered"}:
-                payload["inspection"] = shadow.inspect_coordination_runtime_shadow(
+                payload["inspection"] = observation.inspect_coordination_runtime_shadow(
                     goal=goal,
                     runtime_root=runtime_root,
                     goal_id=args.goal_id,
@@ -426,7 +436,7 @@ def handle_coordination_shadow_command(
                 and final_inspection.get("status") == "matched"
             )
         if args.coordination_shadow_command == "qualify":
-            qualification = shadow.qualify_coordination_runtime_shadow(
+            qualification = observation.qualify_coordination_runtime_shadow(
                 goal=goal,
                 runtime_root=runtime_root,
                 goal_id=args.goal_id,
@@ -438,7 +448,7 @@ def handle_coordination_shadow_command(
             payload["qualification"] = qualification
             payload["ok"] = qualification.get("status") == "qualified"
         if args.coordination_shadow_command == "read-candidate":
-            read_candidate = shadow.read_coordination_runtime_shadow_todo_candidate(
+            read_candidate = observation.read_coordination_runtime_shadow_todo_candidate(
                 goal=goal,
                 runtime_root=runtime_root,
                 goal_id=args.goal_id,
@@ -453,6 +463,8 @@ def handle_coordination_shadow_command(
                 and read_candidate.get("decision_read_from_shadow") is False
             )
         if args.coordination_shadow_command == "promote":
+            from ..control_plane.coordination import runtime_shadow as shadow
+
             # A saved plan owns qualification policy, so the flag defaults to
             # `None`; normalize it only for the freshly reviewed path.
             minimum_operations = args.minimum_operations if args.minimum_operations is not None else 3
@@ -499,6 +511,8 @@ def handle_coordination_shadow_command(
             payload["expected_provider_revision"] = provider_revision
             payload["expected_bootstrap_operation_id"] = pending_bootstrap
             if args.execute:
+                from ..control_plane.coordination import runtime_shadow as shadow
+
                 rollback = shadow.rollback_coordination_runtime_shadow(
                     goal=goal, runtime_root=runtime_root, goal_id=args.goal_id,
                     operation_id=f"shadow-rollback:{args.goal_id}:{provider_revision or pending_bootstrap}",

@@ -112,6 +112,7 @@ from ..work_items.action_portfolio import (
 )
 from ..work_items.execution_obligation import build_execution_obligation
 from ..work_items.action_selection_contract import (
+    action_selection_context,
     apply_action_selection_recovery_projection,
 )
 from ..work_items.goal_route_hint import build_goal_route_hint
@@ -1291,8 +1292,9 @@ def _build_active_quota_payload(
     # gate explanation. Genuine gates and unknown scope keep their old route.
     notice_only = (user_summary.get("user_action_open_count", 0) > 0 and
                    user_summary.get("all_open_count") == user_summary.get("user_action_open_count"))
-    retry_wait = (retry_deadline.get("blocked_retry")
-                  if notice_only and retry_deadline.get("source") == "turn_settlement" else None)
+    retry_wait = ((prepared.agent_todo_summary or {}).get("blocked_retry_wait") or
+                  (retry_deadline.get("blocked_retry")
+                   if retry_deadline.get("source") == "turn_settlement" else None)) if notice_only else None
     execution_obligation = _execution_obligation(
         should_run=route.should_run,
         effective_action=route.effective_action,
@@ -1533,9 +1535,8 @@ def _build_active_quota_payload(
         next_action_warning=route.next_action_warning,
         replan_obligation=prepared.replan_obligation,
     )
-    bounded_research_frontier = _dict_field(
-        prepared.status_payload, "bounded_research_frontier"
-    )
+    frontier = _dict_field(prepared.status_payload, "bounded_research_frontier")
+    bounded_research_frontier = _dict_field(frontier or {}, "public_projection") or frontier
     _attach_truthy_fields(
         payload,
         bounded_research_frontier=bounded_research_frontier,
@@ -1643,6 +1644,7 @@ def _build_quota_should_run_payload(
             "override": payload[kind],
             "selected_todo": payload.get("selected_todo"),
             "interaction_contract": payload["interaction_contract"],
+            "selection_context": action_selection_context(payload),
         })
     return payload
 
@@ -1816,7 +1818,8 @@ def _build_settled_quota_payload(
         missing_gates=prepared.item.get("missing_gates"),
         agent_todo_summary=compact_quota_todo_summary_for_payload(prepared.agent_todo_summary) if prepared.agent_todo_summary else None,
         user_todo_summary=compact_quota_todo_summary_for_payload(prepared.user_todo_summary) if prepared.user_todo_summary else None,
-        bounded_research_frontier=_dict_field(prepared.status_payload, "bounded_research_frontier"),
+        bounded_research_frontier=(_dict_field(_dict_field(prepared.status_payload, "bounded_research_frontier") or {}, "public_projection")
+                                  or _dict_field(prepared.status_payload, "bounded_research_frontier")),
     )
     if prepared.agent_scoped_user_todo_override:
         payload[str(prepared.agent_scoped_user_todo_override["kind"])] = prepared.agent_scoped_user_todo_override

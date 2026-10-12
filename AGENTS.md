@@ -88,6 +88,23 @@ Every tracked repository change must be pushed on a branch and reviewed through
 a pull request before it reaches `main`. Do not push broad mixed commits or
 direct commits to `main`.
 
+### Author Submission And Review Entry
+
+Open a completed, independently reviewable proposal as a normal PR. Missing
+review, pending or failed CI, change-quality holds, and unavailable merge
+readiness are not reasons to keep it Draft. Record those limits in the PR;
+entering review does not certify validation, adoption, approval or merge authority.
+Reserve Draft for genuinely unfinished author work with a concrete remaining
+implementation or integration step.
+
+For an authorized author delivery, mark an existing completed Draft ready,
+read back its state and unchanged head, and refresh the review packet. Drafts
+are excluded from the review queue, so waiting for a review before marking one
+ready creates a deadlock. A reviewer must still obey the packet's action
+authority and may not mark another author's Draft ready without authorization.
+Keep exact-head review, required validation, first-screen approval and explicit
+merge authorization as their separate gates.
+
 ### DCO Sign-Off
 
 Every commit in a pull-request branch must include a
@@ -122,16 +139,18 @@ adapters, smoke tests, public docs, or commit/push workflows, use the
    - focused validation or cleanup.
 6. Push a branch and open a PR for reviewable batches.
 
-Control-plane, runtime and product surfaces are never self-merged. A change
-that alters the behavior of `loopx/**`, `apps/**` or `packages/**`, a
-permission or authority boundary, a persisted state or receipt contract, a
-quota/scheduler/todo rule, or a CLI/API contract is proposed, reviewed on its
-exact head, and then left for the maintainer to merge -- including when the
-author has already validated it, its review is published, and its CI is green.
-Admin bypass does not convert one of those changes into a self-mergeable one,
-and neither does a small diff: a validated fix is still a control-plane change
-when it changes control-plane behavior. When the author cannot tell whether a
-change is in that set, it is not self-merged.
+Control-plane, runtime and product surfaces require explicit maintainer
+merge authorization. A change that alters the behavior of `loopx/**`, `apps/**`
+or `packages/**`, a permission or authority boundary, a persisted state or
+receipt contract, a quota/scheduler/todo rule, or a CLI/API contract must be
+proposed and reviewed on its exact head. After the required validation passes
+and exact-head merge readiness returns ready, an agent may use admin bypass
+when the maintainer has explicitly authorized that merge or delivery batch.
+A small diff, successful validation, published review or green CI does not grant
+merge authority by itself. Admin bypass never substitutes for exact-head review,
+required validation or merge readiness. Without explicit authorization, leave
+these changes for the maintainer to merge; when the affected boundary is unclear,
+use the same authorization requirement.
 
 For small, low-risk PRs, maintainers may self-merge after validation when all
 of the following are true:

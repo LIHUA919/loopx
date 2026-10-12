@@ -4,7 +4,10 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shlex
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .control_plane.goals.goal_frontier.fallback_source import FallbackTodoSource
 
 from .control_plane import compact_control_plane_policy
 from .control_plane.goals.activation import goal_is_stopped
@@ -37,6 +40,7 @@ from .control_plane.quota.monitor_poll import (
     record_quota_monitor_poll_for_decision,
     resolve_due_monitor_candidate,
 )
+from .control_plane.quota.blocked_retry import overlay_active_turn_retries
 from .control_plane.quota.recent_runs import (
     goal_latest_run as _goal_latest_run,
 )
@@ -77,7 +81,7 @@ from .control_plane.quota.policy_constants import (
     FOCUS_WAIT_REASON,
     SELF_REPAIR_SPEND_ACTIONS,
 )
-from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
+from .control_plane.runtime.time import now_utc_iso, parse_timestamp as _parse_timestamp
 from .control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
@@ -924,10 +928,12 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_guard_recorded_at: str | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    authoritative_fallback_todo_items: FallbackTodoSource = None,
 ) -> dict[str, Any]:
     from .control_plane.quota.should_run import (
         build_quota_should_run as _build_quota_should_run,
@@ -951,10 +957,12 @@ def build_quota_should_run(
         receipt_bound_terminal_phase=receipt_bound_terminal_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         turn_instance_id=turn_instance_id,
         runtime_root=runtime_root,
         workspace_path=workspace_path,
         goal_ref=goal_ref,
+        authoritative_fallback_todo_items=authoritative_fallback_todo_items,
     )
 
 
@@ -1198,6 +1206,13 @@ def record_quota_monitor_poll(
                         **current_status,
                         "bounded_research_frontier": dict(frontier),
                     }
+        # Automatic stall writeback must see the same receipt-owned wait as
+        # live selection. Keep the canonical Todo and monitor clocks untouched;
+        # re-evaluate after writeback so an expired/superseded wait is not kept.
+        decision_status = overlay_active_turn_retries(
+            decision_status, goal_id=safe_goal_id, agent_id=agent_id,
+            observed_at=now_utc_iso(),
+        )
         return build_quota_should_run(
             decision_status,
             goal_id=safe_goal_id,
@@ -1219,7 +1234,7 @@ def record_quota_monitor_poll(
         # Discovery/selection is an open-work projection, not the committed
         # Turn's lifecycle authority. Read the exact bound record, including
         # completed history; TS monitor admission owns its interpretation.
-        from .todos import list_goal_todos
+        from .control_plane.todos.list_readback import list_goal_todos
 
         if registry_path is not None:
             bound_records = list_goal_todos(
@@ -1613,7 +1628,16 @@ def spend_quota_slot(
                 "turn_instance_id": identity.turn_instance_id,
                 "settlement_identity": identity.as_dict(),
                 "settlement_result": settlement_result_payload(spent_result),
-                "reason": "quota spend receipt replayed for the same settlement identity",
+                **(
+                    {"settlement_progress": settlement_readback.progress}
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else {}
+                ),
+                "reason": (
+                    "exact Turn closeout replayed without a quota debit"
+                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    else "quota spend receipt replayed for the same settlement identity"
+                ),
                 **(
                     {"goal_ref": dict(goal_ref)}
                     if goal_ref is not None

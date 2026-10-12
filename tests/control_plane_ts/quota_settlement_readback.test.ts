@@ -29,6 +29,10 @@ import {
   readQuotaSettlement,
   readQuotaSettlementSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
+import {
+  PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+  preflightPriorHostTurnCloseout,
+} from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
 
 const goalId = "settlement-goal";
@@ -68,6 +72,78 @@ test("semantic replan guard distinguishes legacy, none, and exact selection", ()
     () => projectSemanticReplanGuard({ semantic_replan_obligation_id: "bad" }),
     /semantic replan guard is malformed/,
   );
+});
+
+test("capability guard survives scalar receipt transport and rejects missing scope facts", () => {
+  const details = {semantic_replan_obligation_id: "replan-0000000000000001",
+    semantic_replan_capability_id: "explore", semantic_replan_gap_id: "research-composition-0123456789abcdef",
+    semantic_replan_frontier_revision: "research-composition-v0:0123456789abcdef"};
+  assert.deepEqual(projectSemanticReplanGuard(details).selected_capability_guard, {
+    schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",
+    gap_id: details.semantic_replan_gap_id, frontier_revision: details.semantic_replan_frontier_revision,
+  });
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_obligation_id: ""}), /selected obligation/);
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_gap_id: ""}), /capability guard is malformed/);
+  assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_frontier_revision: undefined}), /capability guard is malformed/);
+});
+
+test("capability retirement verifies its exact receipt and never erases a committed debit", async () => {
+  const obligation = "replan-0000000000000001";
+  const guard = {schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",
+    gap_id: "research-composition-0123456789abcdef", frontier_revision: "research-composition-v0:0123456789abcdef"};
+  const bound = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: null,
+    replan_obligation_id: obligation, turn_instance_id: turnId});
+  const progress = {schema_version: "typed_progress_observation_v0", work_item_id: obligation,
+    result_class: "blocked", blocker_id: "capability-invalidated-fixture",
+    evidence_ids: ["capability-evidence-v0:fedcba9876543210"], fingerprint: "retirement-progress"};
+  const retirement = {schema_version: "capability_obligation_retirement_v0", disposition: "invalidated",
+    reason_code: "source_ineligible", capability_id: "explore", obligation_id: obligation,
+    original_guard: guard, current_revision: progress.evidence_ids[0], blocking_todo_count: 0,
+    blocking_todo_ids: [], progress_observation: progress, progress_fingerprint: progress.fingerprint};
+  const ack = {recorded: true, source: "refresh_state_semantic_delta", semantic_delta: {
+    schema_version: "replan_semantic_delta_v0", accepted: true, obligation_id: obligation,
+    outcomes: ["capability_duty_retired"], satisfying_outcomes: ["capability_duty_retired"], capability_guard: guard, retirement}};
+  const root = await fixture({writeback: true});
+  try {
+    const index = join(root, "goals", goalId, "runs", "index.jsonl");
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    for (const event of events) {
+      event.details = {...event.details, todo_id: "", replan_obligation_id: obligation, settlement_effect_id: bound.effect_id};
+      if (event.event_kind === "quota_should_run") Object.assign(event.details, {
+        semantic_replan_obligation_id: obligation, semantic_replan_capability_id: "explore",
+        semantic_replan_gap_id: guard.gap_id, semantic_replan_frontier_revision: guard.frontier_revision});
+    }
+    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    const base = {classification: "state_refreshed", goal_id: goalId, agent_id: agentId,
+      turn_instance_id: turnId, replan_obligation_id: obligation, settlement_identity: bound,
+      delivery_outcome: "outcome_gap", progress_observation: progress, autonomous_replan_ack: ack};
+    const read = () => readQuotaSettlement(request(root, {todo_id: null, replan_obligation_id: obligation}));
+    await writeFile(index, JSON.stringify(base) + "\n");
+    const accepted = await read();
+    assert.equal((accepted.progress as any).closeout_kind, "capability_duty_retired_no_spend");
+    assert.equal(accepted.replay_phase, "settled");
+    assert.equal((accepted.spend as any).payload.ok, false);
+    assert.equal((accepted.terminal_closeout as any).payload.ok, false);
+    for (const patch of [{obligation_id: "replan-0000000000000002"}, {blocking_todo_count: 1},
+      {original_guard: {...guard, frontier_revision: "research-composition-v0:fedcba9876543210"}},
+      {current_revision: "unrelated"}, {progress_fingerprint: "forged"}]) {
+      const changed = {...base, autonomous_replan_ack: {...ack, semantic_delta: {...ack.semantic_delta,
+        retirement: {...retirement, ...patch}}}};
+      await writeFile(index, JSON.stringify(changed) + "\n");
+      assert.equal((await read()).replay_phase, "settlement_pending");
+    }
+    await writeFile(index, JSON.stringify(base) + "\n" + JSON.stringify({classification: "quota_slot_spent",
+      goal_id: goalId, agent_id: agentId, turn_instance_id: turnId, replan_obligation_id: obligation,
+      settlement_identity: bound}) + "\n");
+    await appendFile(log, JSON.stringify({schema_version: "loopx_rollout_event_v0", event_id: "spent-before-retirement",
+      event_kind: "quota_spend", goal_id: goalId, agent_id: agentId, run_id: turnId,
+      details: {settlement_effect_id: bound.effect_id}}) + "\n");
+    const spent = await read();
+    assert.equal((spent.progress as any).state, "settled");
+    assert.equal((spent.progress as any).closeout_kind, undefined);
+    assert.equal((spent.spend as any).payload.ok, true);
+  } finally {await rm(root, {recursive: true, force: true});}
 });
 
 async function fixture(options: {
@@ -966,6 +1042,117 @@ test("names the argument-less guard reentry for a deferred explicit selection", 
     turn_instance_id: turnId,
     deferred_selection_todo_id: todoId,
   });
+});
+
+const priorTurnId = "turn-settlement-0";
+
+/**
+ * An earlier Turn of the same Agent whose guard bound the Todo and required a
+ * host closeout, followed by the current Turn's unbound guard. `settled` adds
+ * the earlier Turn's writeback and spend receipts.
+ */
+async function owedPriorTurnFixture(
+  options: { settled?: boolean; closeoutRequired?: boolean } = {},
+): Promise<string> {
+  const runtimeRoot = await fixture({
+    turnId: priorTurnId,
+    writeback: options.settled,
+    spend: options.settled,
+  });
+  const eventsPath = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+  const events = (await readFile(eventsPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  events[0].event_id = "event-guard-prior";
+  events[0].details.closeout_required = options.closeoutRequired ?? true;
+  await writeFile(
+    eventsPath,
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+  );
+  await appendHistory(runtimeRoot, await fixture({ guardUnbound: true }));
+  return runtimeRoot;
+}
+
+test("names the earlier Turn that owes its closeout instead of a rebind that only replays", async () => {
+  // While an earlier Turn owes its closeout, the guard preempts selection with
+  // that Turn's recovery for every later Turn, so rebinding the current Turn
+  // only replays the recovery. The refusal has to name the owed Turn.
+  const runtimeRoot = await owedPriorTurnFixture();
+
+  const result = await readQuotaSettlement(request(runtimeRoot));
+
+  const failure = (result.settlement as any).result.failure;
+  assert.equal(failure.kind, "receipt_unbound");
+  assert.match(failure.reason, /carries no settlement binding yet/);
+  assert.match(
+    failure.reason,
+    new RegExp(`earlier Turn owes its closeout \\(turn_instance_id ${priorTurnId}, todo ${todoId}`),
+  );
+  assert.match(failure.reason, /interaction_contract\.cli_channel\.next_cli_actions/);
+  assert.doesNotMatch(
+    failure.reason,
+    new RegExp(`--turn-instance-id ${turnId} --todo-id`),
+  );
+  assert.deepEqual(failure.details, {
+    binding_kind: "unbound",
+    requested_binding_kind: "todo",
+    turn_instance_id: turnId,
+    owed_prior_turn: {
+      prior_turn_instance_id: priorTurnId,
+      event_id: "event-guard-prior",
+      binding_kind: "todo",
+      binding_id: todoId,
+      settlement_effect_id: settlementIdentity({
+        goal_id: goalId,
+        agent_id: agentId,
+        todo_id: todoId,
+        turn_instance_id: priorTurnId,
+      }).effect_id,
+      missing_receipts: ["durable_writeback_receipt", "quota_spend_receipt"],
+    },
+    recovery_actions_ref: "interaction_contract.cli_channel.next_cli_actions",
+  });
+
+  // The guard's own preflight reads the same snapshot and must name the same
+  // Turn and receipts; the refusal never runs a second selection rule.
+  const preflight = await preflightPriorHostTurnCloseout({
+    schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+    runtime_root: runtimeRoot,
+    goal_id: goalId,
+    agent_id: agentId,
+    exclude_turn_instance_id: turnId,
+  });
+  assert.equal(preflight.status, "candidate");
+  const { missing_receipts: missingReceipts, ...owedCandidate } = failure.details.owed_prior_turn;
+  assert.deepEqual(preflight.candidate, owedCandidate);
+  assert.deepEqual(preflight.missing_receipts, missingReceipts);
+});
+
+test("keeps the same-turn rebind when no earlier Turn owes a closeout", async t => {
+  for (const [name, options] of [
+    ["settled earlier Turn", { settled: true }],
+    ["earlier Turn without a closeout obligation", { closeoutRequired: false }],
+  ] as const) {
+    await t.test(name, async () => {
+      const runtimeRoot = await owedPriorTurnFixture(options);
+
+      const result = await readQuotaSettlement(request(runtimeRoot));
+
+      const failure = (result.settlement as any).result.failure;
+      assert.equal(failure.kind, "receipt_unbound");
+      assert.match(
+        failure.reason,
+        new RegExp(`quota should-run --turn-instance-id ${turnId} --todo-id ${todoId}`),
+      );
+      assert.doesNotMatch(failure.reason, /earlier Turn/);
+      assert.deepEqual(failure.details, {
+        binding_kind: "unbound",
+        requested_binding_kind: "todo",
+        turn_instance_id: turnId,
+      });
+    });
+  }
 });
 
 test("still reports a receipt bound to another work item as a mismatch", async () => {

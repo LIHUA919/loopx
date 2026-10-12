@@ -1,7 +1,7 @@
-import { Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { GoalActivityChip } from "./goal-activity-view";
+import { List, Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { GoalLifecycleControl, GoalMastheadIdentity } from "./goal-masthead";
 
-import { localizedGoalState, useWorkspaceI18n } from "./i18n";
+import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
@@ -9,20 +9,27 @@ import { WorkspaceSelect } from "./workspace-select";
 export function ChannelHeader({
   agents,
   conversationScope,
+  goalLifecycleBusy,
   managerChannelBinding,
   managerChatOpen,
   managerRuntime,
   mobileNavigationOpen,
   onOpenGoalCapabilities,
+  onOpenGoalDetails,
+  onOpenAllWork,
+  allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
+  onOpenWorkspace,
   onRefresh,
+  onRequestGoalLifecycle,
   onOpenNavigation,
   onSelectGoalTab,
   onSelectAgent,
   onReturnManagerHome,
   refreshState,
   readOnlySourceLabel,
+  resumeReviewed,
   selectedAgentId,
   selectedGoal,
   selectedGoalTab,
@@ -31,6 +38,7 @@ export function ChannelHeader({
   agents: WorkspaceAgentOption[];
   /** Steward conversation scope; absent when the host grants no workspace. */
   conversationScope?: { options: { disabled?: boolean; label: string; value: string }[]; value: string; onChange: (value: string) => void } | null;
+  goalLifecycleBusy?: boolean;
   /** Set while the steward conversation is scoped to a workspace. */
   workspaceGrantLabel?: string | null;
   managerChannelBinding?: ManagerChannelBinding | null;
@@ -38,15 +46,23 @@ export function ChannelHeader({
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
+  onOpenGoalDetails?: () => void;
+  onOpenAllWork?: () => void;
+  allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
+  onOpenWorkspace?: () => void;
   onRefresh?: () => void;
+  /** Absent when the selected source does not authorize Goal lifecycle changes. */
+  onRequestGoalLifecycle?: (operation: "stop" | "resume") => void;
   onOpenNavigation?: () => void;
   onSelectGoalTab: (tab: WorkspaceGoalTab) => void;
   onSelectAgent: (agentId: string) => void;
   onReturnManagerHome?: () => void;
   refreshState?: "idle" | "loading" | "done" | "error";
   readOnlySourceLabel?: string;
+  /** Resume opens the owner's reviewed preview instead of a local confirmation. */
+  resumeReviewed?: boolean;
   selectedAgentId: string;
   selectedGoal: WorkspaceGoal | null;
   selectedGoalTab: WorkspaceGoalTab;
@@ -169,8 +185,7 @@ export function ChannelHeader({
     <header className="personal-channel-header" data-goal-selected={Boolean(selectedGoal)} data-workspace-scope={workspaceGrantLabel ? "true" : undefined}>
       <button aria-expanded={mobileNavigationOpen ?? false} aria-label={t("header.openGoalNavigation")} className="personal-icon-button personal-mobile-menu" onClick={onOpenNavigation} type="button"><Menu size={18} /></button>
       <div className="personal-channel-title">
-        <h1>{selectedGoal?.title ?? t("header.manager")}</h1>
-        {selectedGoal && !selectedGoal.loadState ? <p className="personal-channel-activity"><GoalActivityChip goal={selectedGoal} /></p> : null}
+        {selectedGoal ? <GoalMastheadIdentity goal={selectedGoal} onOpenDetails={onOpenGoalDetails} onOpenWorkspace={onOpenWorkspace ?? (() => undefined)} /> : <h1>{t("header.manager")}</h1>}
         {workspaceGrantLabel ? <p className="personal-channel-activity">{t("workspace.conversation", { grant: workspaceGrantLabel })}</p> : null}
         <div className="personal-manager-context">
         {stewardBindingVisible && managerChannelBinding ? (
@@ -232,6 +247,10 @@ export function ChannelHeader({
         </nav>
       )}
       <div className="personal-channel-actions">
+        {selectedGoal && onOpenAllWork ? <button type="button" className="personal-icon-button goal-all-work-trigger" aria-label={locale === "zh-CN" ? "打开全部工作" : "Open all work"} aria-expanded={allWorkOpen} aria-haspopup="dialog" onClick={onOpenAllWork}><List size={17} aria-hidden/></button> : null}
+        {selectedGoal && !selectedGoal.loadState && onRequestGoalLifecycle ? (
+          <GoalLifecycleControl busy={goalLifecycleBusy ?? false} goal={selectedGoal} onRequest={onRequestGoalLifecycle} resumeReviewed={resumeReviewed ?? true} />
+        ) : null}
         {selectedGoal && onOpenGoalCapabilities ? (
           <button aria-label={t("header.goalSettings")} title={t("header.goalSettingsDescription")} className="personal-icon-button personal-goal-settings-action" onClick={onOpenGoalCapabilities} type="button"><SlidersHorizontal aria-hidden size={17} /></button>
         ) : null}

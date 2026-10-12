@@ -237,7 +237,7 @@ function replanActionPacket(payload: JsonObject): JsonObject | null {
   if (Object.keys(source).length === 0) return null;
   const compact = compactFields(source, [
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
-    "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id",
+    "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id", "stride_control",
   ]);
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.
@@ -644,6 +644,8 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   }
   const settlementPlan = object(cliChannel.settlement_plan);
   const hasSettlementPlan = Object.keys(settlementPlan).length > 0;
+  const recovery = object(payload.unsettled_host_turn_recovery);
+  const receiptBoundSettlementOnly = recovery.scope === "current_turn" && recovery.repair === "quota_spend";
   let preserveBoundReplanCommands = replanSettlementOnly;
   if (replanPacket && !replanSettlementOnly) {
     const writebackContract = object(object(payload.replan_action_packet).writeback_contract);
@@ -681,7 +683,7 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
     // a closeout command into display text can erase its binding or execute flag.
     writeback.next_cli_actions = hasSettlementPlan
       ? nextCliActions.map(command => scalarString(command, "settlement command"))
-      : preserveBoundReplanCommands
+      : preserveBoundReplanCommands || receiptBoundSettlementOnly
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);
   }

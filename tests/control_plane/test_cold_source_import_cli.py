@@ -18,6 +18,9 @@ import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.coordination.cold_source_backup import read_cold_source_backup
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
+from test_canonical_todo_writer_isolation import (
+    isolated_todo_distribution, retirement_wheel,  # noqa: F401 -- distribution fixtures
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -37,7 +40,7 @@ def canonical_todos(runtime, receiver, env, cwd):
     return result
 
 
-def workspace(tmp_path, monkeypatch):
+def workspace(tmp_path, monkeypatch, *, storage_target=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     registry = project / ".loopx/registry.json"
@@ -52,6 +55,8 @@ def workspace(tmp_path, monkeypatch):
     (state.parent / "GOAL.md").write_text("Original human objective, never a new execution grant.\n")
     goal = {"id": "cold", "repo": str(project), "state_file": str(state.relative_to(project)),
         "coordination": {"registered_agents": ["agent-a"]}}
+    if storage_target is not None:
+        goal["coordination"]["storage_target"] = storage_target
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": [goal]}))
     runtime.mkdir()
     backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
@@ -75,6 +80,84 @@ def workspace(tmp_path, monkeypatch):
         return json.loads(child.stdout) if output_format == "json" else child.stdout
 
     return cli, state, backup, body, runtime, receiver, env
+
+
+@pytest.mark.parametrize("old_producers_present", [True, False])
+@pytest.mark.parametrize("configuration", ["absent", "disabled", "retired"])
+def test_unpromoted_default_off_lease_lifecycle_without_shadow_producers(
+    tmp_path, monkeypatch, old_producers_present, configuration,
+):
+    _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    registry = tmp_path / "project/.loopx/registry.json"
+    data = json.loads(registry.read_text())
+    coordination = data["goals"][0]["coordination"]
+    coordination["registered_agents"] = ["agent-a", "agent-b"]
+    if configuration == "disabled":
+        coordination["runtime_shadow"] = {
+            "schema_version": "loopx_coordination_runtime_shadow_config_v0",
+            "enabled": False, "provider": "file_v0",
+        }
+    elif configuration == "retired":
+        coordination["authority_shadow"] = {
+            "schema_version": "loopx_local_authority_shadow_config_v0",
+            "mode": "file_one_way",
+        }
+    registry.write_text(json.dumps(data))
+    state.write_text(state.read_text().replace("handoff_mode: legacy", "handoff_mode: hard_lease")
+                     .replace(" claimed_by=agent-a", ""))
+    original_state, original_registry = state.read_bytes(), registry.read_bytes()
+    if not old_producers_present:
+        for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
+                     "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
+            (receiver / "loopx/control_plane/coordination" / name).unlink()
+
+    def lease(action, *args, owner="agent-a", key="original", success=True):
+        child = subprocess.run([sys.executable, "-c",
+            "import loopx,runpy,sys; print(loopx.__file__,file=sys.stderr); runpy.run_module('loopx.cli',run_name='__main__')",
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", action, "--goal-id", "cold", "--todo-id", "todo_current",
+            "--owner", owner, "--idempotency-key", key, *map(str, args)],
+            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+        assert str(receiver / "loopx/__init__.py") in child.stderr
+        assert "Traceback" not in child.stderr, child.stderr
+        assert (child.returncode == 0) is success, child.stdout + child.stderr
+        result = json.loads(child.stdout)
+        assert "coordination_runtime_shadow_capture" not in result
+        assert "coordination_runtime_shadow" not in result
+        assert state.read_bytes() == original_state
+        assert registry.read_bytes() == original_registry
+        assert not (runtime / "authority-shadow").exists()
+        assert not any(path.is_file() for path in (runtime / "authority-transition").rglob("*"))
+        return result
+
+    acquired = lease("acquire", "--ttl-seconds", 120, "--write-scope", "docs/**")
+    assert acquired["acquired"] is True
+    version = acquired["lease"]["version"]
+    path = Path(acquired["lease_path"])
+    original_lease = path.read_bytes()
+    replay = lease("acquire", "--ttl-seconds", 120, "--write-scope", "docs/**")
+    assert replay["idempotent"] is True and replay["lease"] == acquired["lease"]
+    assert path.read_bytes() == original_lease
+    rejected = lease("renew", "--expected-version", version + 1, "--ttl-seconds", 180, success=False)
+    assert rejected["error_code"] == "version_mismatch"
+    assert path.read_bytes() == original_lease
+    renewed = lease("renew", "--expected-version", version, "--ttl-seconds", 180)
+    assert renewed["lease"]["version"] == version + 1
+    assert renewed["lease"]["lease_epoch"] == acquired["lease"]["lease_epoch"]
+    transferred = lease("transfer", "--expected-version", version + 1,
+                        "--new-owner", "agent-b", "--new-idempotency-key", "receiver",
+                        "--ttl-seconds", 180)
+    assert transferred["lease"]["owner"] == "agent-b"
+    assert transferred["lease"]["version"] == version + 2
+    assert transferred["lease"]["lease_epoch"] == acquired["lease"]["lease_epoch"] + 1
+    released = lease("release", "--expected-version", version + 2, owner="agent-b", key="receiver")
+    assert released["released"] is True and released["lease"]["status"] == "released"
+    assert released["lease"]["write_scopes"] == ["docs/**"]
+    assert released["lease"]["lease_epoch"] == transferred["lease"]["lease_epoch"]
+    retained = path.read_bytes()
+    assert lease("release", "--expected-version", version + 2,
+                 owner="agent-b", key="receiver")["idempotent"] is True
+    assert path.read_bytes() == retained
 
 
 def test_coordination_command_help_and_rejections_match_full_cli(tmp_path):
@@ -120,17 +203,24 @@ print(json.dumps({{'package': loopx.__file__, 'observations': observations}}))
 
 
 @pytest.mark.parametrize("old_producers_present", [True, False])
-def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path, monkeypatch, old_producers_present):
+@pytest.mark.parametrize("readback_present", [True, False])
+def test_unconfigured_shadow_inspection_matches_full_cli_without_import(
+    tmp_path, monkeypatch, old_producers_present, readback_present, isolated_todo_distribution,  # noqa: F811 -- shared fixture
+):
+    monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     if not old_producers_present:
         for name in ("runtime_shadow.py", "runtime_shadow_writer_adapter.py",
                      "local_authority_shadow_adapter.py", "local_authority_shadow_outbox.py"):
             (receiver / "loopx/control_plane/coordination" / name).unlink()
+    if not readback_present:
+        (receiver / "loopx/control_plane/coordination/local_authority_shadow_readback.py").unlink()
     registry = tmp_path / "project/.loopx/registry.json"
     original = state.read_bytes()
     observations = []
+    env["PYTHONPATH"] = os.pathsep.join([env["PYTHONPATH"], os.environ["PYTHONPATH"]])
     for module in ("loopx.entrypoint", "loopx.cli"):
-        child = subprocess.run([sys.executable, "-c",
+        child = subprocess.run([sys.executable, "-S", "-c",
             f"import loopx,sys; print(loopx.__file__,file=sys.stderr); from {module} import main; raise SystemExit(main())",
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "coordination-shadow", "inspect", "--goal-id", "cold"],
@@ -147,14 +237,19 @@ def test_unconfigured_shadow_inspection_matches_full_cli_without_import(tmp_path
     assert not (runtime / "authority-transition").exists()
 
 
-@pytest.mark.parametrize("command,action,missing", [
-    ("coordination-shadow", "inspect", "runtime_shadow"),
-    ("authority-shadow", "status", "local_authority_shadow_adapter"),
-    ("authority-shadow", "drain", "local_authority_shadow_adapter"),
+@pytest.mark.parametrize("command,action,missing,expected_ok", [
+    ("coordination-shadow", "inspect", "runtime_shadow", True),
+    ("coordination-shadow", "inspect", "local_authority_shadow_readback", False),
+    ("coordination-shadow", "inspect-source", "local_authority_shadow_readback", True),
+    ("authority-shadow", "status", "local_authority_shadow_adapter", True),
+    ("authority-shadow", "status", "local_authority_shadow_readback", False),
+    ("authority-shadow", "drain", "local_authority_shadow_adapter", False),
+    ("todo", "list", "local_authority_shadow_readback", True),
 ])
-def test_explicit_shadow_action_reports_missing_producer_without_writing(
-    tmp_path, monkeypatch, command, action, missing,
+def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
+    tmp_path, monkeypatch, command, action, missing, expected_ok, isolated_todo_distribution,  # noqa: F811 -- shared fixture
 ):
+    monkeypatch.setenv("LOOPX_COLD_IMPORT_PACKAGE", str(isolated_todo_distribution[0]))
     _, state, _, _, runtime, receiver, env = workspace(tmp_path, monkeypatch)
     registry = tmp_path / "project/.loopx/registry.json"
     data = json.loads(registry.read_text())
@@ -167,7 +262,8 @@ def test_explicit_shadow_action_reports_missing_producer_without_writing(
     before = {str(path.relative_to(tmp_path)): path.read_bytes()
               for root in (registry.parent, state.parent, runtime)
               for path in root.rglob("*") if path.is_file()}
-    child = subprocess.run([sys.executable, "-c",
+    env["PYTHONPATH"] = os.pathsep.join([env["PYTHONPATH"], os.environ["PYTHONPATH"]])
+    child = subprocess.run([sys.executable, "-S", "-c",
         "import loopx,sys; print(loopx.__file__,file=sys.stderr); "
         "from loopx.entrypoint import main; raise SystemExit(main())",
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
@@ -175,10 +271,11 @@ def test_explicit_shadow_action_reports_missing_producer_without_writing(
         capture_output=True, text=True, timeout=60)
     assert str(receiver / "loopx/__init__.py") in child.stderr
     assert "Traceback" not in child.stderr, child.stderr
-    assert child.returncode == 1
+    assert child.returncode == (0 if expected_ok else 1)
     result = json.loads(child.stdout)
-    assert result["ok"] is False
-    assert missing in result["error"]
+    assert result["ok"] is expected_ok
+    if not expected_ok:
+        assert missing in result["error"]
     after = {str(path.relative_to(tmp_path)): path.read_bytes()
              for root in (registry.parent, state.parent, runtime)
              for path in root.rglob("*") if path.is_file()}
@@ -228,10 +325,13 @@ def test_cold_cli_import_and_source_free_original_recovery(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("old_producers_present", [True, False])
+@pytest.mark.parametrize("old_target", [False, True], ids=["no-creation-target", "v0-opposite-target"])
 def test_cold_import_recovery_preserves_later_canonical_writes(
-    tmp_path, monkeypatch, provider, old_producers_present,
+    tmp_path, monkeypatch, provider, old_producers_present, old_target,
 ):
-    cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch)
+    target = ({"schema_version": "loopx_new_goal_storage_target_v0",
+        "provider": "sqlite" if provider == "file" else "file"} if old_target else None)
+    cli, state, backup, body, runtime, receiver, env = workspace(tmp_path, monkeypatch, storage_target=target)
     if not old_producers_present:
         for path in ("control_plane/todos/legacy_mutation.py", "control_plane/todos/line_update.py",
                      "control_plane/coordination/runtime_shadow.py",
@@ -293,7 +393,34 @@ def test_cold_import_recovery_preserves_later_canonical_writes(
     assert len(complete_after["leases"]) == 1
     assert complete_after["leases"][0]["todo_id"] == "todo_current"
     assert complete_after["leases"][0]["owner"] == "agent-a"
+    reconnect = ["bootstrap", "--project", str(tmp_path / "project"), "--goal-id", "cold",
+        "--objective", "Reconnect without replacing imported work", "--no-global-sync"]
+    source_bytes = state.read_bytes()
+    connected = run(*reconnect)
+    assert connected["state_action"] == "kept-existing"
+    assert connected["storage_selection"] is None
+    assert connected["authority_read"]["provider_revision"] == complete_after["provider_revision"]
+    assert connected["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert connected["authority_read"]["legacy_fallback_used"] is False
+    assert state.read_bytes() == source_bytes
+    assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
+    registered = registry.read_bytes()
+    registered_goal = json.loads(registered)["goals"][0]
+    assert registered_goal["coordination"].get("storage_target") == target
+    assert "creation_operation_id" not in registered_goal
+    preview = run(*reconnect, "--dry-run")
+    assert preview["authority_read"] == connected["authority_read"]
+    assert registry.read_bytes() == registered and state.read_bytes() == source_bytes
+    for extra in (["--force"], ["--force", "--preserve-todos"],
+                  ["--state-file", str(tmp_path / "other-state.md")]):
+        refused = run(*reconnect, *extra, succeeds=False)
+        assert refused["ok"] is False
+        assert registry.read_bytes() == registered and state.read_bytes() == source_bytes
+        assert not (tmp_path / "other-state.md").exists()
+        assert canonical_todos(runtime, receiver, env, tmp_path) == complete_after
     state.unlink()
+    assert run(*reconnect)["authority_read"] == connected["authority_read"]
+    assert not state.exists()
     recovered = cli("recover-import", "--plan-sha256", digest, "--execute")["cold_import"]
     # This is the original import receipt, not the current provider revision.
     assert recovered["status"] == "replayed" and recovered["cursor"] == imported["cursor"]
@@ -313,6 +440,16 @@ def test_cold_import_recovery_preserves_later_canonical_writes(
     offline = backend.with_name(backend.name + "-offline")
     backend.rename(offline)
     try:
+        refused = run(*reconnect, succeeds=False)
+        assert refused["ok"] is False
+        assert registry.read_bytes() == registered
+        assert not backend.exists() and not state.exists()
+        state.write_bytes(source_bytes)
+        refused = run(*reconnect, "--dry-run", succeeds=False)
+        assert refused["ok"] is False
+        assert state.read_bytes() == source_bytes and registry.read_bytes() == registered
+        assert not backend.exists()
+        state.unlink()
         refused = cli("recover-import", "--plan-sha256", digest, "--execute", success=False)["cold_import"]
         assert refused["ok"] is False and refused["status"] == "failed"
         assert refused["executed"] is False and refused["legacy_fallback_used"] is False
