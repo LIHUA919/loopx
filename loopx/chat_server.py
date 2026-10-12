@@ -27,7 +27,7 @@ from .chat_attachments import (
     normalize_chat_image_attachments,
     validate_chat_turn_envelope,
 )
-from .chat_actions import ChatActionService, ProtectedActionGate
+from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
 from .chat_goal_subagent_api import (
     GoalSubagentConfigurationRequestMixin,
@@ -1390,10 +1390,15 @@ class ChatRequestHandler(
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
             return self._handle_extension_projection(parse_qs(urlparse(self.path).query))
         if path == "/api/chat/projects":
+            contexts = self.server.runtime_controller.project_contexts.available()
+            roots = [Path(context["workspace_path"]) for context in contexts]
+            labels = goal_workspace_labels(roots)
+            # The same roots admit Goal creation; their creation reference lets
+            # the Goal form offer them without a second workspace listing.
             self._send_json({"ok": True, "projects": [
-                {"project_ref": context["project_ref"], "title": Path(context["workspace_path"]).name,
-                 "grant": context["grant"]}
-                for context in self.server.runtime_controller.project_contexts.available()
+                {"project_ref": context["project_ref"], "title": labels[root],
+                 "grant": context["grant"], "goal_workspace_ref": goal_workspace_ref(root)}
+                for context, root in zip(contexts, roots)
             ]})
             return
         if path == "/healthz":

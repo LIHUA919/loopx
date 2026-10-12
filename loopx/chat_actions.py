@@ -118,6 +118,26 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
 
 
+def goal_workspace_ref(root: Path) -> str:
+    """The Goal-creation token for one server-configured workspace root."""
+
+    return f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"
+
+
+def goal_workspace_labels(roots: Sequence[Path]) -> dict[Path, str]:
+    """Owner-facing names for workspace roots, without checkout paths.
+
+    The directory name identifies a workspace; a parent name is added only when
+    two roots would otherwise read the same.
+    """
+
+    names = [root.name or str(root) for root in roots]
+    return {
+        root: (f"{root.parent.name}/{name}" if names.count(name) > 1 and root.parent.name else name)
+        for root, name in zip(roots, names)
+    }
+
+
 def _normalize_cadence(value: Any) -> str:
     candidate = str(value or "").strip().lower().replace("-", "_")
     aliases = {
@@ -444,7 +464,7 @@ class ChatActionService(
             # The native steward freezes its configured workspace. Existing
             # Goals and the single-Goal fallback cannot redirect a commission.
             candidates = [root for root in self.workspace_roots if root.is_dir() and (root / ".git").exists()
-                          and workspace_ref == f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}"]
+                          and workspace_ref == goal_workspace_ref(root)]
             if len(candidates) != 1:
                 raise ValueError("the bound steward workspace is unavailable")
             return candidates[0], {"id": "", "repo": str(candidates[0]), "domain": "project-goal-control-plane",
@@ -472,10 +492,7 @@ class ChatActionService(
             source_goal = goals[0]
         if source_goal is None:
             workspace_candidates = [root for root in self.workspace_roots if root.is_dir()]
-            token_map = {
-                f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}": root
-                for root in workspace_candidates
-            }
+            token_map = {goal_workspace_ref(root): root for root in workspace_candidates}
             selected = (workspace_candidates[0]
                         if workspace_ref == "current" and len(workspace_candidates) == 1
                         else token_map.get(workspace_ref))
@@ -487,26 +504,22 @@ class ChatActionService(
                     "adapter": {"kind": "generic_project_goal_v0"},
                 }
         if source_goal is None:
+            available = [root for root in self.workspace_roots if root.is_dir()]
+            labels = goal_workspace_labels(available)
             candidates = [
-                {
-                    "workspace_ref": f"workspace-{hashlib.sha256(str(root).encode('utf-8')).hexdigest()[:12]}",
-                    "label": f"Workspace {index}",
-                }
-                for index, root in enumerate(
-                    (
-                        root
-                        for root in self.workspace_roots
-                        if root.is_dir()
-                    ),
-                    start=1,
-                )
+                {"workspace_ref": goal_workspace_ref(root), "label": labels[root]}
+                for root in available
             ]
             raise ProtectedActionGate(
                 "goal.create",
                 gate={
                     "kind": "workspace_selection_required",
                     "summary": "Select one server-configured workspace before creating this Goal.",
-                    "next_action": "Choose an available workspace or a registered Goal workspace, then review again. Unlisted directories require server workspace setup.",
+                    "next_action": (
+                        "Choose an available workspace or a registered Goal workspace, then review again. "
+                        "To use another directory, restart the Dashboard with "
+                        "`loopx dashboard --scan-path <directory>`, once per project."
+                    ),
                     "candidates": candidates,
                 },
             )
@@ -523,6 +536,27 @@ class ChatActionService(
                 },
             )
         return project, source_goal
+
+    def _goal_workspace_binding(
+        self, project: Path, source_goal: Mapping[str, Any], *, requested_ref: str
+    ) -> dict[str, Any]:
+        """The workspace a confirmed creation will use, as the owner reviews it.
+
+        ``workspace_ref`` is the explicit reference apply resolves, so a
+        default request is confirmed against the workspace it resolved to.
+        """
+
+        goal_id = str(source_goal.get("id") or "")
+        roots = [root for root in self.workspace_roots if root.is_dir()]
+        label = (goal_workspace_labels(roots).get(project) if project in roots else None) or project.name
+        return {
+            "schema_version": "loopx_goal_workspace_binding_v0",
+            "workspace_ref": goal_id or goal_workspace_ref(project),
+            "label": label,
+            "source": "goal_workspace" if goal_id else "configured_workspace",
+            "selection": "default" if requested_ref == "current" else "explicit",
+            **({"goal_id": goal_id} if goal_id else {}),
+        }
 
     def _apply_goal_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
@@ -1121,8 +1155,9 @@ class ChatActionService(
             raise ValueError("normalized_parameters and context must be objects")
         normalized = self._normalize(action_kind, parameters)
         canonical_update_basis = None
+        workspace_binding = None
         if action_kind == "goal.create":
-            project, _source_goal = self._project_for_goal_create(
+            project, source_goal = self._project_for_goal_create(
                 {
                     "normalized_parameters": normalized,
                     "context": dict(context),
@@ -1130,6 +1165,10 @@ class ChatActionService(
             )
             agent_id = str(normalized.get("agent_id") or "codex")
             eligibility = self._agent_eligibility(agent_id, project=project)
+            workspace_binding = self._goal_workspace_binding(
+                project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
+            )
+            normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
         if action_kind == "operation.execute":
@@ -1283,6 +1322,7 @@ class ChatActionService(
                 request.get("idempotency_key"), field="idempotency_key"
             ),
             canonical_update_basis=canonical_update_basis,
+            workspace_binding=workspace_binding,
         )
         return (
             self.store.arm_operation(str(proposal["proposal_id"]))

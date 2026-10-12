@@ -79,3 +79,66 @@ def test_bound_steward_rejects_goal_workspace_redirect(workspace_service):
             "normalized_parameters": {"workspace_ref": "second-goal"},
             "context": {"kind": "manager", "goal_id": "first-goal", "binding_id": "steward-binding"},
         })
+
+
+def preview(service, workspace_ref, context_goal=None, key="create"):
+    return service.preview({
+        "action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": key,
+        "context": {"kind": "manager", "goal_id": context_goal},
+        "normalized_parameters": {"goal_id": f"goal-{key}", "title": "New Goal",
+                                  "objective": "Ship it", "workspace_ref": workspace_ref},
+    })
+
+
+@pytest.mark.parametrize("route", ["context_goal", "single_goal", "single_root"])
+def test_default_preview_binds_the_workspace_it_resolved(workspace_service, route):
+    # "Default workspace" is resolved once, shown to the owner by name, and the
+    # confirmed proposal carries the explicit reference apply will resolve, so
+    # confirmation cannot land in a different directory than the one reviewed.
+    service, registry, first, _ = workspace_service
+    if route != "context_goal":
+        data = json.loads(registry.read_text())
+        data["goals"] = data["goals"][:1] if route == "single_goal" else []
+        registry.write_text(json.dumps(data))
+    if route == "single_root":
+        service.workspace_roots = (first,)
+    proposal = preview(service, "current", "first-goal" if route == "context_goal" else None)
+
+    binding = proposal["workspace_binding"]
+    assert binding["label"] == "first"
+    assert binding["selection"] == "default"
+    assert proposal["normalized_parameters"]["workspace_ref"] == binding["workspace_ref"]
+    if route == "single_root":
+        assert binding["source"] == "configured_workspace" and "goal_id" not in binding
+        assert binding["workspace_ref"] == "workspace-" + hashlib.sha256(str(first).encode()).hexdigest()[:12]
+    else:
+        assert binding["source"] == "goal_workspace"
+        assert binding["workspace_ref"] == binding["goal_id"] == "first-goal"
+    assert resolve(service, binding["workspace_ref"])[0] == first
+    assert str(first) not in json.dumps(binding)
+
+
+def test_explicit_configured_workspace_preview_names_that_workspace(workspace_service):
+    service, _, _, second = workspace_service
+    token = "workspace-" + hashlib.sha256(str(second).encode()).hexdigest()[:12]
+    binding = preview(service, token, "first-goal")["workspace_binding"]
+    assert binding == {
+        "schema_version": "loopx_goal_workspace_binding_v0",
+        "workspace_ref": token, "label": "second",
+        "source": "configured_workspace", "selection": "explicit",
+    }
+
+
+def test_workspace_choices_are_named_by_directory_not_token(tmp_path):
+    roots = [tmp_path / "team-a" / "app", tmp_path / "team-b" / "app", tmp_path / "docs"]
+    for root in roots:
+        root.mkdir(parents=True)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": []}))
+    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"),
+        registry_path=registry, workspace_roots=roots)
+    with pytest.raises(ProtectedActionGate) as error:
+        preview(service, "current")
+    gate = error.value.gate
+    assert [candidate["label"] for candidate in gate["candidates"]] == ["team-a/app", "team-b/app", "docs"]
+    assert "--scan-path" in gate["next_action"]
