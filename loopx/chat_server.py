@@ -1393,7 +1393,16 @@ class ChatRequestHandler(
             contexts = self.server.runtime_controller.project_contexts.available()
             roots = [Path(context["workspace_path"]) for context in contexts]
             service = getattr(self.server, "action_service", None)
-            labels = service.workspace_labels() if service is not None else goal_workspace_labels(roots)
+            labels = goal_workspace_labels(roots)
+            if service is not None:
+                try:
+                    labels = service.workspace_labels()
+                except (OSError, ValueError):
+                    # Granted project workspaces never depend on the Goal
+                    # registry. An unreadable registry only loses naming that
+                    # tells these roots apart from registered Goal directories;
+                    # Goal preview and apply still refuse it on their own.
+                    pass
             # The same roots admit Goal creation; their creation reference lets
             # the Goal form offer them by the name a review will show.
             self._send_json({"ok": True, "projects": [

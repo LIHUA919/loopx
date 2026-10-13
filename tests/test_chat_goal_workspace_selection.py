@@ -169,3 +169,74 @@ def test_labels_add_parents_only_until_directories_differ(tmp_path):
     labels = goal_workspace_labels([a, b, c, a])
     assert labels == {a: "a/x/app", b: "b/x/app", c: "solo"}
     assert not any(label.startswith(("/", "\\")) for label in labels.values())
+
+
+def test_project_list_survives_unreadable_goal_registry_while_creation_refuses(tmp_path):
+    # The granted project list never depended on the Goal registry. Naming it
+    # alongside Goal directories must not make a corrupt registry disconnect
+    # ordinary project conversations; Goal creation still refuses that source
+    # and works again once the registry is restored.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    registry, _ = fixture["write_registry_fixture"](tmp_path / "source")
+    runtime = Path(json.loads(registry.read_text())["common_runtime_root"])
+    docs = (tmp_path / "docs-site").resolve()
+    docs.mkdir()
+    sessions = ChatSessionStore(runtime)
+    controller = fixture["FakeRuntimeController"](sessions)
+    controller.project_contexts = ChatProjectContexts([docs])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root = registry, runtime
+    server.action_store = ChatActionStore(runtime / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[docs])
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("GET" if body is None else "POST", path,
+                None if body is None else json.dumps(body), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    create = {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "registry-recovery",
+              "context": {"kind": "manager", "goal_id": None},
+              "normalized_parameters": {"goal_id": "goal-docs", "title": "Docs", "objective": "Check the docs",
+                                        "agent_id": "codex", "workspace_ref": goal_workspace_ref(docs)}}
+    try:
+        original = registry.read_bytes()
+        registry.write_text("{not json", encoding="utf-8")
+        status, listed = request("/api/chat/projects")
+        assert status == 200
+        assert [(project["title"], project["goal_workspace_ref"]) for project in listed["projects"]] == [
+            ("docs-site", goal_workspace_ref(docs))]
+        status, refused = request("/api/actions/preview", create)
+        assert status == 400 and refused["ok"] is False
+
+        registry.write_bytes(original)
+        status, previewed = request("/api/actions/preview", create)
+        assert status == 201, previewed
+        assert previewed["proposal"]["workspace_binding"]["label"] == "docs-site"
+        proposal_id = previewed["proposal"]["proposal_id"]
+        status, applied = request(f"/api/actions/{proposal_id}/apply", {})
+        assert status in {200, 202}, applied
+        created = next(goal for goal in json.loads(registry.read_text())["goals"] if goal["id"] == "goal-docs")
+        assert Path(created["repo"]).resolve() == docs
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
