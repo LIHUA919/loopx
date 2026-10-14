@@ -220,6 +220,88 @@ def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp
     assert original["receipts"][0]["result"]["replan_settlement"] == "pending"
 
 
+@pytest.mark.parametrize("strategy", ["off", "evidence_conditioned_v1"])
+def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_path, capsys, strategy):
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+    from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
+
+    f = source_goal
+    # This retained source inventory reviews twenty durable records. Give it
+    # distinct advancing observations so a stall cannot replace that trigger.
+    rows = _stall_runs(goal_id=f["ref"]["goal_id"], count=20)
+    for index, row in enumerate(rows):
+        row["goal_ref"] = f["ref"]
+        row["progress_observation"].update(result_class="advanced",
+            surface_id=f"coverage-{index}", hypothesis_id=f"hypothesis-{index}")
+    f["runs"].write_text("".join(json.dumps(row) + "\n" for row in rows))
+    owner = build_builtin_machine_configuration_registry()
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "effective_turns", "count": 6, "stride_strategy": strategy}}}
+    preview = configure_machine_configuration(runtime_root=f["runtime"], registry=owner, configuration=configuration)
+    configure_machine_configuration(runtime_root=f["runtime"], registry=owner, configuration=configuration,
+        execute=True, expected_plan_revision=preview["plan_revision"])
+    goal = load_project_registry(f["registry"])["goals"][0]
+    assert "stride_strategy" not in goal.get("execution_profile", {})
+    effective = resolve_todo_replan_cadence_goal(goal, f["runtime"])
+    assert effective["execution_profile"].get("stride_strategy", "off") == strategy
+    derived = _derive_open_replan_obligation_inventory(runtime_root=f["runtime"], goal_id=f["ref"]["goal_id"],
+        goal=goal, state_text="", goal_ref=f["ref"])
+    candidates = list(derived.get("autonomous_replan_obligations_by_agent", {}).values())
+    assert candidates and all(any(trigger["kind"] == "periodic_review_due" for trigger in item["triggers"])
+        for item in candidates)
+    inventory = _open_replan_obligation_inventory(goal_id=f["ref"]["goal_id"],
+        registered_agents=["agent-a", "agent-b"], status_item=derived)
+    f["obligation"] = next(row["obligation_id"] for row in inventory if "agent-a" in row["bound_agent_ids"])
+
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    assert _call(f, tmp_path, capsys, "configure", _root(view), agent=None,
+        operation_id="root", execute=True)[0] == 0
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    assert _call(f, tmp_path, capsys, "adopt", _basis(view), operation_id="adopt", execute=True)[0] == 0
+    proposal = {**_basis(view), "proposal_id": "periodic", "template_id": "check",
+        "evidence_refs": ["evidence:gap"], "replan_obligation_id": f["obligation"]}
+    admitted = _call(f, tmp_path, capsys, "propose", proposal, operation_id="propose", execute=True)[1]
+    committed = _call(f, tmp_path, capsys, "commit", {"proposal_id": "periodic",
+        "proposal_digest": admitted["proposal"]["digest"]}, operation_id="commit", execute=True)[1]
+    view = committed["current_projection"]
+    adopted = _call(f, tmp_path, capsys, "adopt", _basis(view), operation_id="adopt-new", execute=True)[1]
+    view = adopted["current_projection"]
+    code, claimed = _call(f, tmp_path, capsys, "claim", {**_basis(view), "todo_id": committed["todo_id"],
+        "expected_provider_revision": view["provider_revision"],
+        "lease_request": {"idempotency_key": "periodic-claim", "expected_version": None, "ttl_seconds": 300}},
+        operation_id="claim", execute=True)
+    assert code == 0, claimed
+    observation = next(row for row in claimed["current_projection"]["replan_observations"]
+        if row["obligation_id"] == f["obligation"] and row["agent_id"] == "agent-a")
+    if strategy == "off":
+        assert observation["state"] == "settled"
+        assert observation["acknowledgement"]["source"] == "todo_replan_successor_transition"
+    else:
+        assert observation["state"] == "pending"
+        assert observation["acknowledgement"] is None
+    # The source observation neither fabricates a decision nor rewrites history.
+    assert f["runs"].read_text() == "".join(json.dumps(row) + "\n" for row in rows)
+
+
+def test_historical_receipt_does_not_read_current_stride_configuration(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.capabilities.todo_replan_cadence import machine_defaults
+
+    f = source_goal
+    view = _call(f, tmp_path, capsys, "inspect")[1]
+    code, configured = _call(f, tmp_path, capsys, "configure", _root(view),
+        agent=None, operation_id="root", execute=True)
+    assert code == 0, configured
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic current configuration unavailable")
+
+    monkeypatch.setattr(machine_defaults, "resolve_todo_replan_cadence_goal", unavailable)
+    code, historical = _call(f, tmp_path, capsys, "receipt", {"receipt_operation_id": "root"})
+    assert code == 0 and historical["status"] == "found" and historical["historical_only"], historical
+
+
 def test_root_initialization_cannot_shrink_source_goal_commitments(source_goal, tmp_path, capsys):
     f = source_goal
     view = _call(f, tmp_path, capsys, "inspect")[1]
@@ -273,3 +355,58 @@ def test_missing_authority_is_not_successful_inspect_or_configuration(source_goa
     # inferred from an absent provider or mutable Markdown.
     code, recovered = _call(f, tmp_path, capsys, "configure", _root(view), agent=None, operation_id="restore-root", execute=True)
     assert code == 0 and recovered["status"] == "applied", recovered
+
+
+@pytest.mark.parametrize("gate_case", ["open_ascii", "closing_unicode", "malformed_json", "invalid_utf8"])
+def test_gate_codec_preserves_native_amendment_admission(source_goal, tmp_path, capsys, monkeypatch, gate_case):
+    """A non-UTF-8 host must decode the source gate without bypassing its refusal."""
+    from loopx.control_plane.goals.source_session_turn_effects import source_turn_effect_gate_path
+
+    f = source_goal
+    code, before = _call(f, tmp_path, capsys, "inspect")
+    assert code == 0 and before["intent"] is None
+    gate_path = source_turn_effect_gate_path(f["registry"], f["ref"]["goal_id"])
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    original = gate_path.read_bytes() if gate_path.exists() else None
+    gate = {"schema_version": "loopx_source_turn_effect_gate_v1", "state": "open", "goal_ref": f["ref"]}
+    if gate_case == "closing_unicode":
+        gate = {"schema_version": "loopx_source_turn_effect_gate_v1", "state": "closing",
+            "retired_goal_ref": f["ref"], "new_goal_ref": {**f["ref"], "goal_instance_id": "ginst_" + "b" * 32},
+            "operation_id": "recreate-复核", "request_digest": "sha256:" + "a" * 64}
+    raw = json.dumps(gate, ensure_ascii=False).encode("utf-8")
+    if gate_case == "malformed_json":
+        raw = b'{"state":'
+    elif gate_case == "invalid_utf8":
+        raw = b'{"state":"\xff"}'
+    gate_path.write_bytes(raw)
+    read_text = Path.read_text
+
+    def read_with_ascii_default(path, *args, **kwargs):
+        if path == gate_path and not args and kwargs.get("encoding") is None:
+            kwargs["encoding"] = "ascii"
+        return read_text(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", read_with_ascii_default)
+            code, result = _call(f, tmp_path, capsys, "configure", _root(before),
+                agent=None, operation_id="codec-root", execute=True)
+        if gate_case == "open_ascii":
+            assert code == 0 and result["status"] == "applied", result
+        else:
+            assert code == 1 and result["ok"] is False, result
+            if gate_case == "closing_unicode":
+                assert result.get("reason_code") == "goal_retirement_in_progress", result
+                assert result["execution_authority_granted"] is False
+    finally:
+        if original is None:
+            gate_path.unlink()
+        else:
+            gate_path.write_bytes(original)
+    code, after = _call(f, tmp_path, capsys, "inspect")
+    assert code == 0, after
+    if gate_case == "open_ascii":
+        assert after["intent"]["root_intent"] == _root(before)["root_intent"]
+    else:
+        assert after["provider_revision"] == before["provider_revision"]
+        assert after["intent"] is None

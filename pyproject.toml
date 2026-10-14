@@ -36,6 +36,7 @@ deepseek-harness = [
   "deepseek-harness-sdk==0.1.5rc1",
 ]
 test = [
+  "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "resvg-py==0.5.0",
   "defusedxml==0.7.1",
   "pillow>=11,<13",
@@ -60,6 +61,9 @@ loopx-openviking-semantic-preference = "loopx.extensions.openviking_semantic_pre
 
 [tool.setuptools.packages.find]
 include = ["loopx*"]
+
+[tool.setuptools.exclude-package-data]
+"loopx.semantics" = ["project_registry_io_manifest_v1.json"]
 
 [tool.setuptools.package-data]
 "loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]

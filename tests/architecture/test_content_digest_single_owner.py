@@ -158,6 +158,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.benchmark_toolkit.behavior_finding",
     "loopx.capabilities.benchmark_toolkit.continuation",
     "loopx.capabilities.benchmark_toolkit.factorial_contrast",
+    "loopx.capabilities.benchmark_toolkit.integrity",
     "loopx.capabilities.benchmark_toolkit.runtime_continuity",
     "loopx.capabilities.benchmark_toolkit.study_projection",
     "loopx.capabilities.content_ops.item_lifecycle",
@@ -208,9 +209,15 @@ CONSUMER_MODULES = (
     "loopx.presentation.static_site",
 )
 
-# A consumer that hands `re` a pattern this file cannot fold. Pinned empty: folding reads
-# every construction in every consumer today, so adding an entry has to be argued.
-UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {}
+# A consumer that hands `re` a pattern this file cannot fold. Folding reads
+# every construction except the declared marker reader, which is fenced below.
+UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
+    "loopx.capabilities.benchmark_toolkit.integrity": (
+        "_marker_present matches an escaped caller-supplied filename/token inside "
+        "command text with explicit basename boundaries; it does not validate a "
+        "whole-value digest. Its sole dynamic regex is fenced to that reader."
+    ),
+}
 
 # Reading `.pattern` off the owner and recompiling it states the decision a second time
 # while showing the scan no shape at all. Pinned empty; widening it is a review event.
@@ -552,7 +559,7 @@ def _whole_value_shape(text: Any) -> str | None:
     return None
 
 
-def _owner_import_map(tree: ast.AST) -> dict[str, str | None]:
+def _owner_import_map(nodes: tuple[ast.AST, ...]) -> dict[str, str | None]:
     """local name -> canonical export name, over imports of the owner module only.
 
     `None` marks a binding this file cannot attribute: a wildcard import, the module object
@@ -560,7 +567,7 @@ def _owner_import_map(tree: ast.AST) -> dict[str, str | None]:
     """
 
     imported: dict[str, str | None] = {}
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module != "content_digest" and not module.endswith(
@@ -579,7 +586,7 @@ def _owner_import_map(tree: ast.AST) -> dict[str, str | None]:
     return imported
 
 
-def _loaded_names(tree: ast.AST) -> set[str]:
+def _loaded_names(nodes: tuple[ast.AST, ...]) -> set[str]:
     """Names this module reads, with the import clauses themselves excluded.
 
     This is what catches a consumer that keeps `BARE_SHA256_PATTERN` imported while
@@ -588,7 +595,7 @@ def _loaded_names(tree: ast.AST) -> set[str]:
     """
 
     loaded: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
@@ -602,11 +609,11 @@ def _loaded_names(tree: ast.AST) -> set[str]:
     return loaded
 
 
-def _shape_statements(tree: ast.AST, root: _Scope) -> list[dict[str, Any]]:
+def _shape_statements(nodes: tuple[ast.AST, ...], root: _Scope) -> list[dict[str, Any]]:
     """Every whole-value digest shape this module states, by value, not by spelling."""
 
     found: dict[tuple[int, str], dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             text = _fold_text(node, root)
             shape = _whole_value_shape(text)
@@ -631,12 +638,12 @@ def _shape_statements(tree: ast.AST, root: _Scope) -> list[dict[str, Any]]:
     return sorted(found.values(), key=lambda site: (site["line"], str(site["value"])))
 
 
-def _re_names_bound(tree: ast.AST) -> tuple[set[str], set[str]]:
+def _re_names_bound(nodes: tuple[ast.AST, ...]) -> tuple[set[str], set[str]]:
     """(names bound to the `re` module, names bound to one of its pattern functions)."""
 
     modules: set[str] = set()
     functions: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "re" or alias.name.endswith(".re"):
@@ -649,7 +656,9 @@ def _re_names_bound(tree: ast.AST) -> tuple[set[str], set[str]]:
     return modules, functions
 
 
-def _regex_constructions(tree: ast.AST, root: _Scope) -> list[dict[str, Any]]:
+def _regex_constructions(
+    nodes: tuple[ast.AST, ...], root: _Scope
+) -> list[dict[str, Any]]:
     """Every regex construction, and the value it is handed when that can be read.
 
     Constructions only: `re.<name>(...)`, a bare `<name>(...)` bound by `from re import
@@ -658,9 +667,9 @@ def _regex_constructions(tree: ast.AST, root: _Scope) -> list[dict[str, Any]]:
     those would sweep in every field read in the package.
     """
 
-    modules, functions = _re_names_bound(tree)
+    modules, functions = _re_names_bound(nodes)
     found: list[dict[str, Any]] = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if not isinstance(node, ast.Call) or not node.args:
             continue
         callable_node = node.func
@@ -702,12 +711,12 @@ def _regex_constructions(tree: ast.AST, root: _Scope) -> list[dict[str, Any]]:
     return found
 
 
-def _owner_text_reads(tree: ast.AST) -> list[int]:
+def _owner_text_reads(nodes: tuple[ast.AST, ...]) -> list[int]:
     """Lines reading `.pattern` / `.source` / `.flags` off a name bound to the owner."""
 
-    imported = _owner_import_map(tree)
+    imported = _owner_import_map(nodes)
     lines = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if (
             isinstance(node, ast.Attribute)
             and node.attr in {"pattern", "source", "flags"}
@@ -720,19 +729,22 @@ def _owner_text_reads(tree: ast.AST) -> list[int]:
 
 def _analyse(source: str, name: str = "<module>") -> dict[str, Any]:
     tree = ast.parse(source, filename=name)
+    # Reuse the same breadth-first order within this module only. Keep repeated
+    # node identities and release the snapshot with the temporary syntax tree.
+    nodes = tuple(ast.walk(tree))
     root = _collect_scopes(tree)
     try:
         return {
-            "statements": _shape_statements(tree, root),
-            "constructions": _regex_constructions(tree, root),
-            "owner_imports": _owner_import_map(tree),
-            "owner_text_reads": _owner_text_reads(tree),
-            "loaded": _loaded_names(tree),
+            "statements": _shape_statements(nodes, root),
+            "constructions": _regex_constructions(nodes, root),
+            "owner_imports": _owner_import_map(nodes),
+            "owner_text_reads": _owner_text_reads(nodes),
+            "loaded": _loaded_names(nodes),
         }
     finally:
         # Readers are finished. Break AST -> scope -> binding -> AST cycles;
         # retaining them makes later collections traverse whole source trees.
-        for node in ast.walk(tree):
+        for node in nodes:
             scope = getattr(node, _SCOPE_ATTRIBUTE, None)
             if scope is not None:
                 scope.names.clear()
@@ -1576,3 +1588,49 @@ def test_chat_bundle_source_digest_uses_the_owner_bare_shape() -> None:
     from loopx.presentation import chat_bundle
 
     assert chat_bundle.BARE_SHA256_PATTERN is BARE_SHA256_PATTERN
+
+
+@pytest.mark.parametrize("digest", (*BARE_ACCEPTS, *BARE_REJECTS))
+def test_benchmark_task_authorization_keeps_the_bare_digest_contract(
+    digest: str,
+) -> None:
+    from loopx.capabilities.benchmark_toolkit.integrity import (
+        BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+        _validated_task_environment_access,
+    )
+
+    access = {
+        "schema_version": BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION,
+        "authorization_id": "digest-contract-fixture",
+        "authorization_sha256": digest,
+        "authority": "benchmark_task",
+        "purpose": "task_submission",
+        "namespace": "TASKCAP_",
+        "variable_names": ["TASKCAP_TOKEN"],
+    }
+    if digest in BARE_ACCEPTS:
+        normalized = _validated_task_environment_access(access)
+        assert normalized is not None
+        assert normalized["authorization_sha256"] == digest
+    else:
+        with pytest.raises(
+            ValueError,
+            match="benchmark_task_environment_access_authorization_sha256_invalid",
+        ):
+            _validated_task_environment_access(access)
+
+
+def test_benchmark_dynamic_regex_exemption_stays_in_the_marker_reader() -> None:
+    analysis = _module_of("loopx.capabilities.benchmark_toolkit.integrity")
+    unreadable = [item for item in analysis["constructions"] if not item["readable"]]
+    source = (PACKAGE_ROOT / "capabilities/benchmark_toolkit/integrity.py").read_text(
+        encoding="utf-8"
+    )
+    marker_reader = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "_marker_present"
+    )
+    assert len(unreadable) == 1, "the marker exception must not hide another matcher"
+    assert marker_reader.lineno <= unreadable[0]["line"] <= marker_reader.end_lineno
+    assert unreadable[0]["construction"] == "search", "not a whole-value reader"

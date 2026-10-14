@@ -740,8 +740,20 @@ including `generic_cli`, `outer_controller`, and native CLI profiles. An explici
 asking for the selection it just accepted. This does not enable `--begin-turn`
 for those hosts or change legacy calls without a Turn identity.
 
-A single-candidate response
-keeps the direct execution path and does not add an extra selection round trip.
+A single already-claimed candidate keeps the direct execution path without an
+extra selection round trip. A sole unclaimed candidate instead projects the
+existing explicit selection contract: recommendation alone must not create a
+settlement identity or a required closeout. The agent may inspect the candidate
+without accepting it; a later Turn must not require recovery of that unchosen
+work. Explicit selection revalidates eligibility and binds the same Turn, but
+does not claim the Todo or grant new authority. Claim-before-work still applies.
+Previously committed receipts retain their identity and existing recovery rules;
+this change does not rewrite historical bindings.
+
+单个已认领候选继续直达；单个未认领候选则必须先显式选择。仅仅推荐不能生成
+结算身份或强制结算义务，也不能让下一轮被未选择的工作卡入恢复。显式选择仍
+通过原有准入校验并绑定同一 Turn，但不等于认领或新增授权；执行前仍需认领。
+已提交回执的身份及恢复规则保持不变，不追溯重写历史绑定。
 
 When the selected Todo has meaningful strategic context, the same default
 response may include `planning_horizon.schema_version=
@@ -870,6 +882,20 @@ Once `resume_ready=true`, the wait disappears and ordinary open-todo or
 deferred-successor selection runs again. Missing vision checkpoints, closed
 stage succession, unsupported conditions, and continuous-monitor-as-gate
 repairs remain fail-closed and are not hidden by this wait path.
+
+For a single exact scheduled successor, the interaction contract allows a
+quiet no-op while the canonical `resume_at` condition has positive runtime-clock
+proof that it is still pending. It does not require a `monitor-poll` from an
+unbound heartbeat receipt or derive new work merely from repeated pre-due
+wakes. The scheduled instant and Todo lifecycle remain unchanged; once due,
+the normal explicit resume route applies. Existing bound Turns still owe
+their original settlement. Dependency waits, mixed waiting frontiers, and
+missing or invalid clock proofs retain the bounded observation policy.
+
+单个精确的定时 successor 若有原生运行时时钟证明尚未到期，交互契约允许安静等待，
+不要求无 Todo 绑定的 heartbeat 回执执行 `monitor-poll`，也不因重复提前唤醒而派生
+新工作。原恢复时间与 Todo 生命周期保留；到期后走正常显式恢复流程。已有绑定的
+Turn 仍需结算原工作；依赖等待、混合等待前沿和缺失或无效的时钟证据仍沿用有界观察策略。
 
 For completed handoff gates, record that rationale structurally as
 `no_followup=true`; status projects the gate as `cleared_no_followup` instead
