@@ -19,7 +19,7 @@ from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_delivery_contract import goal_channel_binding_digest, goal_channel_delivery_route
 from .goal_channel_message_delivery import GoalChannelMessageDeliverySession
 from .goal_channel_work import _resolve_binding, run_goal_channel_work
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 
 ROOM_RESUME_RESULT_SCHEMA = "loopx_goal_channel_resume_v0"
 

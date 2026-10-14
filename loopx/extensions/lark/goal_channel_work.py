@@ -27,7 +27,7 @@ from .goal_channel_delivery_contract import goal_channel_delivery_route
 from .goal_channel_message_delivery import (
     GoalChannelDeliveryStageError, GoalChannelMessageDeliverySession, resolve_bound_goal_channel,
 )
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 
 GOAL_CHANNEL_WORK_RESULT_SCHEMA = "loopx_goal_channel_work_result_v0"
 

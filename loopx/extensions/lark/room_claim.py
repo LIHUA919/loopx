@@ -26,7 +26,7 @@ from .card_callback import operator_membership_verified, read_callback_card_cont
 from .goal_channel_delivery_contract import goal_channel_binding_digest, goal_channel_delivery_route
 from .goal_channel_message_delivery import GoalChannelMessageDeliverySession, GoalChannelDeliveryStageError
 from .goal_channel_work import _resolve_binding, build_work_card, run_goal_channel_work
-from .presentation.kanban import CommandRunner, default_subprocess_runner
+from .cli_transport import CommandRunner, default_subprocess_runner
 from .goal_channel_transport import verified_app_id
 from .goal_channel_operation import _card_text
 from .private_json import write_private_json_atomic
