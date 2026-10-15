@@ -285,7 +285,7 @@ effective configuration digest and Host version; tools/skills and credentials ne
 their existing installation/authentication owners. Native state is opaque and its
 storage layout remains a pinned provider qualification.
 
-`benchmark.runtime.native_checkpoint.fork_native_checkpoint` verifies a unit and
+`loopx.hosts.codex_checkpoint.fork_native_checkpoint` verifies a unit and
 reconstructs a distinct native session in a **new isolated environment preserving
 the captured guest paths**, with matching configuration and Host version. It checks
 the full history digest and cursor, starts no model and registers no LoopX binding.
@@ -303,7 +303,7 @@ it does not remove historical authority. The controller environment and explicit
 configuration are not exported as authority or credentials.
 
 ```sh
-python -m benchmark.runtime.native_checkpoint \
+python -m loopx.hosts.codex_checkpoint \
   --root /private/captured-point --expected-sha256 CAPTURE_DIGEST \
   --config-path /private/qualified-config.toml --sandbox read-only
 ```
@@ -454,12 +454,17 @@ this context-adoption path. Leases are excluded from the read, while historical
 claim/status fields remain evidence. Declarations without `loopx_state` keep
 their previous path.
 
+The generic [research-checkpoint CLI](../docs/reference/research-checkpoint.md)
+owns ordinary Goal capture, native-session admission and research-context adoption.
+The benchmark adapter adds task workspace, evaluator and budget participants;
+Core does not import the benchmark package.
+
 After separately admitting the checkpoint's native session, an operator can
 adopt this retained context on an **already claimed and leased destination Todo**
 whose note is empty:
 
 ```sh
-python -m benchmark.runtime.research_checkpoint \
+python -m loopx.hosts.research_checkpoint \
   --root /private/checkpoints/point --expected-sha256 CHECKPOINT_SHA256 \
   --source-todo-id SOURCE_TODO --todo-id DESTINATION_TODO \
   --operation-id CONTEXT_OPERATION --expected-revision CURRENT_REVISION \
@@ -845,6 +850,15 @@ native-judge owners. It preserves the captured workspace and effective Codex
 configuration, admits a distinct native session and fresh Goal/Agent, and adopts
 retained research as evidence on a current preparation Todo. Historical registry,
 claims, leases and settlement records are not installed as current authority.
+If the sealed context contains Explore events, adoption also seeds the fresh
+Goal's ordinary Explore log. Nodes, findings, scoped counterexamples, topology,
+original attribution and timestamps survive, with each event bound to the
+checkpoint digest and source event through its opaque run reference. Operational
+research-observation lineage stays in the archive; it is not destination
+execution proof. Recovery accepts only the same immutable initial prefix, may
+finish a partial prefix, and never reapplies old statuses after newer evidence.
+Malformed, foreign or interleaved destination history rejects before model work.
+Legacy context-only points keep their original continuation behavior.
 Fresh credentials come from the ordinary runner credential source. The native
 activation's absolute deadline includes receiver installation and preparation;
 restarting the entry cannot grant another full budget or submission allowance.

@@ -362,6 +362,24 @@ qualification or performance claim is made by this RFC.
   the evidence column gains an executable interim no-growth check beside the
   manual review.
 
+### 2026-10-15 — Checkpoint host composition and presentation SDK boundary
+
+- **Baseline:** `77b404b92`.
+- **Delivered:** native checkpoint inspection/reconstruction and research context
+  composition move from `control_plane` to the existing `hosts` owner in
+  Section 5. All internal CLI, benchmark and test callers move together; neither
+  old module shipped in v1.4.0, so no public compatibility shim is retained.
+  Typed state/effect authority remains in the existing control plane.
+- **Boundary repair:** Finance consumes the shared local-path classifier through
+  its existing `extensions.presentation` SDK import. It adds no package-to-kernel
+  edge or copied privacy matcher. The pinned 13 legacy imports remain unchanged.
+- **Evidence:** architecture/import ratchets, Finance's minimal public SDK fixture,
+  real native checkpoint capture/fork/adoption and negative consistency cases.
+  Capture keeps one inspection process across both logical reads and physical
+  sealing, retaining the byte witness rather than reopening its history writer.
+- **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
+  is not closed; D1–D4 stay open. No packaging or authority decision changes.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

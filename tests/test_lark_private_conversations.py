@@ -169,6 +169,33 @@ def finish_group_turn(runtime, transport, *, message):
     return row
 
 
+def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("receipt-source", "Explain this project")
+    observe = transport.bindings.observe
+    calls = []
+    def observed(profile, **kwargs):
+        import sys
+        calls.append(sys._getframe(1).f_code.co_name)
+        return observe(profile, **kwargs)
+    monkeypatch.setattr(transport.bindings, "observe", observed)
+    try:
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        row = next(row for row in transport.core.pending() if row["message"] == root["content"])
+        runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        calls.clear()
+        transport.reconcile()
+        assert any(emoji == "Get" for _, _, emoji in provider.reaction_creates)
+        assert "resolve" in calls and "_source_message" in calls
+        # Naming the Inbox adds no authentication request after the fresh
+        # binding resolution. Actual outbound source validation still observes.
+        assert "_inbox" not in calls
+        assert all(topic == root["message_id"] for _, topic, _ in provider.topic_writes)
+        assert len(store.list_sessions()) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("command", ["/status", "/stop", "/help"])
 def test_completed_command_recovery_leaves_provenance_to_delivery(ordinary, command):  # noqa: F811
     store, runtime, provider, transport = connect_group(ordinary)

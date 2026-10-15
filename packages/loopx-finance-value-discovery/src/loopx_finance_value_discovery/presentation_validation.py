@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, urlparse
 
 _find_public_safe_local_path: Callable[[str | None], re.Pattern[str] | None] | None
 try:
-    from loopx.public_safe_text import (
+    from loopx.extensions.presentation import (
         find_public_safe_local_path as _find_public_safe_local_path,
     )
 except (ImportError, ModuleNotFoundError):

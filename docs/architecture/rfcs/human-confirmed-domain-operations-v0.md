@@ -453,6 +453,61 @@ and packaged presentation. The live context probe creates a new managed GPT
 session in its owning home; it performs no proposals, group clicks or financial
 effects. Synthetic approval fixtures are not genuine user approval.
 
+The optional [DSH native context module](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+adds a separately loaded, read-only SDK prerequisite. A real SDK/bundled runtime
+`0.1.5rc1` tool call returned its calling session, open native Turn and whitelisted
+agent options. This observation is neither a Core actor nor effective wire-profile
+attestation; the read-only module always reports `execution_allowed: false`.
+
+The separate optional `native-operation` module and internal
+`OwnedDshOperationHost` now connect the real SDK/bundled runtime `0.1.5rc1`
+to the existing Core handler. Two separately admitted Turns on one retained
+SDK connection qualify native session/Turn/call pairing, observed profile,
+canonical preparation, refusal before confirmation, fixture confirmation,
+one-shot consumption, rejected repetition and canonical `not_executed` outcome.
+File/SQLite Goal authority consumers retain the original action-store owner.
+Kernel peer PID and exact SDK-native tool arguments must match the private
+bounded Unix connection; there is no bearer, caller actor, second approval store
+or effect retry. Legacy Codex executor encoding and default/off behavior remain.
+
+This stage is a backend integration with a scripted loopback provider, not
+genuine user approval, original-card delivery or financial utility. SDK
+`0.1.5rc1` still refuses cross-process resume before launch; its observed
+`session already exists` failure is retained. An isolated Python SDK `0.2.1a3`
+wheel built from upstream `2fbf4359`, with explicit npm runtime
+`@deepseek-ai/dsh@0.2.1-alpha.3`, uses public `resume_session` instead of
+replacing identity. SDK files, Node/entry bytes and the entire npm closure join
+the frozen profile. File/SQLite restart cases recover the original operation;
+missing/unreadable history refuses without provider input or a reusable failed
+client. This is candidate-source qualification, not a published Python runtime
+or whole-plugin compatibility claim.
+
+The explicit `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+entry now shares this owner, the existing Todo session planner and the
+operator-granted delegation callback. The module flag is default-off and
+cannot be combined with `--dsh-runner` or another host. Configuration readback
+identifies `owned_native_sdk` but retains `runtime_qualified: false`.
+File/SQLite qualification uses the actual CLI, SDK and detached callback to
+resume the original persisted session/profile, consume once, reject repetition
+and record `not_executed`; the typed wait remains a rejected delegation rather
+than validated domain completion. Provider endpoint bytes join the immutable
+profile without serializing credentials. The generic `--confirmed-operation-id`
+and `--operation-source-route-json` flags retain their Codex aliases.
+The CLI fixture does not certify original-card delivery or genuine approval.
+
+A subsequent bounded live qualification used the real model, an actual Lark
+card and authenticated human confirmation. Normal native CLI continuation
+restored the original DSH session/profile, consumed once, recorded canonical
+`not_executed` and patched the same original card; independent provider
+readback verified the result. This involved zero financial action. The
+continuation was manually invoked after the callback: unattended wakeup was
+not configured, and the approximately 246-second confirmation-to-host-start
+observation does not meet the 60-second healthy automatic-path target below.
+Other runtimes, global installation, account effects and financial utility
+remain unqualified. An older globally installed Core rejects the new DSH
+executor during inbox projection; the candidate-source entry reads it, so
+rollback must retain those pins rather than assume old-reader compatibility.
+
 Public `goal-channel inspect-operation/consume-operation/report-operation`
 remain fail-closed before private reads or writes, even with matching
 `CODEX_THREAD_ID`, route flags, self-signed proof or an older runtime's actor

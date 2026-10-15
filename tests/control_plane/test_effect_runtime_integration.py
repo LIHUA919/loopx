@@ -5,6 +5,8 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -28,6 +30,43 @@ from loopx.control_plane.coordination.runtime_shadow import (
 
 _TURN_KEY = "sha256:" + "a" * 64
 _TODO_ID = "todo_fixture0001"
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
+    tmp_path, monkeypatch, replacement,
+):
+    locator = tmp_path / "runtime.json"
+    if replacement:
+        locator.write_text(json.dumps({"token": "replacement"}))
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
+    with subprocess.Popen(
+        [sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE, text=True, start_new_session=os.name == "posix",
+    ) as process:
+        try:
+            assert process.stdout.readline().strip() == "ready"
+            info = {"pid": process.pid, "token": "original"}
+            # Serving handoff remains enough for the operator's existing action.
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05,
+            )["status"] == "stopped"
+            # Namespace disposal needs stronger evidence than locator turnover.
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05, wait_for_process_exit=True,
+            )["status"] == "shutdown_pending"
+            assert process.poll() is None
+            process.terminate()
+            process.wait(timeout=5)
+            assert effect_runtime._stop_effect_runtime(
+                locator, info, timeout=.05, wait_for_process_exit=True,
+            )["status"] == "stopped"
+            if replacement:
+                assert json.loads(locator.read_text()) == {"token": "replacement"}
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def _effect_id(label: str) -> str:

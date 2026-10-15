@@ -182,6 +182,26 @@ def test_configured_dsh_model_does_not_qualify_operation_transport_or_change_hos
     assert "fixture-token" not in json.dumps([ordinary, blocked, payload])
 
 
+def test_explicit_dsh_native_transport_uses_resolved_profile_without_claiming_qualification():
+    kwargs = dict(
+        environ={"DEEPSEEK_API_KEY": "fixture-token"}, module_probe=_RUNTIME,
+        provider="deepseek-official", model="fixture-model", reasoning_effort="high",
+    )
+    ordinary = managed_executor_binding("dsh", **kwargs)
+    observed = managed_executor_binding("dsh", dsh_operation_module_configured=True, **kwargs)
+    assert "operation_transport" not in ordinary
+    assert observed["available"] is True
+    assert observed["execution_profile"] == ordinary["execution_profile"]
+    transport = observed["operation_transport"]
+    assert transport["kind"] == "owned_native_sdk"
+    assert transport["revision"] == "dsh-native-operation-tools-v0"
+    assert transport["configuration_valid"] is True
+    assert transport["runtime_qualified"] is False
+    assert transport["human_confirmation_required"] is True
+    assert transport["first_consumption_required"] is True
+    assert transport["source_conversation_is_executor"] is False
+
+
 def test_managed_executor_reports_the_operator_credential_and_endpoint():
     binding = managed_executor_binding(
         "dsh",

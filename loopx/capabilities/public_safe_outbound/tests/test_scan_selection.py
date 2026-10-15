@@ -199,6 +199,7 @@ def test_scan_root_cli_reports_a_hit_without_content_or_absolute_paths(tmp_path:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
         # Only the generic rules: a marker file from the caller's shell must
         # not change what this test observes.
@@ -226,6 +227,7 @@ def _scan_root_cli(root: Path) -> subprocess.CompletedProcess[str]:
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
         env={key: value for key, value in os.environ.items() if key != "PUBLIC_SAFE_CONFIG"},
     )

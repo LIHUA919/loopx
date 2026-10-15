@@ -1,7 +1,7 @@
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
-import { readConversationReturns } from "../data/conversation-return-observation";
+import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
@@ -12,6 +12,7 @@ import { directoryStatusPayload, fetchWorkspaceDirectory, loadWorkspaceGoalSnaps
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
+import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
 import { dashboardRoute } from "../router";
 import {
@@ -797,21 +798,12 @@ function personalGoalRegistryFinding(payload: StatusPayload, row: GoalDirectoryR
   );
 }
 
-function personalGoalHasFailureStatus(row: GoalDirectoryRow) {
-  return [row.status, row.goal.status, row.latestRun?.classification, row.lifecyclePhase]
-    .filter(Boolean)
-    .some((value) =>
-      /(^|[_\s-])(failure|failed|error|broken|unhealthy|blocked[_\s-]?health|health[_\s-]?blocked)([_\s-]|$)/i
-        .test(value ?? ""),
-    );
-}
-
 function personalGoalNeedsRepair(payload: StatusPayload, row: GoalDirectoryRow) {
   const staleWarning = row.queueItem?.stale_latest_run_warning;
   return row.severity === "high"
     || Boolean(personalGoalRegistryFinding(payload, row))
     || Boolean(staleWarning?.requires_refresh_state || staleWarning?.severity === "high")
-    || personalGoalHasFailureStatus(row);
+    || hasGoalFailureStatus([row.status, row.goal.status, row.latestRun?.classification, row.lifecyclePhase]);
 }
 
 function personalRepairText(payload: StatusPayload, row: GoalDirectoryRow) {
@@ -1058,9 +1050,15 @@ function buildPersonalHomeModel(
       hostThreadActivity: goal.host_thread_activity ? {
         completeness: goal.host_thread_activity.completeness,
         threads: goal.host_thread_activity.threads.map((thread) => ({
+          agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
           state: thread.state,
+          deliveryWindow: thread.delivery_window ? {
+            state: thread.delivery_window.state,
+            ageHours: thread.delivery_window.age_hours ?? null,
+            reason: thread.delivery_window.reason ?? null,
+          } : null,
         })),
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
@@ -2010,6 +2008,8 @@ function PersonalGoalHome({
     let failures = 0;
     setExecutionSessions([]);
     setExecutionSessionSnapshots({});
+    const controller = new AbortController();
+    let snapshots: Record<string, ChatSessionSnapshot> = {};
     const discover = async () => {
       if (cancelled) return;
       if (document.hidden) {
@@ -2017,20 +2017,14 @@ function PersonalGoalHome({
         return;
       }
       try {
-        const listed = await fetchChatSessions({ goalId: selectedGoal.goalId });
+        const observed = await readTaskSessions(selectedGoal.goalId, snapshots, controller.signal);
         if (!cancelled) {
-          const taskSessions = listed.sessions.filter((session) => session.channel_id?.startsWith("task."));
-          setExecutionSessions(taskSessions);
-          const snapshots = await Promise.allSettled(taskSessions.map((session) => fetchChatSession(session.session_id)));
-          if (!cancelled) {
-            const partialFailure = snapshots.some((result) => result.status === "rejected");
-            failures = partialFailure ? failures + 1 : 0;
-            setExecutionDiscoveryError(partialFailure ? "partial" : null);
-            setExecutionSessionSnapshots(Object.fromEntries(snapshots.flatMap((result, index) => {
-              if (result.status !== "fulfilled") return [];
-              return [[taskSessions[index].session_id, result.value]];
-            })));
-          }
+          snapshots = observed.snapshots;
+          setExecutionSessions(observed.sessions);
+          const partialFailure = observed.unavailableSessionIds.length > 0;
+          failures = partialFailure ? failures + 1 : 0;
+          setExecutionDiscoveryError(partialFailure ? "partial" : null);
+          setExecutionSessionSnapshots(snapshots);
         }
       } catch {
         failures += 1;
@@ -2041,6 +2035,7 @@ function PersonalGoalHome({
     void discover();
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [readOnly, selectedGoal?.goalId]);

@@ -413,6 +413,13 @@ Todo owns the bounded postcondition. Replan owns direction change. A stride
 controller may recommend split, merge, continue, settle, or escalate, but it
 must not close a Todo, fabricate evidence, or clear a replan obligation.
 
+The [wake/context/correction chain](agent-session-execution-modes-v0.md#wake-current-context-and-correction-form-one-chain)
+keeps prompt prose subordinate to these owners. Local correction preserves
+unaffected work; widening requires relevant current evidence. A due review may
+retain the path, and later work/outcome readback qualifies correction benefit.
+Heartbeat templates no longer add independent two-stall replan/self-pause rules.
+This does not remove Core stall triggers or change configured review cadence.
+
 Research goals may also consume the typed frontier defined by the Research
 Exploration RFC. A composition experiment can be one delivery slice; the
 stride model does not create another research graph.
@@ -425,6 +432,13 @@ dashboards, and scheduler projections may recommend intervention but cannot
 silently convert a proposal into authority.
 
 ### 7.5 Long-running work and decision checkpoints (proposed refinement)
+
+Pause and wake eligibility precede this observation loop. Follow the
+[session pause/resume boundary](agent-session-execution-modes-v0.md#pause-resume-and-automatic-dispatch-boundaries):
+explicit stops disarm continuation; dependency waits retain bounded observation;
+validated no-follow-up ends polling. A result event or scheduler timer cannot
+clear a stop, and a pre-pause admission cannot survive resume. Qualify actual
+request/timer readback separately from prompt guidance and in-flight settlement.
 
 This 2026-10-04 refinement is a proposal for M3/M5, not shipped adaptive
 scheduling. It separates an **experiment boundary**, a **model decision
@@ -671,6 +685,25 @@ but its novelty does not establish that it addresses the remaining gap. Local or
 synthetic improvement needs applicable transfer evidence; repeated identical
 outcomes are not new information. Prefer the smallest coverage that resolves the
 choice to another broad sweep, while preserving relevant failure evidence.
+
+Before a local check vetoes further work, identify its source and the goal it
+protects. Original constraints and frozen study criteria retain their authority.
+An agent-proposed candidate heuristic may be revised prospectively with an
+explicit rationale and retained counterevidence; the previous failed result
+stays failed. Compare incumbent behavior under the same relevant control and
+measure or bound the discrepancy's effect on the goal, reusing applicable
+evidence before spending on a finite diagnosis. Readiness for an authorized
+informative evaluation differs from evidence sufficient to replace the
+incumbent. Both decisions retain budget, feedback and permission limits and
+account for full marginal and opportunity cost.
+
+| Evidence at the decision | Appropriate interpretation |
+|---|---|
+| An output violates the task interface or uses forbidden information | Preserve the constraint and repair or reject; heuristic revision cannot waive it. |
+| A candidate misses an agent-chosen numerical tolerance, with task impact unknown | Compare the incumbent and task impact; declare any prospective replacement criterion. Do not claim either safety or harm from the threshold alone. |
+| A frozen comparison criterion fails | Retain that verdict; a revised experiment is separately declared, not a retroactive pass. |
+| A valid candidate regresses on the authoritative objective | Preserve the incumbent and scoped regression, even if local proxies improve. |
+| A synthetic probe improves | Transfer remains unknown; weigh an eligible informative evaluation against its cost, without automatic submission or adoption. |
 
 These questions guide existing axis plans/reasons and `next_probe`; they add no
 decision field, settlement gate, automatic pivot, family ban or strategy version.
@@ -984,11 +1017,24 @@ real native processes and deterministic local inference. Scientific utility,
 actual task/profile admission and the frontend journey remain unqualified.
 See the [warm entry contract](../../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress).
 
-Retaining historical research files is not yet equivalent to delivering that
-research in the current typed review. Remaining continuation acceptance must
-show source-bound findings, counterevidence and prior decision followthrough at
-the first current replan, with distinct current authority. An empty destination
-projection cannot establish that the retained research is absent. The strategy's
+The [generic research checkpoint entry](../../reference/research-checkpoint.md)
+now composes the existing artifact, session and Todo/Explore owners for ordinary
+Goals. Codex storage and fork IO live in its Host provider; benchmark adapters
+call inward and add evaluator/budget participants. Capture and adoption are
+separate explicit operations. This CLI/Host stage does not complete the packaged
+frontend or disaster-replacement acceptance.
+
+Retaining historical research files alone does not deliver them to a current
+typed review. Explicit warm-context adoption now seeds the fresh Goal's Explore
+knowledge log from the verified source, preserving scoped findings, counterevidence
+and topology with checkpoint/event provenance. The existing result-log owner
+guards ordered-prefix recovery; newer destination evidence is never overwritten.
+Historical research-observation execution lineage remains inert in the archive.
+The synthetic joined receiver exercises a current review citing a retained
+counterexample. Scientific continuation still needs actual first/next review
+readback and prior-decision followthrough; importing facts cannot certify model
+judgment or revive source decision authority. An empty destination projection
+cannot establish that retained research is absent. The strategy's
 existing three-axis guidance now asks for a discriminating observation, checks
 that an intervention actually changes relevant behavior, and distinguishes
 non-execution from failed transfer or limited route potential. These questions

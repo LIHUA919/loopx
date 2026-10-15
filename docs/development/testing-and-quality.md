@@ -170,18 +170,36 @@ Changes to the classifier or workflow need both code-path and documentation-only
 qualification. Keep required check names stable and never require a
 workflow-level path-filtered check that cannot report on every PR.
 
+Cancelled `main` push workflows skip the runner-backed `checks`, `pytest`,
+`stage2c-correctness-e2e` and `merge-gate` aggregates. Previously their job-level
+`always()` conditions kept requesting runners after cancellation. The guard
+uses GitHub's [`cancelled()` status](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+only for push events: an uncancelled main run still aggregates failed upstream
+work, and PR, nightly, manual and merge-group gate conditions retain their
+existing behavior. Evidence-upload steps keep `always()`. A cancelled main
+cohort is incomplete qualification, never a successful full run; this change
+does not reserve capacity or establish a release-priority guarantee.
+
+已取消的 `main` push 工作流跳过需申请 runner 的 `checks`、`pytest`、
+`stage2c-correctness-e2e` 和 `merge-gate` 汇总；此前 job 级 `always()` 在取消后
+仍会申请 runner。新条件仅对 push 事件检查 `cancelled()`：未取消的主干运行仍汇总
+上游失败，PR、夜间、手动和合并队列的门禁条件保留原行为。证据上传步骤继续使用
+`always()`。已取消主干候选仍是未完成资格，不能报告全量成功；本改动不预留容量，
+也不保证发布优先级。
+
 Closing or merging a PR retires its outstanding Python qualification. A PR
 number keeps the same concurrency lane when the merged close event changes
 `github.ref` to the base branch. Closed events skip classification and the final
 gate; open PRs retain the same required jobs and cancellation failures.
 
-A trusted `pull_request_target` cleanup handles closed and synchronize events.
-Closed events cancel remaining runs
-of this workflow, using job-local `actions: write` without checking out PR code.
+A trusted `pull_request_target` cleanup in **CI Maintenance** handles closed and
+synchronize events. Closed events cancel remaining runs of Python Tests, using
+job-local `actions: write` without checking out PR code.
 It verifies the current closed PR, source repository/branch and close time;
-it preserves reopened PRs, another open PR on that branch, newer runs and
-foreign repositories. A missing run-to-PR association requires the exact closed
-head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
+it preserves reopened PRs, another open PR on that branch, newer runs at a
+different head and foreign repositories. Delayed runs at the exact closed head
+can be retired even when created after close. A missing run-to-PR association
+requires the exact closed head. After ordinary cancellation, it uses GitHub's force-cancel endpoint for
 nonterminal `always()` aggregates. Before either cancellation stage it rereads
 both the target PR and open PRs sharing its source branch; a new sibling or
 unavailable lookup prevents the effect. A fresh retry can resume after the
@@ -191,9 +209,11 @@ providing a GitHub shared-pool priority guarantee.
 
 PR 关闭或合并后，以 PR 编号维持原并发 lane，关闭事件跳过分类与最终门；开放
 PR 的必需检查及取消失败规则不变。来自目标分支的可信 `pull_request_target`
-清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
-状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、更新
-运行及其他仓库；缺少 PR 关联时只处理确切关闭 head。普通取消后仍未结束的
+CI Maintenance 清理任务处理 closed 与 synchronize 事件（更新规则见下方共享分片说明），
+仅自身持有 `actions: write`，不检出 PR 代码。它核验当前关闭
+状态、源仓库/分支与关闭时间，保留重开的 PR、同源分支上的其他开放 PR、不同 head 的更新
+运行及其他仓库；确切关闭 head 的延迟运行即使在关闭后创建也可清理，缺少 PR 关联时
+同样只处理确切关闭 head。普通取消后仍未结束的
 `always()` 汇总使用强制取消 API。普通及强制取消前都重读目标 PR 和同源分支的
 开放 PR；新出现的共享分支 PR 或读取失败会阻止副作用，分支不再共享后可重新
 触发清理。清理需要一个短 runner 任务；这会释放过期
@@ -405,6 +425,22 @@ Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时�
 这可能丢弃可选缓存条目，不允许放弃已接纳的业务操作。关闭缓存时无需 worker，
 继续普通清理。一秒额度不涵盖定位文件锁、存储等待或操作系统调度；故障注入不能
 代替原生平台资格验证，V8 CPU 样本也不测量内核 IO。
+
+Smoke cleanup owns every valid runtime locator in its newly created private
+temporary namespace, including runtimes loaded by temporary base checkouts.
+It uses the existing authenticated shutdown protocol, then observes actual
+process exit before deleting the namespace; serving-locator turnover alone
+does not establish that Node has finished its exit-time cache writes. Namespace
+and locator symlinks are not followed. A cleanup failure retains the fixture
+and reports a failed check with the original command output. Operator restart
+keeps its existing serving-handoff semantics. This fixture repair does not
+qualify native intermittent failures or sustained operation.
+
+Smoke 清理覆盖新建私有临时目录中所有合法 runtime locator，包括临时基线 checkout
+启动的进程。它复用既有认证 shutdown，等实际进程退出后再删目录；定位文件退休不代表
+Node 的退出缓存写入已经结束。清理不跟随 namespace 或 locator 符号链接；无法证明
+退出时保留 fixture，以失败结果报告并保留原命令输出。操作员 restart 仍沿用既有服务
+交接语义；该 fixture 修复不认证原生间歇故障或持续运行。
 
 Keep a deterministic, public-safe production-scale fixture beside the focused
 cases. Its envelope should cover realistic role/status distributions,
@@ -711,15 +747,22 @@ PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token �
 
 Full Python shards share six repository-wide job concurrency groups, one per
 `matrix.shard`, across PR, main, merge-queue and manual runs carrying this
-workflow version. Each group admits one running job and uses `queue: max`
+workflow version. Shards wait for `checks`; ordinary PRs enter only after it
+succeeds. Non-PR runs still collect Python diagnostics after failed checks when
+classification and the source bundle succeeded and the workflow is not cancelled.
+Skipped required shards remain a qualification failure. This avoids long-test
+work for known-red PRs but adds serial latency when capacity is idle; see the
+[admission tradeoff](ci-impact-selection.md#six-complete-python-shards).
+Each group admits one running job and uses `queue: max`
 to retain up to 100 pending jobs instead of replacing another current
 candidate. Workflow-level cancellation requests retirement of the same PR's
 obsolete head. Trusted base-branch cleanup on `synchronize` also retires its
 remaining obsolete runs, including `always()` aggregates that survive ordinary
-cancellation. It requires the event's current head, exact PR association, source
-repository and branch, and rechecks the current head before ordinary and force
+cancellation. It requires the event's current head, source repository and branch,
+plus either an exact PR association or the exact webhook `before` head with
+`after` and event source identity matching the current PR. It rechecks the current head before ordinary and force
 cancellation. It preserves another open PR sharing that branch. Current-head
-runs, unassociated open-PR runs and ordinary required gate predicates remain
+runs, other unassociated open-PR runs and ordinary required gate predicates remain
 unchanged: cancelled, skipped or incomplete dependencies cannot become a green
 aggregate. This adds one short trusted cleanup job per update without checkout,
 PR-code execution or new permissions on qualification jobs. Older workflow
@@ -734,12 +777,16 @@ retaining workflow-level cancellation and the required gate. See GitHub's
 [concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 全量 Python 分片按 `matrix.shard` 共用六个仓库级 job concurrency 组，适用于
-携带本版 workflow 的 PR、main、merge queue 和手动运行。每组允许一个运行中 job，
+携带本版 workflow 的 PR、main、merge queue 和手动运行。分片先等待 `checks`，
+普通 PR 仅在其成功后进入队列；非 PR 在分类、源码构建成功且未取消时仍保留失败后
+的完整 Python 诊断。必需分片跳过仍判失败。此规则减少已知失败 PR 的长测试占用，
+但会增加空闲队列中的串行延迟。每组允许一个运行中 job，
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
 旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、
-精确 PR 关联、源仓库和分支，在普通及强制取消前重新读取 head；同分支另一 open
-PR、当前 head 和无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
+源仓库和分支，以及精确 PR 关联，或 `after` 和事件来源均匹配当前 PR 时的确切
+webhook `before` head；普通及强制取消前重新读取 head。同分支另一 open PR、
+当前 head 和其他无关联 run 均被保护。必过汇总条件不变，取消、跳过或缺失依赖
 不能变绿。每次更新增加一个短清理 job，不 checkout 或执行 PR 代码，不增加普通
 验证 job 的权限；base 分支旧版 workflow 仍只清理 closed 事件。队列溢出、取消
 和缺失 coverage 仍不能通过必需检查。

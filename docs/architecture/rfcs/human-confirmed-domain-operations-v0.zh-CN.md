@@ -354,6 +354,46 @@ context 调用，结果均由既有 typed result validator 接受）、规范
 真实 context 探针只在当前拥有的 home 创建新的受管 GPT session，不建提案、
 不造群确认、不执行金融副作用；合成批准夹具不是真实用户批准。
 
+可选的 [DSH 原生上下文模块](../../../packages/dsh-loopx-plugin/README.md#optional-native-operation-context-sdk-prerequisite)
+交付独立加载的只读 SDK 前置组件。真实 SDK/内置 runtime `0.1.5rc1` 的工具调用
+已返回当前调用 session、开放的原生 Turn 和白名单 agent options；该观察不是 Core
+actor，也不证明 HTTP wire 实际配置；该只读模块始终返回 `execution_allowed: false`。
+
+独立可选的 `native-operation` 模块和内部 `OwnedDshOperationHost` 现将真实
+SDK/内置 runtime `0.1.5rc1` 接到既有 Core handler。同一活 SDK 连接的两个独立
+已准入 Turn 覆盖原生 session/Turn/call 配对、实际观察的 profile、规范准备、
+确认前拒绝、夹具确认、首次消费、重复拒绝与规范 `not_executed` 结果。
+File/SQLite Goal authority 消费者继续使用原 action-store owner。内核 peer PID
+及精确原生工具参数必须匹配私有有界 Unix 连接；不新增 bearer、调用者 actor、
+批准账本或副作用重试，旧 Codex executor 编码和默认关闭行为保持兼容。
+
+该阶段是使用本地合成响应源的后端集成，不是真实用户批准、原卡送达或金融效用。
+SDK `0.1.5rc1` 的跨进程恢复仍在启动前拒绝，原 `session already exists` 失败保留。
+隔离候选使用上游 `2fbf4359` 官方脚本构建的 Python SDK `0.2.1a3` wheel，配合
+显式 npm runtime `@deepseek-ai/dsh@0.2.1-alpha.3`，通过公开 `resume_session`
+恢复原身份。SDK 文件、Node/入口原字节及完整 npm closure 纳入冻结 profile。
+File/SQLite 重启用例恢复同一操作；历史丢失/不可读时拒绝，不向模型发送输入，
+不替换绑定，失败 client 不可复用。这只是候选源码资格，不能当作已发布 Python
+runtime 或整个插件的兼容性证明。
+
+显式 `turn run-once --host dsh --dsh-operation-module /absolute/native-operation.js`
+入口现复用该 owner、原 Todo session planner 和 operator 授权的 delegation
+callback。模块开关默认关闭，不能与 `--dsh-runner` 或其它 host 混用。配置读回
+标明 `owned_native_sdk`，仍保持 `runtime_qualified: false`。File/SQLite 使用
+真实 CLI、SDK 和独立 callback 进程恢复原持久 session/profile，首次消费、重复
+拒绝并记录 `not_executed`；typed wait 仍是 rejected delegation，不是业务完成。
+endpoint 原字节的哈希纳入不可变 profile，不序列化凭据。通用
+`--confirmed-operation-id`、`--operation-source-route-json` 保留旧 Codex 别名。
+CLI 夹具不证明原卡送达或真实用户批准。
+
+后续有界真实验收使用实际模型、真实 Lark 卡片及经过认证的人类确认。正常原生
+CLI 续接恢复原 DSH session/profile，首次消费一次，登记规范 `not_executed`，
+并更新同一原卡；独立 provider 读回验证结果，金融动作是零。此续接由角色在
+callback 后手动调用：无人值守唤醒尚未配置，实际确认至宿主启动约 246 秒，
+不满足下文健康自动路径 60 秒目标。其它 runtime、全局安装、账户副作用和金融
+效用仍未验。本机较旧 Core 在 inbox 投影时拒绝新的 DSH executor，候选源码
+入口可读；回滚须保留这些 pin，不能假定旧 reader 兼容。
+
 公开 `goal-channel inspect-operation/consume-operation/report-operation` 仍在
 私有读写前拒绝，即使 `CODEX_THREAD_ID`、路由、自签 proof 完全匹配或旧运行时
 意外返回 actor 成功，也没有 proof-import 捷径。

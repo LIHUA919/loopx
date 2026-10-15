@@ -601,6 +601,15 @@ into core. Dashboard's generic status parser consumes only that compact
 contract. A built-in renderer may separately own a provider view schema, as the
 Finance renderer does for `decision_research_dashboard_v0`.
 
+The public `loopx.extensions.presentation` API also exports
+`find_public_safe_local_path(text)`. Providers use this shared path classifier
+through their existing presentation API rather than importing its internal Core
+owner. It does not certify that text is secret-free or authorize publication;
+providers retain their complete view validation and the normal publication gate.
+A provider that requires this utility must reject presentation when it is
+unavailable, while unrelated non-presentation operations may retain their
+explicit legacy validation path.
+
 The validator executes inside the active runtime interpreter - the extension's
 own environment, not the LoopX process - and LoopX launches it isolated
 (`python -I`), so `PYTHONPATH`, `PYTHONIOENCODING`, and `PYTHONUTF8` are ignored

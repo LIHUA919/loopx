@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { goalExecution, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
+import { goalExecution, goalHostDeliveryWindows, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
 
 // One Goal's session facts, mixed by mode. `updated_at` stands for the time the
 // owner last recorded anything for that session.
@@ -18,6 +18,20 @@ const minutesAgo = (minutes) => new Date(now - minutes * 60_000).toISOString();
 const recent = minutesAgo(2);
 const silent = minutesAgo(30);
 const old = minutesAgo(45);
+
+assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
+  { agentId: "codex", hostSurface: "codex-app", state: "idle", lastEventAt: recent, deliveryWindow: { state: "stale", ageHours: 3.5 } },
+  { agentId: "cursor-agent", hostSurface: "cursor", state: "idle", lastEventAt: recent, deliveryWindow: { state: "fresh", ageHours: 0.2 } },
+] } }), [
+  { agentId: "codex", hostSurface: "codex-app", state: "stale", ageHours: 3.5 },
+  { agentId: "cursor-agent", hostSurface: "cursor", state: "fresh", ageHours: 0.2 },
+]);
+assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
+  { agentId: "codex", hostSurface: "codex-app", state: "unknown", lastEventAt: null, deliveryWindow: { state: "missing", reason: "no_observation" } },
+] } }), [{ agentId: "codex", hostSurface: "codex-app", state: "missing", ageHours: null }]);
+assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
+  { agentId: "codex", hostSurface: "codex-app", state: "idle", lastEventAt: recent, deliveryWindow: { state: "unknown", reason: "no_expectation" } },
+] } }), [], "an unavailable cadence expectation is not a missed window");
 
 function executionOf(sessions, observation) {
   const execution = goalExecution(sessions, "goal-a", observation, now);

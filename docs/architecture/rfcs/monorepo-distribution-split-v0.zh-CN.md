@@ -246,6 +246,22 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 - **对规范设计的影响：** 无；必需结果不变，证据列在人工审查之外增加一项可执行的
   过渡性不增长检查。
 
+### 2026-10-15 — Checkpoint Host 组合与 presentation SDK 边界
+
+- **基线：** `77b404b92`。
+- **交付：** native checkpoint 检查、重建及研究上下文组合从 `control_plane`
+  移到第 5 节已有的 `hosts` owner。CLI、benchmark 与测试内部调用方一起迁移；
+  两个旧模块均未随 v1.4.0 发布，因此不保留公开兼容 shim。类型化状态与 effect
+  权威仍由现有控制面持有。
+- **边界修复：** Finance 经已有 `extensions.presentation` SDK import 使用共享
+  本地路径分类器，不新增包到内核的依赖边，也不复制隐私 matcher。既有 13 条
+  历史 import pin 保持不变。
+- **证据：** 架构/import ratchet、Finance 最小公开 SDK fixture、真实 native
+  checkpoint 捕获/分叉/采用及一致性反例。捕获在两次逻辑读取与物理封存之间复用
+  一个检查进程，保留字节 witness，不重新打开历史库写入进程。
+- **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
+  不改变打包方案或权威决策。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

@@ -10,6 +10,19 @@ from test_local_delegation import service as delegation_service
 service = delegation_service
 
 
+@pytest.mark.parametrize("configured", [False, None, "true", 1, [True]])
+def test_dsh_transport_requires_explicit_native_module_observation(configured):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    result = effect_runtime_result("operation.managed_transport.project", {
+        "host": "dsh", "dsh_operation_module_configured": configured,
+        "model": "fixture-model", "reasoning_effort": "high",
+    })
+    assert result["reason"] == "operation_transport_host_unsupported"
+    assert result["transport"]["configuration_valid"] is False
+    assert result["transport"]["runtime_qualified"] is False
+
+
 @pytest.mark.parametrize("host", [["codex-cli"], {"host": "codex-cli"}, None, True, 1])
 def test_supported_host_readback_never_coerces_an_invalid_host(host):
     from loopx.control_plane.effect_runtime import effect_runtime_result
