@@ -30,3 +30,15 @@ test("room orientation refuses revoked identity, partial snapshot and invalid fr
     assert.throws(() => projectRoomWork(bad));
   }
 });
+
+test("optional ownership readback is fresh, minimal and actor scoped", () => {
+  const input = packet([todo("todo_owned", {claimed_by: "agent-b"}), todo("todo_hidden", {bound_agent: "agent-b"})]);
+  const plain = projectRoomWork(input);
+  assert.equal(Object.hasOwn(plain, "inspected_todo"), false, "existing callers retain their result shape");
+  const observed = projectRoomWork({...input, inspected_todo_id: "todo_owned"});
+  assert.deepEqual(observed.inspected_todo, {todo_id: "todo_owned", current_owner: "agent-b", current_claim_matches_actor: false});
+  assert.equal(JSON.stringify(observed).includes("PRIVATE_"), false);
+  assert.equal(projectRoomWork({...input, inspected_todo_id: "todo_hidden"}).inspected_todo, null);
+  const legacy = projectRoomWork({...packet([todo("todo_empty", {bound_agent: "", claimed_by: ""})]), inspected_todo_id: "todo_empty"});
+  assert.deepEqual(legacy.inspected_todo, {todo_id: "todo_empty", current_owner: null, current_claim_matches_actor: false});
+});
