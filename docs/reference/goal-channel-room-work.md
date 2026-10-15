@@ -18,6 +18,48 @@ admission rule. No existing command automatically publishes work cards.
 
 ## Preview and publish
 
+### Packaged workspace
+
+In **Settings → Lark → Connections**, open **Room work** on the existing
+Agent connection. Its Goal and Agent come from that connection; the browser
+cannot supply a different actor. The view reads current canonical availability
+without publishing a card. An inactive or incompatible Goal Channel extension
+leaves the view read-only; the existing extension and permission remain the
+configuration owner.
+
+**Claim task and send receipt** explicitly claims the next eligible task at
+the displayed revision and sends its receipt through that connection. The
+result separates historical acceptance, current ownership and verified room
+delivery. It grants no execution authority. A stale revision requires a fresh
+view; a changed connection or source route cannot reuse the earlier preview.
+
+If the response or delivery is uncertain, **Reconcile this claim** retries the
+original request. Browser session storage retains only that request tuple so
+reload can recover with the same key; it is neither Todo state nor authority.
+If session storage cannot preserve the tuple, the browser does not submit the
+claim. A failed refresh does not present an earlier ownership observation as
+fresh. IDs, observation time and the receipt are available under **Claim
+details**. Private recall never enters this panel or the room card.
+
+The packaged browser scenario `room-work` uses a real disposable local authority
+and synthetic connection/provider transport. It verifies duplicate-click
+isolation, uncertain delivery, reload/same-key recovery, independent CLI
+ownership readback, narrow layouts and keyboard/bilingual presentation. HTTP
+regressions also exercise File and SQLite stores, stale revision, connection
+retargeting, inactive extensions and foreign-origin/actor input. This does not
+qualify an already installed App, a live room or independently authenticated
+hosts.
+
+The images below show the proposed Chinese-locale packaged interaction on
+synthetic data: desktop before claiming, and the narrow result after recovery.
+They illustrate the local proposal rather than an installed or live room.
+
+![Packaged room claim on a synthetic connection](assets/room-work/claim-desktop.png)
+
+[View the narrow recovered result](assets/room-work/claim-mobile.png).
+
+### Agent CLI
+
 From a source checkout use `uv run --extra test loopx` in place of `loopx`.
 Use the source registry and a previously authorized non-production connection.
 Do not promote an active Goal merely to try these commands. Follow the existing

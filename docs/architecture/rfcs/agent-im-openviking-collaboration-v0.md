@@ -295,6 +295,17 @@ Goal Channel delivery/readback. It
 reuses promoted File/SQLite authority and the typed Todo owner; it does not
 replace the shared-service or provisioning owners.
 
+The proposed packaged workspace companion enters through the existing Lark
+connection. It reads canonical room orientation, explicitly claims through the
+same owner and reads historical acceptance, current ownership and message
+delivery separately. Its HTTP adapter derives the actor from the current
+connection and pins the preview's binding/source scope. An uncertain request
+survives page reload only as an original retry tuple; the browser gains no
+independent work or execution authority. Packaged browser and real File/SQLite
+HTTP checks retain synthetic connection/provider transport and independent CLI
+readback. These local results do not qualify native room rendering, an installed
+App, independently authenticated hosts or live OpenViking.
+
 The private `work resume` path composes existing scoped Turn Recall with fresh
 channel identity, canonical projection and quota observations. It skips memory
 ingest, rechecks scope and state after retrieval, discards context on changes,
