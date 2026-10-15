@@ -13,8 +13,6 @@ from loopx.extensions.lark import goal_channel_work as work
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tests/control_plane"))
-from canonical_authority_fixture import initialize_canonical_authority
 
 
 class SyntheticRoom:
@@ -43,8 +41,12 @@ class SyntheticRoom:
 
 
 def serve(root):
+    sys.path.insert(0, str(ROOT / "tests/control_plane"))
+    from canonical_authority_fixture import initialize_canonical_authority
+
     runtime, registry, state = root / "runtime", root / ".loopx/registry.json", root / "state.md"
-    registry.parent.mkdir(); state.write_text("## Agent Todo\n")
+    registry.parent.mkdir()
+    state.write_text("## Agent Todo\n")
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{"id": "product-release", "repo": str(root),
         "state_file": str(state), "coordination": {"registered_agents": ["agent-a", "agent-b"]}}]}))
     todos = [{"schema_version": "todo_item_v0", "todo_id": "todo_room_fixture", "role": "agent", "status": "open", "done": False,
@@ -76,8 +78,11 @@ def serve(root):
             return super().do_POST()
 
     server = ChatHTTPServer(("127.0.0.1", 0), Handler)
-    server.registry_path = registry; server.runtime_root = runtime; server.runtime_root_override = str(runtime)
-    server.lark_runner = room; server.verbose = False
+    server.registry_path = registry
+    server.runtime_root = runtime
+    server.runtime_root_override = str(runtime)
+    server.lark_runner = room
+    server.verbose = False
     print(json.dumps({"port": server.server_port, "registry": str(registry), "module": work.__file__}), flush=True)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
@@ -89,6 +94,9 @@ def serve(root):
 
 
 if __name__ == "__main__":
-    root = Path(sys.argv[1]); scratch = root / "tmp"; scratch.mkdir()
-    os.environ["TMPDIR"] = str(scratch); tempfile.tempdir = str(scratch)
+    root = Path(sys.argv[1])
+    scratch = root / "tmp"
+    scratch.mkdir()
+    os.environ["TMPDIR"] = str(scratch)
+    tempfile.tempdir = str(scratch)
     serve(root)

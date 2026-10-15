@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from test_room_work import setup, snapshot, claim  # noqa: F401
+from test_room_work import setup as setup, snapshot, claim
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
 
@@ -37,7 +37,9 @@ def api(setup):
     try:
         yield request, args, room, binding
     finally:
-        server.shutdown(); thread.join(); server.server_close()
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def intent(readback):
@@ -68,7 +70,8 @@ def test_http_claim_retry_and_independent_current_owner(api):
 
 def test_http_unknown_delivery_keeps_exact_request_recoverable(api):
     request, args, room, _ = api
-    _, preview = request(); body = intent(preview)
+    _, preview = request()
+    body = intent(preview)
     room.fail_send = True
     _, first = request(body)
     assert first["canonical_claim_accepted"] and not first["ok"]
@@ -80,7 +83,8 @@ def test_http_unknown_delivery_keeps_exact_request_recoverable(api):
 
 def test_http_stale_revision_and_changed_scope_cannot_claim(api):
     request, args, room, binding = api
-    _, preview = request(); body = intent(preview)
+    _, preview = request()
+    body = intent(preview)
     assert claim(args, "agent-b", body["expected_revision"], "peer-claim")["ok"]
     revision = snapshot(args)["provider_revision"]
     _, stale = request(body)
@@ -94,7 +98,8 @@ def test_http_stale_revision_and_changed_scope_cannot_claim(api):
 
 def test_http_client_cannot_supply_actor_or_foreign_connection(api):
     request, args, room, _ = api
-    _, preview = request(); body = intent(preview)
+    _, preview = request()
+    body = intent(preview)
     before = snapshot(args)["provider_revision"]
     assert request({**body, "actor_id": "agent-b"})[0] == 400
     assert request(query="goal_id=room-fixture&connection_id=missing")[0] == 400
@@ -122,7 +127,8 @@ def test_inactive_extension_preserves_read_only_view(api, monkeypatch):
 def test_binding_change_after_http_scope_check_is_rechecked_by_work_owner(api, monkeypatch):
     from loopx.extensions.lark import goal_channel_work
     request, args, room, binding = api
-    _, preview = request(); body = intent(preview)
+    _, preview = request()
+    body = intent(preview)
     before = snapshot(args)["provider_revision"]
     def retarget(*a, **k):
         binding["bindings"]["room-fixture"]["connections"]["agent-a"]["channel"]["chat_id"] = "oc_retargeted_fixture"
