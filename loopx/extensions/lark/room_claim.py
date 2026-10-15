@@ -265,7 +265,10 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 runtime_root=Path(p["authority_root"]), binding_path=Path(p["binding_path"]), target_path=Path(p["target_path"]),
                 goal_id=request["goal_id"], actor_id=request["actor_id"], command="claim", execute=True,
                 todo_id=request["todo_id"], expected_revision=request["expected_revision"],
-                idempotency_key=request["idempotency_key"], runner=runner, publish_receipt=False)
+                idempotency_key=request["idempotency_key"], runner=runner, publish_receipt=False,
+                # Provider reads can outlive the offer's original connection.
+                # Keep its witness through the facade's locked claim check.
+                expected_binding_digest=p["binding_digest"])
             card = build_work_card(claimed) if claimed.get("projection") else {
                 "config": {"wide_screen_mode": True}, "header": {"title": {"tag": "plain_text", "content": "Claim readback"}},
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": str(claimed.get("public_summary"))}}]}

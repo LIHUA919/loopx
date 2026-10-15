@@ -295,6 +295,10 @@ Goal Channel delivery/readback. It
 reuses promoted File/SQLite authority and the typed Todo owner; it does not
 replace the shared-service or provisioning owners.
 
+The claim callback retains its original offer binding witness through member
+and card reads into the existing locked claim check. Retargeting during either
+provider read rejects before canonical ownership or an acceptance receipt changes.
+
 The proposed packaged workspace companion enters through the existing Lark
 connection. It reads canonical room orientation, explicitly claims through the
 same owner and reads historical acceptance, current ownership and message

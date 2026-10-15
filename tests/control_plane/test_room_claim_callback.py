@@ -165,6 +165,41 @@ def test_scope_and_stale_callback_rejections_preserve_canonical_state(offered, m
     assert "PRIVATE_" not in json.dumps(room.messages)
 
 
+@pytest.mark.parametrize("read_stage", ["operator_membership_verified", "read_callback_card_content"])
+def test_callback_retargeted_during_provider_read_cannot_claim(offered, monkeypatch, read_stage):
+    args, room, binding, _, offer, event, callback_args, _ = offered
+    operation = "retarget-during-provider-read"
+    prepared = offer(key=operation)
+    assert prepared["ok"], prepared
+    callback = event(prepared)
+    before = snapshot(args)
+    messages = json.dumps(room.messages)
+    def receipt():
+        return ingress.effect_runtime_result("coordination.local_authority.operation_receipt", {
+            "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+            "runtime_root": str(args["runtime_root"]), "goal_id": GOAL, "operation_id": operation,
+        })
+
+    original_receipt = receipt()
+    assert original_receipt["status"] == "missing", original_receipt
+    original_read = getattr(ingress, read_stage)
+
+    def retarget_after_read(**kwargs):
+        observed = original_read(**kwargs)
+        binding["bindings"][GOAL]["connections"]["agent-a"]["channel"]["chat_id"] = "oc_retargeted_fixture"
+        write_goal_channel_binding(args["binding_path"], binding)
+        return observed
+
+    monkeypatch.setattr(ingress, read_stage, retarget_after_read)
+    with pytest.raises(ingress.RoomClaimCallbackError, match="Room claim callback") as rejected:
+        ingress.handle_room_claim_callback(callback, **callback_args)
+    assert rejected.value.code == "binding_changed"
+    assert snapshot(args) == before
+    assert not snapshot(args)["todos"][0].get("claimed_by")
+    assert receipt() == original_receipt
+    assert json.dumps(room.messages) == messages
+
+
 def test_restart_recovers_only_result_transport_without_a_new_transition(offered):
     args, _, _, _, offer, event, callback_args, transport = offered
     prepared = offer()
