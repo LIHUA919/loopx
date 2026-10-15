@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from ...agent_registry import registered_agent_ids_from_registry
 from ...control_plane.coordination.local_authority import (
@@ -17,6 +17,8 @@ from ...control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.coordination.authority_source_capture import authority_registry_source
+from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ...control_plane.runtime.public_safety import validate_public_safe_value
 from ...control_plane.runtime.time import now_local_iso
 from ...file_lock import exclusive_file_lock
@@ -30,6 +32,15 @@ from .goal_channel_message_delivery import (
 from .cli_transport import CommandRunner, default_subprocess_runner
 
 GOAL_CHANNEL_WORK_RESULT_SCHEMA = "loopx_goal_channel_work_result_v0"
+
+
+@contextmanager
+def room_work_sources(registry_path: Path, invoked_registry_path: Path | None = None) -> Iterator[list[dict[str, str]]]:
+    """Capture correlated IO witnesses; native claim v2 owns their effect guards."""
+    paths = {registry_path.resolve(), (invoked_registry_path or registry_path).resolve()}
+    with ExitStack() as reads:
+        sources = [reads.enter_context(authority_registry_source(path)) for path in sorted(paths)]
+        yield sources
 
 
 def _resolve_binding(binding_path: Path, target_path: Path, goal_id: str, actor: str) -> dict[str, Any]:
@@ -69,7 +80,9 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     todo_id: str | None = None, expected_revision: str | None = None,
     idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner,
     publish_receipt: bool = True, expected_connection_id: str | None = None,
-    expected_binding_digest: str | None = None) -> dict[str, Any]:
+    expected_binding_digest: str | None = None,
+    invoked_registry_path: Path | None = None,
+    registry_sources: list[dict[str, str]] | None = None) -> dict[str, Any]:
     packet: dict[str, Any] = {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "goal_id": goal_id,
         "actor_id": actor_id, "operation": f"work_{command}", "execute": execute,
         "status": "failed", "external_write_performed": False, "readback_verified": False,
@@ -81,6 +94,14 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
             raise ValueError("unsupported work command")
         if command == "claim" and (not todo_id or not expected_revision or not idempotency_key):
             raise ValueError("claim identity is incomplete")
+        if command == "claim" and registry_sources is None:
+            with room_work_sources(registry_path, invoked_registry_path) as sources:
+                route = resolve_goal_source_runtime_route(
+                    registry_path=invoked_registry_path or registry_path, goal_id=goal_id)
+                if (Path(route["source_registry"]).resolve() != registry_path.resolve() or
+                    Path(route["source_runtime_root"]).resolve() != runtime_root.resolve()):
+                    raise ValueError("source route changed")
+            registry_sources = sources
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
         if actor_id not in registered:
             raise ValueError("actor is not registered")
@@ -125,7 +146,8 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                 result = claim_canonical_todo_if_promoted(registry_path=registry_path,
                     runtime_root=runtime_root, goal_id=goal_id, todo_id=str(todo_id), role="agent",
                     claimed_by=actor_id, actor_agent_id=actor_id, dry_run=not execute,
-                    operation_id=str(idempotency_key), expected_provider_revision=str(expected_revision))
+                    operation_id=str(idempotency_key), expected_provider_revision=str(expected_revision),
+                    registry_sources=registry_sources)
             if result is None:
                 raise ValueError("canonical promotion required")
             accepted = result.get("status") in {"applied", "replayed", "recovered", "no_change"}

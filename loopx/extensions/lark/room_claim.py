@@ -25,7 +25,7 @@ from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .card_callback import operator_membership_verified, read_callback_card_content, update_callback_card, patch_result_card
 from .goal_channel_delivery_contract import goal_channel_binding_digest, goal_channel_delivery_route
 from .goal_channel_message_delivery import GoalChannelMessageDeliverySession, GoalChannelDeliveryStageError
-from .goal_channel_work import _resolve_binding, build_work_card, run_goal_channel_work
+from .goal_channel_work import _resolve_binding, build_work_card, room_work_sources, run_goal_channel_work
 from .cli_transport import CommandRunner, default_subprocess_runner
 from .goal_channel_transport import verified_app_id
 from .goal_channel_operation import _card_text
@@ -246,7 +246,8 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 delivery.get("readback_verified") is not True or event.get("message_id") != delivery["message_id"] or
                 event.get("chat_id") != delivery["chat_id"] or profile_app_id != delivery["app_id"] or profile != delivery["profile"]):
                 raise RoomClaimCallbackError("callback_delivery_scope_mismatch")
-            binding = _scope(p, runtime_root)
+            with room_work_sources(Path(p["source_registry"]), runtime_root / "registry.global.json") as sources:
+                binding = _scope(p, runtime_root)
             route = goal_channel_delivery_route(request["goal_id"], lambda _: binding)
             if route["bot_app_id"] != profile_app_id or route["sender_profile"] != profile:
                 raise RoomClaimCallbackError("callback_provider_scope_mismatch")
@@ -268,7 +269,7 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 idempotency_key=request["idempotency_key"], runner=runner, publish_receipt=False,
                 # Provider reads can outlive the offer's original connection.
                 # Keep its witness through the facade's locked claim check.
-                expected_binding_digest=p["binding_digest"])
+                expected_binding_digest=p["binding_digest"], registry_sources=sources)
             card = build_work_card(claimed) if claimed.get("projection") else {
                 "config": {"wide_screen_mode": True}, "header": {"title": {"tag": "plain_text", "content": "Claim readback"}},
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": str(claimed.get("public_summary"))}}]}

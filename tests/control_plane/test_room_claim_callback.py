@@ -9,6 +9,7 @@ import pytest
 from test_room_work import setup as room_setup, snapshot, GOAL, TODO, ROOT  # noqa: F401
 from loopx.extensions.lark import room_claim as ingress
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
+from loopx.control_plane.projects.registry_codec import project_registry_transaction
 
 
 @pytest.fixture
@@ -194,6 +195,61 @@ def test_callback_retargeted_during_provider_read_cannot_claim(offered, monkeypa
     with pytest.raises(ingress.RoomClaimCallbackError, match="Room claim callback") as rejected:
         ingress.handle_room_claim_callback(callback, **callback_args)
     assert rejected.value.code == "binding_changed"
+    assert snapshot(args) == before
+    assert not snapshot(args)["todos"][0].get("claimed_by")
+    assert receipt() == original_receipt
+    assert json.dumps(room.messages) == messages
+
+
+@pytest.mark.parametrize("read_stage", ["operator_membership_verified", "read_callback_card_content", "claim_effect"])
+def test_callback_source_route_change_cannot_claim_old_source(offered, monkeypatch, read_stage):
+    args, room, _, _, offer, event, callback_args, _ = offered
+    operation = "source-route-during-callback"
+    prepared = offer(key=operation)
+    assert prepared["ok"], prepared
+    callback = event(prepared)
+    before = snapshot(args)
+    messages = json.dumps(room.messages)
+    broker = args["runtime_root"] / "registry.global.json"
+    replacement = args["registry_path"].with_name("another-source.json")
+    replacement.write_bytes(args["registry_path"].read_bytes())
+
+    def receipt():
+        return ingress.effect_runtime_result("coordination.local_authority.operation_receipt", {
+            "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+            "runtime_root": str(args["runtime_root"]), "goal_id": GOAL, "operation_id": operation,
+        })
+
+    original_receipt = receipt()
+    assert original_receipt["status"] == "missing", original_receipt
+
+    def retarget():
+        with project_registry_transaction(broker, operation="fixture_source_retarget") as transaction:
+            current = transaction.payload_copy()
+            current["goals"][0]["source_registry"] = str(replacement)
+            transaction.commit(current)
+
+    if read_stage == "claim_effect":
+        from loopx.extensions.lark import goal_channel_work
+        original = goal_channel_work.claim_canonical_todo_if_promoted
+
+        def change_before_native_claim(**kwargs):
+            retarget()
+            return original(**kwargs)
+
+        monkeypatch.setattr(goal_channel_work, "claim_canonical_todo_if_promoted", change_before_native_claim)
+    else:
+        original = getattr(ingress, read_stage)
+
+        def change_after_read(**kwargs):
+            result = original(**kwargs)
+            retarget()
+            return result
+
+        monkeypatch.setattr(ingress, read_stage, change_after_read)
+    with pytest.raises(ingress.RoomClaimCallbackError) as rejected:
+        ingress.handle_room_claim_callback(callback, **callback_args)
+    assert rejected.value.code == "source_route_changed"
     assert snapshot(args) == before
     assert not snapshot(args)["todos"][0].get("claimed_by")
     assert receipt() == original_receipt

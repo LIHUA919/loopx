@@ -34,6 +34,7 @@ LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS = 15.0
 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = (
     "loopx_local_coordination_todo_claim_request_v1"
 )
+LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2"
 LOCAL_COORDINATION_TODO_CLAIM_METHOD = "coordination.local_authority.todo_claim"
 
 
@@ -102,6 +103,7 @@ def claim_canonical_todo_if_promoted(
     task_lease_expected_version: int | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
+    registry_sources: list[dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
     """Route a post-cutover claim to the TypeScript transaction owner."""
 
@@ -112,7 +114,8 @@ def claim_canonical_todo_if_promoted(
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA,
+            "schema_version": (LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
+                if registry_sources is None else LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -121,6 +124,7 @@ def claim_canonical_todo_if_promoted(
             "actor_agent_id": actor_agent_id,
             "registered_agents": registered,
             "registry_source": registry_source,
+            **({"registry_sources": registry_sources} if registry_sources is not None else {}),
             "operation_id": (
                 operation_id
                 if operation_id is not None

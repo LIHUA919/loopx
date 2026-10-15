@@ -1,4 +1,4 @@
-import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
+import {requirePromotionRegisteredAgents, withRegistryAuthoritySources} from "./shadow_registry_source.ts";
 import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
@@ -106,6 +106,7 @@ import {
 export const LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_claim_request_v0";
 export const LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v1";
+export const LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2";
 export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
@@ -1026,12 +1027,34 @@ export async function claimLocalCoordinationTodo(
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA) {
+        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
     const scopeFailure = unqualifiedGoalRefClaimFailure(input);
     if (scopeFailure !== null) return {...scopeFailure, source_authority: null,
       decision_read_from_provider: false, legacy_fallback_used: false};
+    if (input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA) {
+      try {
+        const guarded = structuredClone(input);
+        const sources = guarded.registry_sources;
+        delete guarded.registry_sources;
+        guarded.schema_version = LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA;
+        return await withRegistryAuthoritySources(sources, guarded.registry_source,
+          () => claimLocalCoordinationTodo(guarded, dependencies));
+      } catch (error) {
+        return {schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA, status: "failed",
+          reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_local_coordination_todo_claim_request",
+          reason: error instanceof Error ? error.message : "invalid registry source guards",
+          source_authority: null, decision_read_from_provider: false, legacy_fallback_used: false};
+      }
+    }
+    if (Object.hasOwn(input, "registry_sources")) {
+      return {schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA, status: "failed",
+        reason_code: "invalid_local_coordination_todo_claim_request", failure_kind: "protocol_failure",
+        reason: "registry_sources requires claim request v2", source_authority: null,
+        decision_read_from_provider: false, legacy_fallback_used: false};
+    }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {

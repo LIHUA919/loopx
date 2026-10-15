@@ -530,7 +530,7 @@ def handle_goal_channel_command(
                 target_path=_target_path(args, runtime_root), goal_id=goal_id, actor_id=args.agent_id,
                 command=args.goal_channel_work_command, execute=execute,
                 todo_id=getattr(args, "todo_id", None), expected_revision=getattr(args, "expected_revision", None),
-                idempotency_key=getattr(args, "idempotency_key", None))
+                idempotency_key=getattr(args, "idempotency_key", None), invoked_registry_path=registry_path)
         print_payload(payload, output_format(args), render_goal_channel_markdown)
         return 0 if payload.get("ok") else 1
     if command == "runtime":
