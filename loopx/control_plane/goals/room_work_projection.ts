@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 import {evaluateCoordinationTodoClaimDecision} from "../coordination/todo_claim.ts";
+import {normalizeTodoAgent} from "../coordination/todo_agents.ts";
 
 /** Content-minimal room orientation. Claim admission remains in the Todo owner. */
 export function projectRoomWork(value: unknown): JsonObject {
@@ -39,10 +40,18 @@ export function projectRoomWork(value: unknown): JsonObject {
     if (decision.status === "accepted") available.push({todo_id: id, claimed_by: null,
       actionability: "unclaimed"});
   }
+  const inspectedId = input.inspected_todo_id == null ? null : requireNonEmptyString(input.inspected_todo_id, "inspected_todo_id");
+  const inspected = inspectedId == null ? null : snapshot.todos.map(item => requireJsonObject(item, "canonical Todo"))
+    .find(todo => todo.todo_id === inspectedId && todo.role === "agent" &&
+      (todo.bound_agent == null || todo.bound_agent === "" || normalizeTodoAgent(todo.bound_agent, "todo.bound_agent") === actor));
   return {schema_version: "loopx_room_work_projection_v0", goal_id: goal, actor_id: actor,
     authority_state: "available", mode: "read_only", source_revision: revision,
     generated_at: observed, selected_todo: available[0] ?? null,
     counts: {unclaimed: available.length, user_gates: gates},
+    ...(inspectedId == null ? {} : {inspected_todo: inspected == null ? null : {
+      todo_id: inspectedId, current_owner: inspected.claimed_by === "" ? null : inspected.claimed_by ?? null,
+      current_claim_matches_actor: inspected.claimed_by === actor,
+    }}),
     truth_contract: {projection_grants_authority: false, memory_grants_authority: false,
       private_task_content_included: false}};
 }

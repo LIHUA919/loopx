@@ -23,7 +23,7 @@ from ...file_lock import exclusive_file_lock
 from ..runtime import default_extension_state_file, resolve_extension_activation
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
 from .goal_channel_contracts import binding_for_goal, read_goal_channel_binding
-from .goal_channel_delivery_contract import goal_channel_delivery_route
+from .goal_channel_delivery_contract import goal_channel_binding_digest, goal_channel_delivery_route
 from .goal_channel_message_delivery import (
     GoalChannelDeliveryStageError, GoalChannelMessageDeliverySession, resolve_bound_goal_channel,
 )
@@ -68,7 +68,8 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     target_path: Path, goal_id: str, actor_id: str, command: str, execute: bool,
     todo_id: str | None = None, expected_revision: str | None = None,
     idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner,
-    publish_receipt: bool = True) -> dict[str, Any]:
+    publish_receipt: bool = True, expected_connection_id: str | None = None,
+    expected_binding_digest: str | None = None) -> dict[str, Any]:
     packet: dict[str, Any] = {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "goal_id": goal_id,
         "actor_id": actor_id, "operation": f"work_{command}", "execute": execute,
         "status": "failed", "external_write_performed": False, "readback_verified": False,
@@ -90,7 +91,12 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                 resolve_extension_activation(LARK_EXTENSION_ID,
                     state_file=default_extension_state_file(runtime_root),
                     required_permissions=(LARK_GOAL_CHANNEL_PERMISSION,))
-            return _resolve_binding(binding_path, target_path, goal_id, actor_id)
+            current = _resolve_binding(binding_path, target_path, goal_id, actor_id)
+            if expected_connection_id is not None and current.get("connection_id") != expected_connection_id:
+                raise ValueError("connection changed")
+            if expected_binding_digest is not None and goal_channel_binding_digest(current) != expected_binding_digest:
+                raise ValueError("binding changed")
+            return current
 
         binding = current_binding()
         session = GoalChannelMessageDeliverySession(goal_id=goal_id, binding=binding,
@@ -137,7 +143,8 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
             raise ValueError("canonical promotion required")
         packet["projection"] = effect_runtime_result("goal_channel.work.project", {
             "goal_id": goal_id, "actor_id": actor_id, "registered_agents": registered,
-            "snapshot": snapshot, "observed_at": now_local_iso()})
+            "snapshot": snapshot, "observed_at": now_local_iso(),
+            **({"inspected_todo_id": todo_id} if command == "project" and todo_id is not None else {})})
         if command == "claim":
             current: dict[str, Any] = next((todo for todo in snapshot["todos"] if todo["todo_id"] == todo_id), {})
             packet["receipt"]["current_owner"] = current.get("claimed_by")
