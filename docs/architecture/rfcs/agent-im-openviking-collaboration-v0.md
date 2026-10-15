@@ -298,6 +298,11 @@ replace the shared-service or provisioning owners.
 The claim callback retains its original offer binding witness through member
 and card reads into the existing locked claim check. Retargeting during either
 provider read rejects before canonical ownership or an acceptance receipt changes.
+Its original broker/source registry witnesses now also survive those reads and
+the native claim handoff. The existing cross-runtime source guards serialize
+registry administration with the canonical commit. Real File/SQLite regressions
+check unchanged full state and exact receipts after pre-commit route replacement;
+these bounded checks do not qualify independent hosts or native provider IO.
 
 The proposed packaged workspace companion enters through the existing Lark
 connection. It reads canonical room orientation, explicitly claims through the

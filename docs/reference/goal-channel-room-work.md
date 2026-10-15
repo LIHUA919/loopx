@@ -101,7 +101,12 @@ by direct `todo claim`, then publishes the receipt and current orientation.
 This explicit command authorizes those two effects. Room membership, delivery,
 a card or recalled text supplies neither the Agent identity nor write scope.
 Identity and binding are reread; binding/target revocation serialize with the
-claim transaction; the registry witness is rechecked by the typed owner.
+claim transaction. The facade retains original broker/source registry witnesses
+before provider reads. Claim request v2 holds their existing cross-runtime
+mutation guards through the native canonical commit; drift rejects before a
+claim or receipt is written, and a busy source requires a fresh retry. Ordinary
+direct claim v0/v1 requests keep their existing behavior and reject v2 guard
+fields rather than silently dropping that obligation.
 
 The provider compares the expected revision inside the claim transaction.
 Competing commands at one revision cannot both commit. A stale revision returns
@@ -164,6 +169,12 @@ come from the private offer, never from incoming fields or memory. The canonical
 Todo transaction then owns the claim and idempotent receipt; the result replaces
 the initiating card after independent provider readback. A callback ACK alone
 is not an accepted claim. No claim callback acquires or renews execution authority.
+
+The original broker/source witnesses survive remote member/card reads and the
+claim handoff. A route replacement at any of those stages leaves the old-source
+Todo, provider revision, exact operation receipt and room messages unchanged.
+Normal registry administration serializes with the native claim commit; the
+effect runtime owns those guards independently of the Python transport caller.
 
 Revoke that one offer through the same trusted CLI:
 
