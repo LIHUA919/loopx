@@ -64,7 +64,7 @@ from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
     ssh_host_catalog_payload,
 )
-from .chat_room_work_api import ROOM_WORK_PATH
+from .presentation.room_work_api import ROOM_WORK_PATH
 from .chat_lark_api import (
     LarkChatRequestMixin,
     build_goal_repository_contexts as build_goal_repository_contexts,

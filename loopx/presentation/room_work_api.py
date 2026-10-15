@@ -6,12 +6,12 @@ import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
-from .extensions.lark.goal_channel_contracts import binding_for_goal, read_goal_channel_binding
-from .extensions.lark.goal_channel_delivery_contract import goal_channel_binding_digest
-from .extensions.lark.goal_channel_work import _resolve_binding, run_goal_channel_work
-from .extensions.lark import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION, goal_channel_work
-from .extensions.runtime import default_extension_state_file
+from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+from ..extensions.lark.goal_channel_contracts import binding_for_goal, read_goal_channel_binding
+from ..extensions.lark.goal_channel_delivery_contract import goal_channel_binding_digest
+from ..extensions.lark.goal_channel_work import _resolve_binding, run_goal_channel_work
+from ..extensions.lark import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION, goal_channel_work
+from ..extensions.runtime import default_extension_state_file
 
 ROOM_WORK_PATH = "/api/chat/lark/room-work"
 
@@ -60,7 +60,7 @@ class RoomWorkChatRequestMixin:
                 command="claim" if claim else "project", execute=claim, runner=self._lark_runner(),
                 todo_id=body.get("todo_id"), expected_revision=body.get("expected_revision"),
                 idempotency_key=body.get("idempotency_key"), expected_connection_id=connection_id,
-                expected_binding_digest=digest,
+                expected_binding_digest=digest, invoked_registry_path=self.server.registry_path,
             )
             activation = {}
             if not claim:
