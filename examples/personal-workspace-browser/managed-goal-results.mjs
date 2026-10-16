@@ -37,7 +37,7 @@ export const managedGoalResultsScenario = {
       // measures the Files inventory/read contract once, without that consumer.
       const chatUrl = new URL(url);
       chatUrl.searchParams.set("goalId", "product-release");
-      chatUrl.searchParams.set("view", "chat");
+      chatUrl.searchParams.set("view", "conversation");
       await page.goto(chatUrl.href, {waitUntil: "networkidle"});
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "对话", exact: true})
         .and(page.locator('[aria-current="page"]')).waitFor();
