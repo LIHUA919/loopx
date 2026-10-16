@@ -297,6 +297,10 @@ Goal Channel configuration remain usable.
 重新连接后复核当前身份、连接、权威、quota 和 lease。绑定给其他 Agent 的任务会被拒绝，
 这一修复也适用于直接的 promoted Todo claim。
 
+这里的 legacy-profile 仅指 Goal 身份兼容，不恢复已退役的 ownership mode 或未迁移的
+Markdown 写入。正常领取继续服从 canonical owner 的当前策略与准入；该入口不迁移策略，
+也不提供执行所需的 lease proof。策略迁移仍由已有的 [handoff mode](handoff-mode.md) 入口负责。
+
 公开卡片仅包含标识、计数与安全回执，不携带任务正文、证据、artifact 或记忆内容。
 已提供单次授权的 IM 领取按钮、显式撤销和结果卡片恢复；默认不启用 collector。
 真实房间、多主机、daemon reconnect、授权 artifact 引用和 OpenViking 只读检索仍待联调。

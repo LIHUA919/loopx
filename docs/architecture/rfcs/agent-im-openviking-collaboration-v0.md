@@ -334,7 +334,11 @@ OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
 synthetic checks do not close those requirements or authorize promotion.
 
 The legacy-profile local stage can be qualified without enabling source-session
-business effects. Exact GoalRef support must first qualify the existing shared
+business effects. Here, legacy-profile describes Goal identity compatibility;
+it does not restore retired ownership modes or unpromoted Markdown writers.
+Normal claims retain the canonical owner's current policy and admission, and
+this facade neither migrates that policy nor supplies execution lease proof.
+Exact GoalRef support must first qualify the existing shared
 authority head/receipt owner, retirement and caller/writer fences under the
 [Goal-instance contract](goal-instance-identity-and-orphan-recovery-v0.md).
 That later profile boundary does not expand this composition stage into a
