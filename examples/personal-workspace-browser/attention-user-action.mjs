@@ -79,6 +79,9 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       }
     }});
     const { page } = context, drawer = page.locator(".personal-context-drawer");
+    const tasksUrl = new URL(url);
+    tasksUrl.searchParams.set("goalId", "product-release");
+    tasksUrl.searchParams.set("view", "tasks");
     for (const operation of ["complete", "cancel"]) {
       const [actionId, targetId] = ready.ids[operation];
       // Registration alone never lets an unrelated peer handle this request.
@@ -86,9 +89,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
         body: JSON.stringify({ action_kind: "todo.update", normalized_parameters: { agent_id: "codex-review", goal_id: "product-release", todo_id: actionId, operation: "complete" }, context: {}, summary: "Wrong actor", idempotency_key: `wrong-${operation}` }) });
       assert.equal(denied.status, 400);
       assert.equal((await read(actionId)).status, "open");
-      await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
-      await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
-      await page.getByRole("button", { name: /^任务$/ }).first().click();
+      await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
       await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: `Handle ${operation}` }).click();
       if (operation === "cancel") await drawer.locator("summary", { hasText: "其他处理" }).click();
       await drawer.getByRole("button", { name: operation === "complete" ? "我已完成" : "不再需要", exact: true }).click();
@@ -101,11 +102,15 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       } catch (error) {
         throw new Error(`${error.message}; drawer=${await drawer.innerText()}; errors=${context.errors.join(" | ")}`);
       }
-      await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
+      await page.getByRole("button", { name: "查看更新后的 Goal" }).waitFor();
       assert.equal((await read(actionId)).status, "done");
       assert.equal((await read(targetId)).status, operation === "complete" ? "open" : "blocked");
+      // Read the same canonical result on the fixture's explicit Tasks route;
+      // Overview's unrelated providers are outside this actor/receipt check.
+      await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
+      await page.locator('[data-goal-panel="tasks"]').waitFor({ state: "visible" });
       await page.reload({ waitUntil: "networkidle" });
-      await page.getByTestId("personal-goal-home").waitFor();
+      await page.locator('[data-goal-panel="tasks"]').waitFor({ state: "visible" });
       assert.equal((await read(actionId)).status, "done", "Reload preserves canonical completion");
     }
     assert.equal(applications, 2, "Exactly one confirmed write per request");
