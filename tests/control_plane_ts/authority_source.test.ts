@@ -15,6 +15,7 @@ import {coordinationTodoReadModel, TODO_CANONICAL_READ_RECORD_SCHEMA} from "../.
 import {TODO_ITEM_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import type {AuthorityStore, AuthorityStoreCommit} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {engageFence, promotionRequest} from "./local_promotion_fixture.ts";
 import {
   claimLocalCoordinationTodo, createLocalCoordinationTodo, updateLocalCoordinationTodo,
   terminalLifecycleLocalCoordinationTodo, pollLocalCoordinationMonitor,
@@ -114,6 +115,24 @@ for (const provider of ["file", "sqlite"] as const) test(`${provider}: native cl
     registry_source: sources[1], registry_sources: sources, runtime_root: root, goal_id: "goal-a", todo_id: "todo_a",
     role: "agent", claimed_by: "agent-a", actor_agent_id: "agent-a", registered_agents: ["agent-a"],
     operation_id: "claim-a", observed_at: "2026-09-05T04:30:00Z", dry_run: false};
+  const initial = await store.loadAuthority();
+  assert.equal(initial.status, "loaded");
+  if (initial.status !== "loaded") throw new Error("fixture authority missing");
+  let unpromotedOpens = 0;
+  const unpromoted = await claimLocalCoordinationTodo(request, {createStore: () => {
+    unpromotedOpens++; return store;
+  }});
+  assert.equal(unpromoted.reason_code, "canonical_authority_required");
+  assert.equal(unpromoted.write_admitted, false);
+  assert.equal(unpromoted.decision_read_from_provider, false);
+  assert.equal(unpromotedOpens, 0, "guarded claim cannot bypass canonical admission");
+  assert.deepEqual(await store.loadAuthority(), initial);
+  assert.deepEqual(await store.readReceipt("claim-a"), {status: "missing"});
+  // A seeded store alone is not promoted authority. Reuse the explicit fixture
+  // fence before exercising the commit, without weakening production admission.
+  await writeFile(join(root, "ACTIVE_GOAL_STATE.md"), "## Agent Todo\n");
+  await engageFence(promotionRequest(root, initial.head, initial.provider_revision,
+    provider === "file" ? "file_v0" : "sqlite_v0"));
   let entered!: () => void, release!: () => void;
   const atCommit = new Promise<void>(resolve => {entered = resolve;});
   const resume = new Promise<void>(resolve => {release = resolve;});
