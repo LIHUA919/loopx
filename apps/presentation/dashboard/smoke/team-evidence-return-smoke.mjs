@@ -63,7 +63,7 @@ try {
       : route.fulfill({json: {...legacyReadback, validation}});
   };
   await page.route("**/api/chat/sessions/*/loopx", checkedRead);
-  const recheck = evidence.getByRole("button", {name: "重新读取证据", exact: true});
+  const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
   await recheck.click();
   await original().waitFor();
   await evidence.getByText("本次验收依据", {exact: true}).click();
@@ -133,6 +133,26 @@ try {
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-verifier-gap-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 980});
+  // A local pinned check is useful evidence, but cannot authenticate an
+  // independent reviewer. Keep the existing gap alongside the optional receipt.
+  validation = {...currentValidation, oracle_checks: [{criterion_id: "report-format", source_id: "report-checker",
+    source_digest: "sha256:" + "8".repeat(64), checked_at: checkTime,
+    input_versions: [], output_versions: outputVersions}]};
+  await page.route("**/api/chat/sessions/*/loopx", checkedRead);
+  await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
+  const correction = evidence.getByRole("region", {name: "纠偏证据路径", exact: true});
+  await correction.getByText("负责人指定的版本固定检查器", {exact: true}).waitFor();
+  await verificationGap.waitFor();
+  await correction.getByText("检查在声明文件的隔离副本上执行；不代表远程复核者身份或异议已解决。", {exact: true}).waitFor();
+  await selectedOutput().waitFor();
+  await verificationGap.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-local-checker-gap-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth));
+  await verificationGap.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "team-local-checker-gap-mobile.png"), animations: "disabled"});
+  await page.setViewportSize({width: 1512, height: 980});
+  await page.unroute("**/api/chat/sessions/*/loopx", checkedRead);
   // A completed source can retain its output bytes while its dependency
   // chain becomes unavailable. Reading an adoption candidate must withdraw
   // the earlier correction trace and must never offer a confirmation.
@@ -209,7 +229,7 @@ try {
   await adoptionGap.waitFor({timeout: 3000});
   assert.equal(await evidence.getByRole("button", {name: "阅读后续结果", exact: true}).count(), 0);
   assert.equal(await evidence.getByText("已记录采用 · 后续结果验收有效", {exact: true}).count(), 0);
-  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await recheck.click();
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await adoptionGap.waitFor({timeout: 3000});
@@ -229,7 +249,7 @@ try {
   assert.equal(await original().count(), 0, "Core loss clears the surrounding report, not only its trace");
   assert.equal(await evidence.getByText("本次验收依据", {exact: true}).count(), 0);
   await page.unroute("**/api/chat/sessions/*/loopx", unavailableCore);
-  await evidence.getByRole("button", {name: "重新读取证据", exact: true}).click();
+  await recheck.click();
   await original().waitFor();
   await evidence.getByRole("button", {name: "核验关联执行", exact: true}).click();
   await evidence.getByRole("button", {name: "阅读回应与证据", exact: true}).click();

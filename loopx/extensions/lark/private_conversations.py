@@ -119,19 +119,29 @@ class LarkPrivateConversations:
                           "--as", "bot", "--no-reactions", "--format", "json"]))
 
             group = selected["binding"].get("audience") == "group"
+            observation = None
             if group:
                 # Both projections read this exact message under the same App.
                 # The root is read only after canonical ancestry checks below.
                 # Outbound provenance needs no display rendering. Admission
                 # retains that projection unchanged for text and media inputs.
                 if render_content:
-                    with ThreadPoolExecutor(max_workers=2) as reads:
+                    # The fresh Bot identity and exact message projections
+                    # are independent reads. Join all three before checking
+                    # the root mention; Core still rechecks under its fences.
+                    with ThreadPoolExecutor(max_workers=3) as reads:
                         current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
                         display = reads.submit(rendered)
-                        canonical, result = current.result(), display.result()
+                        identity = reads.submit(self.bindings.observe, record["profile"])
+                        canonical, result, observation = current.result(), display.result(), identity.result()
                     message = _message(json_payload(result), event["message_id"])
                 else:
-                    canonical = self._group_source_message(record["profile"], event["message_id"])
+                    # Delivery still needs both fresh observations. Their IO
+                    # is independent; join it before checking ancestry and @.
+                    with ThreadPoolExecutor(max_workers=2) as reads:
+                        current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
+                        identity = reads.submit(self.bindings.observe, record["profile"])
+                        canonical, observation = current.result(), identity.result()
                     result, message = {"returncode": 0 if canonical else 1}, canonical
             else:
                 result = rendered()
@@ -171,7 +181,8 @@ class LarkPrivateConversations:
                     original = (message if root == event["message_id"] else
                                 self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
-                    observation = self.bindings.observe(record["profile"])
+                    if observation is None:
+                        observation = self.bindings.observe(record["profile"])
                     if (not original or original.get("chat_id") != event["chat_id"]
                             or original.get("sender", {}).get("sender_type") != "user"
                             or original.get("parent_id") or original.get("root_id") not in (None, "", root)
@@ -668,8 +679,13 @@ class LarkPrivateConversations:
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
         if row["status"] == "captured":
-            self.admit(row["profile"], row["event"])
-            row = _read_json(path)
+            # Intake may still own this capture. Wait on its existing fence and
+            # read its result before retrying admission from a stale snapshot.
+            with exclusive_file_lock(path, operation="capture_private_chat_request"):
+                row = _read_json(path)
+            if row["status"] == "captured":
+                self.admit(row["profile"], row["event"])
+                row = _read_json(path)
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
             if (self.reaction_feedback and row["status"] == "accepted"
@@ -738,7 +754,12 @@ class LarkPrivateConversations:
                         self._deliver(path, record, "admission", admission, inbox=inbox)
                     if turn and turn["status"] in {"starting", "running"}:
                         self._feedback(path, record, inbox=inbox, processing=True)
-                        self._progress(path, record, inbox=inbox)
+                        # Provider feedback may outlast the native answer. Use
+                        # the current Turn before starting a provisional draft
+                        # or deferring a final that is already available.
+                        turn = self.core.controller.store.load_turn(record["session_id"], record["turn_id"])
+                        if turn and turn["status"] in {"starting", "running"}:
+                            self._progress(path, record, inbox=inbox)
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed":
@@ -754,6 +775,8 @@ class LarkPrivateConversations:
                             "本次执行已停止。" if turn["status"] == "interrupted" else
                             "本次执行超时，原会话已保留；请发送 /status 查看状态后再决定是否重试。" if turn["status"] == "timed_out" else
                             "本次未能完成，原会话已保留。")
+                        if turn["status"] == "completed":
+                            response = self.core.todo_confirmation_reply(record["request_ref"], turn.get("response") or {})
                 else:
                     if record["status"] != "rejected":
                         self._feedback(path, record, inbox=inbox)

@@ -9,12 +9,28 @@ import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/pr
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceGoalTab, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
-import {projectGoalAcceptanceCriteria} from "../../data/goal-acceptance-observation";
+import type { SinceYouLookedDelta } from "./since-you-looked";
+import {goalAcceptanceDisplayStatus, projectGoalAcceptanceCriteria} from "../../data/goal-acceptance-observation";
 import "./goal-overview.css";
 
 export const goalOverviewAttentionId = "goal-overview-attention";
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail }: {
+/** "3 hours ago" for the owner's last look; falls back to the date for older marks. */
+function relativeLookLabel(iso: string, locale: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const minutes = Math.max(1, Math.round((Date.now() - then) / 60_000));
+  const format = new Intl.RelativeTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { numeric: "always" });
+  if (minutes < 60) return format.format(-minutes, "minute");
+  if (minutes < 60 * 24) return format.format(-Math.round(minutes / 60), "hour");
+  if (minutes < 60 * 24 * 14) return format.format(-Math.round(minutes / (60 * 24)), "day");
+  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
+}
+
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+  onOpenAgentConversation?: (agentId: string) => void;
+  /** Material changes since the owner's last acknowledged look; null when none. */
+  sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
   railOpen: boolean; onCloseRail: () => void;
   review: DeliveryReviewRead; digest: GoalWorkspaceDigest;
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
@@ -57,12 +73,24 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const criteria = contract ? projectGoalAcceptanceCriteria(contract) : [];
   const passed = criteria.filter(criterion => criterion.state === "accepted").length;
   const acceptanceCopy = goalAcceptanceContractCopy[locale === "zh-CN" ? "zh-CN" : "en"];
+  const sinceParts = sinceYouLooked ? [
+    sinceYouLooked.newlyDone ? t("since.newlyDone", { count: sinceYouLooked.newlyDone }) : null,
+    sinceYouLooked.newDecisions ? t("since.newDecisions", { count: sinceYouLooked.newDecisions }) : null,
+    sinceYouLooked.newlyBlocked ? t("since.newlyBlocked", { count: sinceYouLooked.newlyBlocked }) : null,
+    sinceYouLooked.resultsReturned ? t("since.resultsReturned", { count: sinceYouLooked.resultsReturned }) : null,
+  ].filter((part): part is string => part !== null) : [];
   return <section className="goal-overview" aria-label={t("header.overview")}>
+    {sinceYouLooked && sinceParts.length ? (
+      <p className="goal-overview-since" data-testid="goal-since-you-looked" role="status">
+        <span>{t("since.lead", { when: relativeLookLabel(sinceYouLooked.since, locale) })} {sinceParts.join(locale === "zh-CN" ? "、" : ", ")}</span>
+        {onMarkSeen ? <button onClick={onMarkSeen} type="button">{t("since.markSeen")}</button> : null}
+      </p>
+    ) : null}
     <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
       <section className="goal-overview-direction" aria-label={copy.direction}>
         <header className="goal-overview-heading">
           <h2>{contract ? copy.direction : copy.current}</h2>
-          {contract ? <span>{acceptanceCopy.verificationState[contract.status]}</span> : null}
+          {contract ? <span>{acceptanceCopy.verificationState[goalAcceptanceDisplayStatus(contract)]}</span> : null}
           <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
         </header>
         <button className="goal-direction-toggle" type="button" aria-expanded={!narrow || directionExpanded} onClick={() => setDirectionExpanded(value => !value)}>
@@ -106,7 +134,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
-    <GoalWorkspaceWork goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
+    <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>

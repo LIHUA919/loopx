@@ -214,6 +214,8 @@ def test_post_release_sealing_preserves_captured_bytes_and_original_phase(
     unit = tmp_path / "point"
     def delayed_seal(method, params, **kwargs):
         if params.get("action") == "capture" and params.get("destination") == str(unit):
+            if seal_within_phase:
+                assert params["deadline_epoch_ms"] <= min(held_deadline + 30, phase_epoch) * 1000 + 1
             container.reload()
             assert container.attrs["State"]["Running"] and not container.attrs["State"]["Paused"]
             before = counter(container)
@@ -411,6 +413,57 @@ def test_worker_capture_failure_releases_only_its_barrier(
         capture_worker(files[0], token=token, capture_id="8" * 32,
                        destination=tmp_path / "later", request_file=request)
     assert not (tmp_path / "later").exists()
+
+
+def test_full_temporary_volume_releases_real_archive_and_writer(
+        controllers, writer, tmp_path, monkeypatch):
+    import errno
+    from contextlib import contextmanager
+    from benchmark.edgebench import checkpoint_worker as worker
+
+    source, _, first, _, files, _ = controllers
+    container, request = writer
+    token = register(source, first)
+    # Exceed the socket buffer so abandoning the reader cannot finish by luck.
+    assert container.exec_run(["python", "-c",
+        "from pathlib import Path;Path('/data/payload').write_bytes(b'x'*(16*1024*1024))"]).exit_code == 0
+    responses = []
+    api_type = type(container.client.api)
+    original_get = api_type._get
+
+    def retain_response(self, url, *args, **kwargs):
+        response = original_get(self, url, *args, **kwargs)
+        if "/archive" in url:
+            responses.append(response)
+        return response
+
+    @contextmanager
+    def full_disk():
+        raise OSError(errno.ENOSPC, "synthetic full temporary volume")
+        yield
+
+    monkeypatch.setattr(api_type, "_get", retain_response)
+    before = counter(container)
+    responses.clear()
+    monkeypatch.setattr(worker.tempfile, "TemporaryFile", full_disk)
+    container.client.api.timeout = 2
+    try:
+        # Retain the traceback too: GC is not an acceptable resource-release rule.
+        with pytest.raises(OSError, match="synthetic full temporary volume") as failure:
+            capture_worker(files[0], token=token, capture_id="9" * 32,
+                destination=tmp_path / "unit", request_file=request, timeout=2)
+        assert failure.value.errno == errno.ENOSPC
+        assert not (tmp_path / "unit").exists()
+        container.reload()
+        assert container.attrs["State"]["Running"] and not container.attrs["State"]["Paused"]
+        wait(lambda: counter(container) > before)
+    finally:
+        # Also makes a baseline regression run safe when it strands its reader.
+        for response in responses:
+            response.close()
+        container.reload()
+        if container.attrs["State"]["Paused"]:
+            container.unpause()
 
 
 @pytest.mark.parametrize("separate_bank", [False, True])

@@ -32,11 +32,25 @@ frontend-only decisions or a setting for a capability with no persistent policy.
 Carry the same task through these steps:
 
 1. **Compare the journey.** Write the current and proposed user steps in the
-   existing before/after evidence. Count required navigation, information the
-   user must repeat, questions, confirmations and recovery effort. Explain the
-   information, authority or unavoidable prerequisite supplied by each required
-   step; remove a step that supplies none. This is a comparison, not a universal
-   click limit. Keep necessary scoped consent and explicit effect confirmation;
+   existing before/after evidence, anchored to the original request rather than
+   a configuration task invented from the proposed implementation. Compare
+   no change and a smaller lawful route, including preparation the Agent can
+   already perform. Separate missing intent or owner-only authorization from
+   lookup, identifiers, formatting and other preparation. Count total navigation,
+   repeated information, questions, confirmations and recovery effort. Justifying
+   each control individually cannot establish that this whole human workflow is
+   necessary. Default to one required interaction from the original intent to a usable
+   result, or zero additional interactions when the intent and authority already
+   exist. Account for every required statement, choice or confirmation, including
+   preparation outside the UI; one final button does not make a multi-round task
+   one-round. Justify each additional round by a missing fact, consequential
+   choice or authority boundary, not feature value alone. Record navigation,
+   copying, waiting and recovery separately; voluntary refinement does not raise
+   the ordinary-path budget. These are design defaults, not a click-count gate.
+   Remove work the Agent can prepare under existing authority and
+   reuse prior scoped authorization. This is a comparison, not a universal click
+   limit or a ban on legitimate technical configuration. Keep necessary scoped
+   consent and explicit effect confirmation;
    make optional refinement optional. A complete conversational draft should not
    require a second form just to repeat the same facts.
 2. **Choose the owner and composition.** Reuse the existing typed state and
@@ -61,7 +75,9 @@ Carry the same task through these steps:
    browser, installed App and real model each prove different things.
 5. **Review the task before the diff narrative.** The review capability's
    `problem_context.outcome_impact.user_experience` references the same journey
-   and validation, then asks what remains wrong even if every test passes.
+   and validation. Independently check that the author's task matches the original
+   request and challenge the full human workload against the smaller lawful
+   route, then ask what remains wrong even if every test passes.
    Reused evidence needs its revision and unchanged assumptions. A material
    unsupported claim remains unproven. A necessary confirmation can be accepted
    with its authority basis; green CI cannot justify redundant confirmation.
@@ -132,6 +148,18 @@ can require a rebuild. Text inputs normalize CRLF so a CI-built bundle remains
 valid on Windows; delivered bytes are always hashed exactly. This is integrity
 and freshness metadata, not a signature or a replacement for release attestations.
 
+### Load boundaries
+
+The workspace route is what every visit opens, so it loads eagerly. Settings
+and its editors, the contributor projection page, the benchmark study page and
+the answer report page are dynamic imports: each is its own chunk fetched the
+first time it is shown, behind a visible loading status. Keep new secondary
+surfaces behind the same kind of boundary rather than adding them to the entry
+chunk, and keep a surface eager when a scenario pins the timing of its first
+read (team results must list exactly once when a configured team appears). The bundle manifest records every chunk,
+and the one-upgrade asset retention already covers an old tab importing a
+deferred chunk after a delivery.
+
 ### Goal sidebar order
 
 Goal dragging and keyboard move controls save presentation order through
@@ -161,9 +189,11 @@ crash recovery or an already-installed App's adoption of a proposed PR.
 
 PR CI builds and verifies a clean bundle once, then uploads
 `chat-bundle-<checkout SHA>`. Consumers download that one artifact, and
-`chat-bundle-browser` exercises its actual pages in a browser in parallel. The
-`checks` aggregate requires that browser lane, so `merge-gate` cannot pass on
-an artifact that failed browser qualification. Both frontend-only and
+`chat-bundle-browser` exercises its actual pages in a browser across three
+parallel shards of the scenario catalog (`LOOPX_PERSONAL_WORKSPACE_SHARD`), with
+the companion team, craft, upgrade and ZCode smokes spread over the shards. The
+`checks` aggregate requires every shard, so `merge-gate` cannot pass on an
+artifact that failed browser qualification. Both frontend-only and
 mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.

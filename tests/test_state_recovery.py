@@ -16,7 +16,7 @@ import threading
 import pytest
 
 from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
-from loopx.state_recovery import StateRecoveryError, read_state_recovery_audit, render_state_recovery_markdown, verify_state_backup
+from loopx.control_plane.state_recovery_io import StateRecoveryError, read_state_recovery_audit, render_state_recovery_markdown, verify_state_backup
 from tests.control_plane.canonical_authority_fixture import promoted_create_fixture
 
 
@@ -133,7 +133,7 @@ def test_valid_internal_symlink_stays_inert_and_chained_escape_is_refused(tmp_pa
 
 
 def test_capacity_and_private_input_fail_before_publication(tmp_path, monkeypatch):
-    import loopx.state_recovery as recovery
+    import loopx.control_plane.state_recovery_io as recovery
 
     archive, manifest = _backup(tmp_path)
     original = archive.stat().st_mode
@@ -185,7 +185,7 @@ def test_missing_selected_storage_is_unknown_without_creation_or_fallback(tmp_pa
     archive, manifest = _backup(tmp_path, provider)
     destination = tmp_path / "inert"
     original = verify_state_backup(archive=archive, manifest=manifest, destination=destination, execute=True)
-    from loopx.state_recovery import _audit_owners
+    from loopx.control_plane.state_recovery_io import _audit_owners
 
     selected = destination / "data/runtime-root/authority" / f"{provider}-v0"
     sqlite_files = [path.relative_to(destination / "data").as_posix() for path in selected.glob("*.sqlite")]
@@ -244,7 +244,7 @@ def test_sqlite_views_are_never_evaluated_as_authority_tables(tmp_path):
 
 
 def test_offline_worker_timeout_does_not_leave_a_copy_or_stop_shared_runtime(tmp_path, monkeypatch):
-    import loopx.state_recovery as recovery
+    import loopx.control_plane.state_recovery_io as recovery
     from loopx.control_plane.effect_runtime import effect_runtime_result
 
     archive, manifest = _backup(tmp_path)
@@ -261,21 +261,45 @@ def test_offline_worker_timeout_does_not_leave_a_copy_or_stop_shared_runtime(tmp
 def test_real_sqlite_history_limit_is_complete_and_overflow_refuses_publication(tmp_path):
     registry, runtime, state = promoted_create_fixture(tmp_path, provider="sqlite")
     project = state.parents[3]
-    module = Path(__file__).parents[1] / "loopx/control_plane/coordination/local_authority_provider.ts"
-    script = f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};" + """
+    owner = Path(__file__).parents[1] / "loopx/control_plane/coordination"
+    # Seed the read-capacity fixture in one transaction, retaining owner codecs
+    # and a complete real history audit instead of timing 20,000 FULL fsyncs.
+    script = (
+        f"import {{openLocalAuthorityStore}} from {json.dumps((owner / 'local_authority_provider.ts').as_uri())};"
+        f"import {{SqliteAuthorityStore,commitDigest}} from {json.dumps((owner / 'sqlite_authority_store.ts').as_uri())};"
+        f"import {{authorityStateDelta,authorityStateDigest,isAuthorityStateCheckpoint}} from {json.dumps((owner / 'authority_state_log.ts').as_uri())};"
+        "import {DatabaseSync} from 'node:sqlite';"
+    ) + """
 let input='';for await(const chunk of process.stdin)input+=chunk;const r=JSON.parse(input);
 const store=await openLocalAuthorityStore(r.root,'goal-a');const head=await store.loadAuthority();
-if(head.status!=='loaded')throw new Error(JSON.stringify(head));let revision=head.provider_revision;
-for(let i=r.first;i<=r.last;i++){
- const result=await store.commitAuthority({expected_provider_revision:revision,operation_id:`history-capacity-${i}`,
-   events:[],receipts:[],next_projection:head.head});
- if(result.status!=='applied')throw new Error(JSON.stringify(result));revision=result.provider_revision;
-}
+if(!(store instanceof SqliteAuthorityStore)||head.status!=='loaded'||Number(head.cursor)!==r.first-1)
+ throw new Error('Unexpected isolated fixture head');
+const identity=await store.storeIdentity();if(identity.status!=='available')throw new Error('Missing fixture identity');
+const projection=JSON.stringify(head.head),digest=authorityStateDigest(head.head);
+const delta=JSON.stringify(authorityStateDelta(head.head,head.head));
+const db=new DatabaseSync(store.path);db.exec('PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');
+try{
+ const commit=db.prepare('INSERT INTO commits VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+ const checkpoint=db.prepare('INSERT INTO checkpoints VALUES (?, ?, ?)');
+ for(let i=r.first;i<=r.last;i++){
+  const cursor=BigInt(i),operation=`history-capacity-${i}`;
+  commit.run(i,operation,commitDigest(identity.store_identity,cursor,operation,head.head,[],[]),digest,digest,delta,'[]','[]');
+  if(isAuthorityStateCheckpoint(cursor))checkpoint.run(i,projection,digest);
+ }
+ db.prepare('UPDATE head SET cursor=? WHERE singleton=1').run(r.last);
+ db.exec('COMMIT');
+}finally{db.close();}
+const audit=await store.verifyAuthorityHistory();
+if(audit.status!=='verified'||audit.commits!==r.last)throw new Error(JSON.stringify(audit));
+const readback=await store.loadAuthority();
+if(readback.status!=='loaded'||Number(readback.cursor)!==r.last)throw new Error('Fixture readback mismatch');
+process.stdout.write(JSON.stringify(audit));
 """
     for first, last, expected in [(2, 20000, "readable"), (20001, 20001, "refused")]:
-        subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+        seeded = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
             "--input-type=module", "-e", script], input=json.dumps({"root": str(runtime), "first": first, "last": last}),
             text=True, capture_output=True, check=True, timeout=120)
+        assert json.loads(seeded.stdout)["commits"] == last
         backup = execute_state_backup_plan(build_state_backup_plan(project=project, runtime_root=runtime,
             registry_path=registry, output_dir=tmp_path / "backups", backup_id=f"history-{last}",
             include_registry_projects=False, include_automations=False, include_skills=False))
@@ -378,7 +402,7 @@ def test_sparse_records_are_refused_before_stdlib_extent_decoding(tmp_path, monk
 
 @pytest.mark.parametrize("kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE])
 def test_oversized_pax_variants_are_refused_without_reading_the_body(kind):
-    from loopx.state_recovery import _scan
+    from loopx.control_plane.state_recovery_io import _scan
 
     member = tarfile.TarInfo("oversized-pax")
     member.type, member.size = kind, 128 * 1024 + 1
@@ -388,7 +412,7 @@ def test_oversized_pax_variants_are_refused_without_reading_the_body(kind):
 
 
 def test_malformed_pax_record_length_is_a_bounded_archive_error():
-    from loopx.state_recovery import _scan
+    from loopx.control_plane.state_recovery_io import _scan
 
     payload = b"9" * 5000 + b" comment=invalid\n"
     member = tarfile.TarInfo("malformed-pax")
@@ -400,7 +424,7 @@ def test_malformed_pax_record_length_is_a_bounded_archive_error():
 
 
 def test_failed_publication_cleans_staging_even_when_destination_becomes_occupied(tmp_path, monkeypatch):
-    import loopx.state_recovery as recovery
+    import loopx.control_plane.state_recovery_io as recovery
 
     archive, manifest = _backup(tmp_path)
     destination = tmp_path / "inert"
