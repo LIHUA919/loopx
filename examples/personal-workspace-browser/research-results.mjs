@@ -59,8 +59,16 @@ export const researchResultsScenario = {
     });
     const {page, api} = context;
     try {
-      await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
-      assert.equal(indexes, 0, "Research must remain lazy outside the results tab");
+      assert.equal(indexes, 0, "Workspace home must not load Goal research");
+      // Overview now composes results. Use the explicit Chat destination to
+      // qualify lazy research without first mounting an Overview consumer.
+      const chatUrl = new URL(url);
+      chatUrl.searchParams.set("goalId", "product-release");
+      chatUrl.searchParams.set("view", "chat");
+      await page.goto(chatUrl.href, {waitUntil: "networkidle"});
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "对话", exact: true})
+        .and(page.locator('[aria-current="page"]')).waitFor();
+      assert.equal(indexes, 0, "Research must remain lazy on the explicit Chat destination");
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "研究成果", exact: true});
       await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();

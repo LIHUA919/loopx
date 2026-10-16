@@ -106,9 +106,16 @@ export const monitorReadbackScenario = {
           const { page, errors } = context;
           try {
             const openMonitor = async () => {
-              if (mobile) await page.getByRole("button", { name: locale === "en" ? "Open Goal navigation" : "打开 Goal 导航", exact: true }).click();
-              await page.locator(".personal-goal-link", { hasText: "Goal A" }).click();
-              await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
+              // This canonical fixture qualifies Tasks/drawer readback, not
+              // Overview's unrelated result providers. Honor its explicit view.
+              if (new URL(page.url()).searchParams.get("view") !== "tasks") {
+                const tasksUrl = new URL(url);
+                tasksUrl.searchParams.set("goalId", "goal-a");
+                tasksUrl.searchParams.set("view", "tasks");
+                await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
+              }
+              await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true })
+                .and(page.locator('[aria-current="page"]')).waitFor();
               await page.getByRole("button", { name: /Synthetic monitor readback/ }).click();
               await page.getByRole("dialog").waitFor();
             };
