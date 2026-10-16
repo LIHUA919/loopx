@@ -143,7 +143,9 @@ export const blockedReasonReadbackScenario = {
           const suffix = `${locale}-${mobile ? "mobile" : "desktop"}`;
           try {
             const openTodo = async (text) => {
-              const card = page.locator("button[aria-pressed]", { hasText: text });
+              // Overview retains inactive copies; keep strict selection on
+              // the accessible button in the current Tasks view.
+              const card = page.getByRole("button").and(page.locator("[aria-pressed]")).filter({ hasText: text });
               if (await page.getByRole("dialog").isVisible()) {
                 await page.keyboard.press("Escape");
                 await page.getByRole("dialog").waitFor({ state: "hidden" });
