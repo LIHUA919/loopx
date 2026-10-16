@@ -89,7 +89,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
       await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(`Handle ${operation}`, { exact: true }).first().click();
+      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: `Handle ${operation}` }).click();
       if (operation === "cancel") await drawer.locator("summary", { hasText: "其他处理" }).click();
       await drawer.getByRole("button", { name: operation === "complete" ? "我已完成" : "不再需要", exact: true }).click();
       await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
@@ -129,7 +129,7 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
       await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(text, { exact: true }).first().click();
+      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: text }).click();
       await drawer.getByText(text, { exact: true }).first().waitFor({ state: "visible" });
     }
     try {
@@ -158,8 +158,8 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
       assert.equal(api.durableWriteCount, writesBefore + 1, "Confirmation writes exactly once");
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.getByText(idlessText, { exact: true }).first().waitFor({ state: "visible" });
-      assert.equal(await page.getByText(actionText, { exact: true }).count(), 0, "The completed request leaves needs-you on readback");
+      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: idlessText }).waitFor({ state: "visible" });
+      assert.equal(await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: actionText }).count(), 0, "The completed request leaves needs-you on readback");
 
       // Without a stable todo_id the drawer explains why and offers the conversation instead.
       await openRequest(idlessText);
@@ -192,7 +192,7 @@ export const attentionUserActionScenario = {
             assert.equal(preview.normalized_parameters.todo_id, "todo-browser-user-action");
           }],
         ]) {
-          await fresh.page.getByText(actionText, { exact: true }).first().click();
+          await fresh.page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: actionText }).click();
           await freshDrawer.locator("summary", { hasText: "其他处理" }).click();
           await freshDrawer.getByRole("button", { name: label, exact: true }).click();
           await fresh.page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
