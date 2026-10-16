@@ -9,6 +9,7 @@ import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-
 import {sinceYouLookedScenario} from "./personal-workspace-browser/since-you-looked.mjs";
 import {sinceYouLookedLiveScenario} from "./personal-workspace-browser/since-you-looked-live.mjs";
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
+import {firstGoalHomeLiveScenario} from "./personal-workspace-browser/first-goal-home-live.mjs";
 import {goalSuggestionsScenario} from "./personal-workspace-browser/goal-suggestions.mjs";
 import {goalSuggestionsLiveScenario} from "./personal-workspace-browser/goal-suggestions-live.mjs";
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
@@ -118,6 +119,7 @@ scenarioCatalog.push(goalWorkspaceSelectionScenario);
 scenarioCatalog.push(sinceYouLookedScenario);
 scenarioCatalog.push(sinceYouLookedLiveScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
+scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
