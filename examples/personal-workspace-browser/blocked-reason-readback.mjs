@@ -151,9 +151,12 @@ export const blockedReasonReadbackScenario = {
                 await page.getByRole("dialog").waitFor({ state: "hidden" });
               }
               if (!await card.isVisible()) {
-                if (mobile) await page.getByRole("button", { name: locale === "en" ? "Open Goal navigation" : "打开 Goal 导航", exact: true }).click();
-                await page.locator(".personal-goal-link", { hasText: "Goal A" }).click();
-                await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
+                const tasksUrl = new URL(url);
+                tasksUrl.searchParams.set("goalId", "goal-a");
+                tasksUrl.searchParams.set("view", "tasks");
+                await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
+                await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true })
+                  .and(page.locator('[aria-current="page"]')).waitFor();
               }
               await card.click();
               await page.getByRole("dialog").waitFor();
