@@ -21,7 +21,8 @@ from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
-from .goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args, lark_provider_mention_identities
+from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities
+from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
 from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
@@ -32,6 +33,7 @@ from .private_progress import ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC,
 # Conservative transport budget, not a claim about the provider's maximum.
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
 PROGRESS_EDIT_BUDGET = 12
+CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
 
 
 class LarkPrivateConversations:
@@ -42,6 +44,8 @@ class LarkPrivateConversations:
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
+        from .owner_attention import LarkOwnerAttention
+        self.owner_attention = LarkOwnerAttention(self)
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.
@@ -98,6 +102,25 @@ class LarkPrivateConversations:
             return None
         return _message(payload, message_id)
 
+    def _completed_stop_sources(self, profile: str, message_id: str,
+                                root_id: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+        # Both IDs must already belong to the persisted Core stop below. Raw
+        # mget retains body/ancestry/mentions; the display shortcut does not.
+        result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=profile,
+            tail=["api", "GET", "/open-apis/im/v1/messages/mget", "--params",
+                  json.dumps({"message_ids": [message_id, root_id]}), "--as", "bot"]))
+        payload = json_payload(result)
+        if result.get("returncode") != 0 or payload.get("code", 0) != 0 or payload.get("ok") is False:
+            return None, None
+        data = payload.get("data")
+        items = data.get("items") if isinstance(data, Mapping) else None
+        if (not isinstance(items, list) or len(items) != 2
+                or any(not isinstance(item, Mapping) or not isinstance(item.get("message_id"), str) for item in items)
+                or {item.get("message_id") for item in items} != {message_id, root_id}):
+            return None, None
+        messages = {item["message_id"]: item for item in items}
+        return messages[message_id], messages[root_id]
+
     def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None,
                         render_content: bool = True) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
@@ -106,6 +129,8 @@ class LarkPrivateConversations:
         scopes. A caller cannot opt into this path with an HTTP boolean.
         """
         event = record["event"]
+        result: Mapping[str, Any]
+        message: Mapping[str, Any] | None
         try:
             if selected is None:
                 selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
@@ -120,28 +145,68 @@ class LarkPrivateConversations:
 
             group = selected["binding"].get("audience") == "group"
             observation = None
+            stop_root: Mapping[str, Any] | None = None
+            completed_stop = False
             if group:
-                # Both projections read this exact message under the same App.
-                # The root is read only after canonical ancestry checks below.
-                # Outbound provenance needs no display rendering. Admission
-                # retains that projection unchanged for text and media inputs.
+                # Canonical envelopes alone supply ancestry and @. Outbound
+                # provenance needs no display rendering; ordinary admission
+                # retains that projection for text and media inputs.
                 if render_content:
-                    # The fresh Bot identity and exact message projections
-                    # are independent reads. Join all three before checking
-                    # the root mention; Core still rechecks under its fences.
+                    # Admission already verified this exact App. Reuse only
+                    # that call's ephemeral observation; Core still rechecks
+                    # under its fences, and outbound verification stays fresh.
+                    observation = selected.get("observation")
+                    # An untrusted event hint only changes read scheduling.
+                    # Only authenticated provider text can select a control;
+                    # ordinary input still needs its display projection.
+                    control_hint = (event.get("message_type") == "text"
+                                    and isinstance(event.get("content"), str)
+                                    and event.get("content") in CHAT_CONTROL_COMMANDS)
                     with ThreadPoolExecutor(max_workers=3) as reads:
                         current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
-                        display = reads.submit(rendered)
-                        identity = reads.submit(self.bindings.observe, record["profile"])
-                        canonical, result, observation = current.result(), display.result(), identity.result()
-                    message = _message(json_payload(result), event["message_id"])
+                        display = None if control_hint else reads.submit(rendered)
+                        identity = (reads.submit(self.bindings.observe, record["profile"])
+                                    if observation is None else None)
+                        canonical = current.result()
+                        if identity is not None:
+                            observation = identity.result()
+                        command_input = (self._group_text_command_input(canonical, observation)
+                            if control_hint and canonical is not None
+                            and observation is not None
+                            and canonical.get("msg_type", canonical.get("message_type")) == "text" else None)
+                        if (command_input in CHAT_CONTROL_COMMANDS
+                                and canonical is not None
+                                and (not native or native.get("message") == command_input)):
+                            result, message = {"returncode": 0}, {**canonical, "content": command_input}
+                        else:
+                            # Older native requests may have frozen rendered
+                            # text. Keep their exact replay representation.
+                            result = display.result() if display is not None else rendered()
+                            message = _message(json_payload(result), event["message_id"])
                 else:
+                    root_id = str(event.get("root_id") or event["message_id"])
+                    # Only batch IDs already fixed by a target-frozen Core stop.
+                    # The current binding above still authorizes this read.
+                    # Event hints alone keep the source-first lookup.
+                    completed_stop = (root_id != event["message_id"]
+                        and native.get("command") == "stop" and native.get("status") == "command_completed"
+                        and native.get("target_recorded") is True
+                        and native.get("binding_id") == record["binding_id"]
+                        and native.get("source") == record["source"] == lark_private_source(
+                            provider_ref=selected["binding"]["provider_ref"], event=event)
+                        and identity_ref(selected["binding"]["provider_ref"], event["message_id"])
+                        == record["request_ref"] == native.get("request_ref"))
                     # Delivery still needs both fresh observations. Their IO
                     # is independent; join it before checking ancestry and @.
+                    def sources() -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+                        if completed_stop:
+                            return self._completed_stop_sources(record["profile"], event["message_id"], root_id)
+                        return self._group_source_message(record["profile"], event["message_id"]), None
+
                     with ThreadPoolExecutor(max_workers=2) as reads:
-                        current = reads.submit(self._group_source_message, record["profile"], event["message_id"])
+                        envelopes = reads.submit(sources)
                         identity = reads.submit(self.bindings.observe, record["profile"])
-                        canonical, observation = current.result(), identity.result()
+                        (canonical, stop_root), observation = envelopes.result(), identity.result()
                     result, message = {"returncode": 0 if canonical else 1}, canonical
             else:
                 result = rendered()
@@ -178,7 +243,7 @@ class LarkPrivateConversations:
                             or parent != event_parent
                             or (event_thread and event_thread != str(message.get("thread_id") or ""))):
                         return None
-                    original = (message if root == event["message_id"] else
+                    original = (message if root == event["message_id"] else stop_root if completed_stop else
                                 self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
                     if observation is None:
@@ -194,6 +259,8 @@ class LarkPrivateConversations:
                         return None
                     if message.get("msg_type", message.get("message_type")) == "text":
                         message["_command_input"] = self._group_text_command_input(message, observation)
+                        if not message["_command_input"]:
+                            return None  # A display rendering cannot supply missing canonical text.
                 return message
         except (KeyError, ValueError, OSError):
             pass
@@ -254,7 +321,7 @@ class LarkPrivateConversations:
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
-            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source)
+            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source, include_observation=True)
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
@@ -324,8 +391,8 @@ class LarkPrivateConversations:
                 text, attachments = record.get("message", ""), record.get("attachments", [])
             command_input = private_message_caption(record["source_content"]) if attachments else text.strip()
             if binding.get("audience") == "group" and message_type == "text":
-                command_input = source_message.get("_command_input") or command_input
-            command = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}.get(command_input)
+                command_input = source_message["_command_input"]
+            command = CHAT_CONTROL_COMMANDS.get(command_input)
             if command_input == "/agents":
                 command = "agents"
             elif command_input == "/project":
@@ -709,6 +776,7 @@ class LarkPrivateConversations:
                 return 0
             config: Path | None = None
             selected: dict[str, Any] | None = None
+            control_receipt_first = False
 
             def inbox() -> Path:
                 nonlocal config
@@ -731,6 +799,8 @@ class LarkPrivateConversations:
                     record.update(status=native["status"], response=native.get("response"),
                                   commission_resources=native.get("commission_resources"),
                                   status_snapshot=native.get("status_snapshot"))
+                    control_receipt_first = (native["status"] == "command_completed"
+                                             and native.get("command") in CHAT_CONTROL_COMMANDS.values())
                 if record["status"] == "accepted":
                     native = self.core.read_request(record["request_ref"])
                     if native.get("agent_target"):
@@ -780,13 +850,17 @@ class LarkPrivateConversations:
                         if turn["status"] == "completed":
                             response = self.core.todo_confirmation_reply(record["request_ref"], turn.get("response") or {})
                 else:
-                    if record["status"] != "rejected":
+                    if record["status"] != "rejected" and not control_receipt_first:
                         self._feedback(path, record, inbox=inbox)
                     response = (str(record.get("attachment_notice") or "")
                         or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
                     if record.get("status_snapshot"):
                         response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
                 if self._deliver(path, record, "terminal", response, inbox=inbox):
+                    if control_receipt_first:
+                        # The verified result is the useful control receipt.
+                        # Preserve the usual idempotent reaction, after it.
+                        self._feedback(path, record, inbox=inbox)
                     resources = record.get("commission_resources") or {}
                     if resources.get("session_id") and resources.get("turn_id"):
                         first_turn = self.core.controller.store.load_turn(resources["session_id"], resources["turn_id"])

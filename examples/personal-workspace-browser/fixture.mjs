@@ -448,6 +448,8 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     failNextStatusRequest: false,
     /** When set, every status read answers this HTTP status until cleared: a source that cannot be projected. */
     statusFailure: null,
+    /** When set, replaces the capabilities adapters list: the runtimes this host reports. */
+    runtimeAgentsOverride: null,
     freezeGoalSubagentStatusProjection: false,
     goalSubagentConfigurationEnabled,
     goalActivationStates: new Map([
@@ -949,6 +951,16 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       status: 200,
     });
   });
+  // Real status fixtures advertise this same-origin reader too. Keep the
+  // default empty extension inventory inside the fixture rather than reading
+  // an unrelated installed service. Research scenarios replace this route
+  // with their published surfaces or explicitly isolated native owner.
+  await page.route("**/extension-presentation-surfaces", route => route.fulfill({json: {
+    ok: true, presentation_surfaces: {
+      schema_version: "extension_presentation_surfaces_v0", count: 0,
+      ready_count: 0, review_due_count: 0, empty_count: 0, invalid_count: 0, items: [],
+    },
+  }}));
   const sidebarOrders = new Map();
   await page.route("**/api/chat/**", async (route) => {
     const request = route.request();
@@ -1596,7 +1608,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
         ...(state.goalSubagentConfigurationEnabled ? { goal_subagent_configuration: "preview_locked" } : {}),
         goal_id: null, streaming: true, resume: true, interrupt: true, typed_actions: true,
         action_kinds: ["goal.create", "goal.lifecycle", "agent.bind", "heartbeat.bind", "monitor.create", "run.correct"],
-        adapters: [
+        adapters: state.runtimeAgentsOverride ?? [
           { agent_id: "codex", display_name: "Codex", adapter_kind: "codex_app_server", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "claude-code", display_name: "Claude Code", adapter_kind: "claude_code_cli", available: true, streaming: true, resume: true, interrupt: true },
           { agent_id: "offline-agent", display_name: "Offline Agent", adapter_kind: "acp", available: false, streaming: false, resume: false, interrupt: false },

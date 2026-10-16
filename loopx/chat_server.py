@@ -1589,6 +1589,7 @@ class ChatRequestHandler(
             ROOM_WORK_PATH: lambda: self._room_work(claim=True),
             PRIVATE_CONVERSATIONS_PATH: self._private_conversation_connect,
             PRIVATE_CONVERSATIONS_PATH + "/agent-targets": self._private_conversation_agent_target,
+            PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }
