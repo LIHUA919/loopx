@@ -67,7 +67,7 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
     const previews = [];
     let applications = 0;
     context = await openWorkspacePage(browser, url, { beforeGoto: async (_api, page) => {
-      for (const pattern of ["**/status.json*", "**/api/actions**", "**/api/chat/todo/detail?*", "**/api/chat/completed-todos?*"]) {
+      for (const pattern of ["**/status.json*", "**/api/actions**", "**/api/chat/todo/detail?*", "**/api/chat/completed-todos?*", "**/extension-presentation-surfaces*", "**/extension-projection*"]) {
         await page.route(pattern, async route => {
           const request = route.request(), parsed = new URL(request.url());
           if (pattern === "**/status.json*" && parsed.pathname !== "/status.json") { await route.fallback(); return; }
@@ -79,9 +79,6 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       }
     }});
     const { page } = context, drawer = page.locator(".personal-context-drawer");
-    const tasksUrl = new URL(url);
-    tasksUrl.searchParams.set("goalId", "product-release");
-    tasksUrl.searchParams.set("view", "tasks");
     for (const operation of ["complete", "cancel"]) {
       const [actionId, targetId] = ready.ids[operation];
       // Registration alone never lets an unrelated peer handle this request.
@@ -89,8 +86,10 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
         body: JSON.stringify({ action_kind: "todo.update", normalized_parameters: { agent_id: "codex-review", goal_id: "product-release", todo_id: actionId, operation: "complete" }, context: {}, summary: "Wrong actor", idempotency_key: `wrong-${operation}` }) });
       assert.equal(denied.status, 400);
       assert.equal((await read(actionId)).status, "open");
-      await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
-      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: `Handle ${operation}` }).click();
+      await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
+      await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
+      await page.getByRole("button", { name: /^任务$/ }).first().click();
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(`Handle ${operation}`, { exact: true }).click();
       if (operation === "cancel") await drawer.locator("summary", { hasText: "其他处理" }).click();
       await drawer.getByRole("button", { name: operation === "complete" ? "我已完成" : "不再需要", exact: true }).click();
       await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
@@ -102,15 +101,11 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       } catch (error) {
         throw new Error(`${error.message}; drawer=${await drawer.innerText()}; errors=${context.errors.join(" | ")}`);
       }
-      await page.getByRole("button", { name: "查看更新后的 Goal" }).waitFor();
+      await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
       assert.equal((await read(actionId)).status, "done");
       assert.equal((await read(targetId)).status, operation === "complete" ? "open" : "blocked");
-      // Read the same canonical result on the fixture's explicit Tasks route;
-      // Overview's unrelated providers are outside this actor/receipt check.
-      await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
-      await page.locator('[data-goal-panel="tasks"]').waitFor({ state: "visible" });
       await page.reload({ waitUntil: "networkidle" });
-      await page.locator('[data-goal-panel="tasks"]').waitFor({ state: "visible" });
+      await page.getByTestId("personal-goal-home").waitFor();
       assert.equal((await read(actionId)).status, "done", "Reload preserves canonical completion");
     }
     assert.equal(applications, 2, "Exactly one confirmed write per request");
@@ -134,7 +129,7 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
       await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: text }).click();
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(text, { exact: true }).click();
       await drawer.getByText(text, { exact: true }).first().waitFor({ state: "visible" });
     }
     try {
@@ -163,8 +158,8 @@ export const attentionUserActionScenario = {
       await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
       assert.equal(api.durableWriteCount, writesBefore + 1, "Confirmation writes exactly once");
       await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: idlessText }).waitFor({ state: "visible" });
-      assert.equal(await page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: actionText }).count(), 0, "The completed request leaves needs-you on readback");
+      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(idlessText, { exact: true }).waitFor({ state: "visible" });
+      assert.equal(await page.getByText(actionText, { exact: true }).count(), 0, "The completed request leaves needs-you on readback");
 
       // Without a stable todo_id the drawer explains why and offers the conversation instead.
       await openRequest(idlessText);
@@ -197,7 +192,7 @@ export const attentionUserActionScenario = {
             assert.equal(preview.normalized_parameters.todo_id, "todo-browser-user-action");
           }],
         ]) {
-          await fresh.page.locator('[data-goal-panel="tasks"]').getByRole("button").filter({ hasText: actionText }).click();
+          await fresh.page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(actionText, { exact: true }).click();
           await freshDrawer.locator("summary", { hasText: "其他处理" }).click();
           await freshDrawer.getByRole("button", { name: label, exact: true }).click();
           await fresh.page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });

@@ -108,6 +108,10 @@ export const blockedReasonReadbackScenario = {
           const context = await openWorkspacePage({ newPage: (options) => browser.newPage({ ...options, locale }) }, url, {
             collectCoverage, viewport: mobile ? { width: 390, height: 844 } : { width: 1512, height: 982 }, isMobile: mobile,
             beforeGoto: async (_api, page) => {
+              await page.route((target) => ["/extension-presentation-surfaces", "/extension-projection"].includes(target.pathname), async (route) => {
+                const response = await fetchWorkspaceBackend(route, authority.url);
+                await route.fulfill({ response });
+              });
               await page.route("**/status.json*", async (route) => {
                 if (new URL(route.request().url()).pathname !== "/status.json") { await route.fallback(); return; }
                 const response = await fetchWorkspaceBackend(route, authority.url);
@@ -143,20 +147,15 @@ export const blockedReasonReadbackScenario = {
           const suffix = `${locale}-${mobile ? "mobile" : "desktop"}`;
           try {
             const openTodo = async (text) => {
-              // Overview retains inactive copies; keep strict selection on
-              // the accessible button in the current Tasks view.
-              const card = page.getByRole("button").and(page.locator("[aria-pressed]")).filter({ hasText: text });
+              const card = page.locator('[data-goal-panel="tasks"]:not([hidden]) .personal-task-board button[aria-pressed]', { hasText: text });
               if (await page.getByRole("dialog").isVisible()) {
                 await page.keyboard.press("Escape");
                 await page.getByRole("dialog").waitFor({ state: "hidden" });
               }
               if (!await card.isVisible()) {
-                const tasksUrl = new URL(url);
-                tasksUrl.searchParams.set("goalId", "goal-a");
-                tasksUrl.searchParams.set("view", "tasks");
-                await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
-                await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true })
-                  .and(page.locator('[aria-current="page"]')).waitFor();
+                if (mobile) await page.getByRole("button", { name: locale === "en" ? "Open Goal navigation" : "打开 Goal 导航", exact: true }).click();
+                await page.locator(".personal-goal-link", { hasText: "Goal A" }).click();
+                await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
               }
               await card.click();
               await page.getByRole("dialog").waitFor();

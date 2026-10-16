@@ -32,20 +32,15 @@ export const managedGoalResultsScenario = {
       }});
     });
     try {
-      assert.equal(reads, 0, "Workspace home must not load a Goal report body");
-      // Overview also consumes reports; enter Chat explicitly so this check
-      // measures the Files inventory/read contract once, without that consumer.
-      const chatUrl = new URL(url);
-      chatUrl.searchParams.set("goalId", "product-release");
-      chatUrl.searchParams.set("view", "conversation");
-      await page.goto(chatUrl.href, {waitUntil: "networkidle"});
-      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "对话", exact: true})
-        .and(page.locator('[aria-current="page"]')).waitFor();
-      assert.equal(reads, 0, "The explicit Chat destination must not load a report body");
+      assert.equal(reads, 0, "The directory must not read a Goal's report body");
+      await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
+      const overviewResults = page.getByRole("region", {name: "已验收的团队报告"});
+      await overviewResults.getByRole("table").waitFor();
+      assert.equal(reads, 1, "The visible overview Results must exact-read the selected report");
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "已验收的团队报告"});
       await results.getByRole("table").waitFor();
-      assert.equal(reads, 1, "The selected body must be revalidated after inventory read");
+      assert.equal(reads, 2, "Opening Files must revalidate the body after its fresh inventory read");
       assert.match(await results.textContent(), /Revised cash flow/);
       assert.equal(await results.locator("script,img").count(), 0);
       await page.screenshot({path: resolve(outputDir, "managed-goal-results-desktop.png"), animations: "disabled"});

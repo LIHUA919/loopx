@@ -81,6 +81,12 @@ export const monitorReadbackScenario = {
           const context = await openWorkspacePage({ newPage: (options) => browser.newPage({ ...options, locale }) }, url, {
             collectCoverage, viewport: mobile ? { width: 390, height: 844 } : { width: 1512, height: 982 }, isMobile: mobile,
             beforeGoto: async (_api, page) => {
+              // The real status advertises this same owner's presentation
+              // reads; keep them on its disposable registry too.
+              await page.route((target) => ["/extension-presentation-surfaces", "/extension-projection"].includes(target.pathname), async (route) => {
+                const response = await fetchWorkspaceBackend(route, authority.url);
+                await route.fulfill({ response });
+              });
               await page.route("**/status.json*", async (route) => {
                 if (new URL(route.request().url()).pathname !== "/status.json") { await route.fallback(); return; }
                 const response = await fetchWorkspaceBackend(route, authority.url);
@@ -106,16 +112,9 @@ export const monitorReadbackScenario = {
           const { page, errors } = context;
           try {
             const openMonitor = async () => {
-              // This canonical fixture qualifies Tasks/drawer readback, not
-              // Overview's unrelated result providers. Honor its explicit view.
-              if (new URL(page.url()).searchParams.get("view") !== "tasks") {
-                const tasksUrl = new URL(url);
-                tasksUrl.searchParams.set("goalId", "goal-a");
-                tasksUrl.searchParams.set("view", "tasks");
-                await page.goto(tasksUrl.href, { waitUntil: "networkidle" });
-              }
-              await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true })
-                .and(page.locator('[aria-current="page"]')).waitFor();
+              if (mobile) await page.getByRole("button", { name: locale === "en" ? "Open Goal navigation" : "打开 Goal 导航", exact: true }).click();
+              await page.locator(".personal-goal-link", { hasText: "Goal A" }).click();
+              await page.getByRole("button", { name: locale === "en" ? "Tasks" : "任务", exact: true }).click();
               await page.getByRole("button", { name: /Synthetic monitor readback/ }).click();
               await page.getByRole("dialog").waitFor();
             };

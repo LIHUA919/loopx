@@ -9,6 +9,8 @@ import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-
 import {sinceYouLookedScenario} from "./personal-workspace-browser/since-you-looked.mjs";
 import {sinceYouLookedLiveScenario} from "./personal-workspace-browser/since-you-looked-live.mjs";
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
+import {attentionNotificationsScenario} from "./personal-workspace-browser/attention-notifications.mjs";
+import {attentionNotificationsLiveScenario} from "./personal-workspace-browser/attention-notifications-live.mjs";
 import {firstGoalHomeLiveScenario} from "./personal-workspace-browser/first-goal-home-live.mjs";
 import {goalSuggestionsScenario} from "./personal-workspace-browser/goal-suggestions.mjs";
 import {goalSuggestionsLiveScenario} from "./personal-workspace-browser/goal-suggestions-live.mjs";
@@ -119,6 +121,8 @@ scenarioCatalog.push(goalWorkspaceSelectionScenario);
 scenarioCatalog.push(sinceYouLookedScenario);
 scenarioCatalog.push(sinceYouLookedLiveScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
+scenarioCatalog.push(attentionNotificationsScenario);
+scenarioCatalog.push(attentionNotificationsLiveScenario);
 scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
