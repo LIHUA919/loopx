@@ -9,6 +9,7 @@ import {goalWorkspaceSelectionScenario} from "./personal-workspace-browser/goal-
 import {sinceYouLookedScenario} from "./personal-workspace-browser/since-you-looked.mjs";
 import {sinceYouLookedLiveScenario} from "./personal-workspace-browser/since-you-looked-live.mjs";
 import {firstGoalHomeScenario} from "./personal-workspace-browser/first-goal-home.mjs";
+import {firstGoalAgentUnavailableScenario} from "./personal-workspace-browser/first-goal-agent-unavailable.mjs";
 import {runtimeReadinessScenario} from "./personal-workspace-browser/runtime-readiness.mjs";
 import {runtimeReadinessLiveScenario} from "./personal-workspace-browser/runtime-readiness-live.mjs";
 import {attentionNotificationsScenario} from "./personal-workspace-browser/attention-notifications.mjs";
@@ -125,6 +126,7 @@ scenarioCatalog.push(goalWorkspaceSelectionScenario);
 scenarioCatalog.push(sinceYouLookedScenario);
 scenarioCatalog.push(sinceYouLookedLiveScenario);
 scenarioCatalog.push(firstGoalHomeScenario);
+scenarioCatalog.push(firstGoalAgentUnavailableScenario);
 scenarioCatalog.push(runtimeReadinessScenario);
 scenarioCatalog.push(runtimeReadinessLiveScenario);
 scenarioCatalog.push(attentionNotificationsScenario);

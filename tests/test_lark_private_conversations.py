@@ -158,7 +158,12 @@ def connect_group(fixture):
     fake.write_text(fake.read_text().replace('"thread": {"id": "durable-thread"},',
         '"thread": {"id": "durable-thread"}, '
         '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
-        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],'))
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],').replace(
+            '        if "wait for interrupt" in json.dumps(request.get("params") or {}) or "wait for steer" in json.dumps(request.get("params") or {}):',
+            # The synthetic host's wait trigger belongs to the current input,
+            # not a preceding message quoted as context.
+            '        current = json.dumps(request.get("params") or {}).rsplit("Current user message:", 1)[-1]\n'
+            '        if "wait for interrupt" in current or "wait for steer" in current:'))
     binding = transport.bindings.read()["bindings"][0]
     refs = [identity_ref(binding["provider_ref"], chat) for chat in ["oc_community", "oc_second"]]
     transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
@@ -167,7 +172,8 @@ def connect_group(fixture):
 
 
 def finish_group_turn(runtime, transport, *, message):
-    row = next(row for row in transport.core.pending() if row["message"] == message)
+    row = next(row for row in transport.core.pending() if row["message"] == message
+               or row["message"].endswith(f"\n\nCurrent user message:\n{message}"))
     assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
     transport.reconcile()
     return row
@@ -279,8 +285,17 @@ def test_abandoned_capture_recovers_only_with_current_binding(ordinary, monkeypa
             assert result["status"] == "completed"
             transport.reconcile()
             assert len(store.list_sessions()) == 1
-            final = ("notes-app", result["response"]["message"])
-            assert provider.writes[-1] == final and provider.writes.count(final) == 1
+            delivered = json.loads(path.read_text())
+            terminal = delivered["deliveries"]["terminal"]
+            assert delivered["status"] == "delivered" and terminal["verified"] is True
+            # Recovery can finish a draft by editing its existing message.
+            # Provider-visible content, not creation history, proves the final.
+            final = provider.messages[terminal["attempt"]["message_ref"]]
+            assert final["chat_id"] == event["chat_id"]
+            assert final["sender"] == {"id": provider.profile_apps["notes-app"], "sender_type": "app"}
+            content = json.loads(final["body"]["content"])
+            assert content["zh_cn"]["content"][0][0]["text"] == result["response"]["message"]
+            assert sum(message.get("body") == final["body"] for message in provider.messages.values()) == 1
             assert all(profile == "notes-app" for profile, _ in provider.writes)
             assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
             packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
@@ -387,10 +402,10 @@ def test_group_receipt_reuses_only_the_fresh_bindings_display_observation(ordina
         if checking_source.is_set():
             source_identity_observed.set()
         return observe(profile, **kwargs)
-    def verified(record):
+    def verified(record, **kwargs):
         checking_source.set()
         try:
-            return source_verified(record)
+            return source_verified(record, **kwargs)
         finally:
             checking_source.clear()
     monkeypatch.setattr(transport.bindings, "observe", observed)
@@ -639,7 +654,7 @@ def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identi
             mentions=[{"key": key, "name": "notes-app", "id": identity}])
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = finish_group_turn(runtime, transport, message=rendered)
-        assert row["message"] == rendered
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{rendered}")
     finally:
         runtime.close()
 
@@ -1171,17 +1186,118 @@ def completed_group_stop(ordinary):  # noqa: F811
         runtime.close()
 
 
-def test_completed_stop_batches_only_its_core_bound_source_and_root(completed_group_stop):
+def test_completed_stop_batches_its_core_bound_source_and_root_with_one_current_identity(completed_group_stop):
     _, provider, transport, root, event, record = completed_group_stop
     assert transport._source_verified(record)
     calls = [a for a in provider.calls if "GET" in a]
     assert len(calls) == 1 and calls[0][calls[0].index("GET") + 1].endswith("/mget")
     assert json.loads(calls[0][calls[0].index("--params") + 1]) == {
         "message_ids": [event["message_id"], root["message_id"]]}
-    assert sum("auth" in a for a in provider.calls) == 2
+    assert sum("auth" in a for a in provider.calls) == 1
     provider.messages[root["message_id"]]["mentions"] = []
     assert not transport._source_verified(record)  # Re-read, never cache the old root.
     assert not provider.writes and not provider.reaction_creates
+
+
+def test_completed_stop_inbox_name_cannot_replace_fresh_source_checks(completed_group_stop, monkeypatch):
+    _, provider, transport, root, event, record = completed_group_stop
+    transport._inbox(record)  # The preceding ordinary topic already has an Inbox.
+    path = transport.root / f"{record['request_ref']}.json"
+    entered, release = threading.Event(), threading.Event()
+    original = transport._source_verified
+
+    def verify(row, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return original(row, **kwargs)
+
+    monkeypatch.setattr(transport, "_source_verified", verify)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        pending = workers.submit(transport.reconcile_request, path)
+        try:
+            assert entered.wait(2)
+            assert not provider.writes and not provider.reaction_creates
+            # The hint cannot retain authority when the root loses its @.
+            provider.messages[root["message_id"]]["mentions"] = []
+        finally:
+            release.set()
+        assert pending.result(timeout=3) == 0
+    assert not provider.writes and not provider.reaction_creates
+    provider.messages[root["message_id"]]["mentions"] = [{"id": {"open_id": "ou_notes_app_bot"}}]
+    assert transport.reconcile_request(path) == 1
+    assert provider.topic_writes == [(event["chat_id"], root["message_id"], "已请求停止这条消息对应的执行。")]
+    assert transport.reconcile_request(path) == 0 and len(provider.writes) == 1
+
+
+@pytest.mark.parametrize("change", ["app", "bot", "revoke", "sender", "chat", "root", "parent", "thread"])
+def test_completed_stop_cached_name_does_not_authorize_a_changed_source(completed_group_stop, change):
+    _, provider, transport, _, event, record = completed_group_stop
+    transport._inbox(record)
+    if change == "app":
+        provider.profile_apps["notes-app"] = "cli_other"
+    elif change == "bot":
+        provider.bot_ready = False
+    elif change == "revoke":
+        transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    else:
+        field, value = {"sender": ("sender", {"id": "ou_other", "sender_type": "user"}),
+            "chat": ("chat_id", "oc_other"), "root": ("root_id", "om_other"),
+            "parent": ("parent_id", "om_other"), "thread": ("thread_id", "omt_other")}[change]
+        provider.messages[event["message_id"]][field] = value
+    assert transport.reconcile_request(transport.root / f"{record['request_ref']}.json") == 0
+    assert not provider.writes and not provider.reaction_creates
+
+
+def test_completed_stop_verified_reply_rechecks_grant_before_feedback(completed_group_stop):
+    _, provider, transport, _, _, record = completed_group_stop
+    config = transport._inbox(record)
+    path = transport.root / f"{record['request_ref']}.json"
+    # Model a crash after verified reply, before the original source's cleanup.
+    assert transport._deliver(path, record, "terminal", "已请求停止这条消息对应的执行。", inbox=lambda: config)
+    writes = list(provider.writes)
+    assert not provider.reaction_creates
+    transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    assert transport.reconcile_request(path) == 0
+    assert provider.writes == writes and not provider.reaction_creates
+    assert json.loads(path.read_text())["status"] == "command_completed"
+
+
+def test_completed_stop_refreshes_a_renamed_bot_without_resending_an_attempt(completed_group_stop, monkeypatch):
+    _, provider, transport, root, event, record = completed_group_stop
+    config = transport._inbox(record)
+    original = Provider.__call__
+    def renamed(self, args, cwd=None, timeout=None):
+        result = original(self, args, cwd, timeout)
+        if "auth" in args:
+            value = json.loads(result["stdout"])
+            value["identities"]["bot"]["appName"] = "Renamed Bot"
+            result["stdout"] = json.dumps(value)
+        return result
+    monkeypatch.setattr(Provider, "__call__", renamed)
+    path = transport.root / f"{record['request_ref']}.json"
+    assert transport.reconcile_request(path) == 0 and not provider.writes
+    assert json.loads(config.read_text())["reply"]["bot_display_name"] == "Renamed Bot"
+    assert not json.loads(path.read_text())["deliveries"]["terminal"].get("started")
+    assert transport.reconcile_request(path) == 1
+    assert provider.topic_writes == [(event["chat_id"], root["message_id"], "已请求停止这条消息对应的执行。")]
+    assert transport.reconcile_request(path) == 0 and len(provider.writes) == 1
+
+
+@pytest.mark.parametrize("invalid", ["missing", "malformed", "foreign_profile", "foreign_chat"])
+def test_completed_stop_rebuilds_unusable_inbox_metadata(completed_group_stop, invalid):
+    _, provider, transport, root, event, record = completed_group_stop
+    config = transport._inbox(record)
+    value = json.loads(config.read_text())
+    if invalid == "missing":
+        config.unlink()
+    elif invalid == "malformed":
+        config.write_text('{')
+    else:
+        value["reply"]["sender_profile" if invalid == "foreign_profile" else "chat_id"] = "foreign"
+        value["reply"]["bot_display_name"] = "Foreign Bot"
+        config.write_text(json.dumps(value))
+    assert transport.reconcile_request(transport.root / f"{record['request_ref']}.json") == 1
+    assert provider.topic_writes == [(event["chat_id"], root["message_id"], "已请求停止这条消息对应的执行。")]
 
 
 @pytest.mark.parametrize("field,value", [("target_recorded", False), ("command", "status"),
@@ -1252,11 +1368,35 @@ def test_completed_stop_batch_rejects_partial_or_ambiguous_results(completed_gro
     assert not provider.writes and not provider.reaction_creates
 
 
+@pytest.mark.parametrize("change", ["unverified_app", "other_app", "root_mention", "source_parent"])
+def test_completed_stop_source_verification_reuses_one_current_observation_only_within_the_call(
+    completed_group_stop, change,
+):
+    _, provider, transport, _, _, record = completed_group_stop
+    provider.calls.clear()
+    assert transport._source_verified(record)
+    # The binding check already verified this App. Its observation also checks
+    # the root mention; a second network identity probe adds no new authority.
+    assert sum("auth" in args for args in provider.calls) == 1
+    if change == "unverified_app":
+        provider.bot_ready = False
+    elif change == "other_app":
+        provider.profile_apps[record["profile"]] = "cli_other_app"
+    elif change == "root_mention":
+        provider.messages[record["event"]["root_id"]]["mentions"] = []
+    else:
+        provider.messages[record["event"]["message_id"]]["parent_id"] = "om_other_parent"
+    provider.calls.clear()
+    assert not transport._source_verified(record)
+    assert sum("auth" in args for args in provider.calls) == 1
+    assert not provider.writes and not provider.reaction_creates
+
+
 @pytest.mark.parametrize("identity_fails", [False, True])
-def test_completed_stop_batch_joins_a_separate_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
+def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
     _, provider, transport, _, _, record = completed_group_stop
     started, observed, release = threading.Event(), threading.Event(), threading.Event()
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
     observations = []
 
     def sources(*args):
@@ -1273,18 +1413,107 @@ def test_completed_stop_batch_joins_a_separate_fresh_identity(completed_group_st
                 raise ValueError("fresh App observation unavailable")
         return original_observe(*args, **kwargs)
 
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
+    selected = transport.bindings.resolve(binding_id=record["binding_id"], **record["source"])
     with ThreadPoolExecutor(max_workers=1) as caller:
-        pending = caller.submit(transport._source_verified, record)
+        pending = caller.submit(transport._source_message, record, selected=selected, render_content=False)
         try:
             assert started.wait(2) and observed.wait(2)
             assert not pending.done()
         finally:
             release.set()
-        assert pending.result(timeout=3) is not identity_fails
+        assert bool(pending.result(timeout=3)) is not identity_fails
     assert len(observations) == 2
     assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("failure", [None, "identity", "source", "revoked"])
+def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rechecks_authority(
+    completed_group_stop, monkeypatch, failure,
+):
+    _, provider, transport, _, _, record = completed_group_stop
+    source_started, identity_started, release = threading.Event(), threading.Event(), threading.Event()
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
+
+    def sources(*args):
+        source_started.set()
+        assert release.wait(3)
+        return (None, None) if failure == "source" else original_sources(*args)
+
+    def observe(*args, **kwargs):
+        observation = original_observe(*args, **kwargs)
+        identity_started.set()
+        assert release.wait(3)
+        if failure == "identity":
+            raise ValueError("current App observation unavailable")
+        return observation
+
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
+    monkeypatch.setattr(transport.bindings, "observe", observe)
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        pending = caller.submit(transport._source_verified, record)
+        try:
+            assert source_started.wait(2) and identity_started.wait(2)
+            assert not pending.done() and not provider.writes
+            if failure == "revoked":
+                state = transport.bindings.read()
+                transport.bindings.disconnect(binding_id=record["binding_id"], expected_revision=state["revision"])
+        finally:
+            release.set()
+        assert pending.result(timeout=3) is (failure is None)
+    assert not provider.writes and not provider.reaction_creates
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_after_revocation(
+    completed_group_stop, monkeypatch, revoke,
+):
+    _, provider, transport, _, event, record = completed_group_stop
+    checking_source, source_started, identity_started, release = (
+        threading.Event() for _ in range(4)
+    )
+    original_verify = transport._source_verified
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
+
+    def verify(value, **kwargs):
+        checking_source.set()
+        return original_verify(value, **kwargs)
+
+    def sources(*args):
+        source_started.set()
+        assert release.wait(3)
+        return original_sources(*args)
+
+    def observe(*args, **kwargs):
+        observation = original_observe(*args, **kwargs)
+        if checking_source.is_set():
+            identity_started.set()
+            assert release.wait(3)
+        return observation
+
+    monkeypatch.setattr(transport, "_source_verified", verify)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
+    monkeypatch.setattr(transport.bindings, "observe", observe)
+    path = transport.root / f"{record['request_ref']}.json"
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        pending = caller.submit(transport.reconcile_request, path)
+        try:
+            assert source_started.wait(2) and identity_started.wait(2)
+            assert not pending.done() and not provider.writes
+            if revoke:
+                state = transport.bindings.read()
+                transport.bindings.disconnect(binding_id=record["binding_id"], expected_revision=state["revision"])
+        finally:
+            release.set()
+        assert pending.result(timeout=3) == (0 if revoke else 1)
+    delivered = json.loads(path.read_text())
+    if revoke:
+        assert not provider.writes and not delivered["deliveries"].get("terminal", {}).get("verified")
+    else:
+        assert delivered["deliveries"]["terminal"]["verified"]
+        assert len(provider.writes) == 1
+        assert provider.messages[event["message_id"]]["root_id"] == event["root_id"]
 
 
 @pytest.mark.parametrize("followup", [False, True])
@@ -1363,7 +1592,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
             return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
-            if ("+messages-mget" in args or
+            if (("+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]) or
                     ("GET" in args and args[args.index("GET") + 1].endswith(event["message_id"]))):
                 started.wait(timeout=2)
             return provider(args, cwd, timeout)
@@ -1373,7 +1602,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
         monkeypatch.setattr(transport.bindings, "observe", observe)
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
-        assert row["message"] == event["content"]
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{event['content']}")
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes

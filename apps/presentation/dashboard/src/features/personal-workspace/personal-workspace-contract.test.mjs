@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { goalCreateRequest } from "./goal-create-request.ts";
+import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request.ts";
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
 import "./monitor-readback.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
+const projectionAgent = { agentId: "status-only", adapterKind: "status_projection", available: true, label: "Status" };
+const missingAgent = { agentId: "codex", available: false, label: "Codex" };
+const availableAgent = { agentId: "claude", available: true, label: "Claude" };
+assert.equal(goalCreationAgentId("status-only", [missingAgent, projectionAgent]), "codex", "Creation diagnoses the real missing executor, never the read-only snapshot");
+assert.equal(goalCreationAgentId("status-only", [missingAgent, availableAgent, projectionAgent]), "claude", "Creation can use the discovered available executor");
+assert.equal(goalCreationAgentId("codex", [missingAgent, availableAgent, projectionAgent]), "codex", "An explicit unavailable executor remains selected for its own gate");
+assert.equal(goalCreationAgentId("custom", [missingAgent, projectionAgent]), "custom", "An unknown explicit identity is left for backend eligibility");
+assert.equal(goalCreationAgentId("status-only", [projectionAgent]), "status-only", "An empty executor catalog cannot manufacture an executor");
 const answerText = source("./answer-text.ts");
 const model = source("./personal-workspace-model.ts");
 const activity = source("./goal-activity.ts");
@@ -185,7 +193,8 @@ assert.match(page, /personal-action-feedback/, "Typed actions surface a persiste
 assert.match(page, /visibleTimelineItems[\s\S]*item\.run\.runId === activeSessionRun\.runId/, "Session record mode filters unrelated Goal activity");
 assert.match(page, /function openGoalConversation\(\)[\s\S]*setActiveSessionRun\(null\)[\s\S]*scrollIntoView\(\{ block: "start" \}\)/, "Opening a Goal reply exits a nested Session and reveals the latest answer");
 assert.match(page, /onOpenChat=\{openGoalConversation\}/, "The task reply button uses the same conversation navigation as other Goal entries");
-assert.match(header, /header\.refreshing[\s\S]*header\.refreshDone[\s\S]*header\.refreshFailed/, "Refresh exposes localized loading, success, and failure feedback");
+// Bilingual loading, accessible success and visible/retryable failure are
+// exercised by smoke/chat-model-menu-smoke.mjs, without imposing source order.
 assert.match(drawer, /t\("drawer\.proposalExplainer"\)/, "Preview explains what confirmation will do");
 assert.match(drawer, /t\("drawer\.proposalApplyFailed"\)/, "Failed preview communicates its no-write result clearly");
 assert.match(drawer, /onClick=\{onClose\} type="button">\{t\("drawer\.proposalClose"\)\}/, "Closing a proposal is a pure UI action with zero state transition");
@@ -450,7 +459,7 @@ assert.match(machineSettings, /const configured = Boolean\(/, "Only configured c
 assert.match(machineSettings, /periodicReportActivationDescription/, "Machine periodic reports explain stage-triggered automatic delivery");
 assert.match(i18n, /Enabled means automatic delivery at validated stage boundaries/, "English machine settings name automatic stage delivery");
 assert.match(i18n, /开启后将在已验证的阶段节点自动投递/, "Chinese machine settings name automatic stage delivery");
-assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale\)/, "Machine capability fields follow the selected locale");
+assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale,\s*selected\.capability_id\)/, "Machine capability fields follow the selected locale");
 assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/,
   "Goal fields use the selected locale and capability-specific vocabulary");
 assert.deepEqual(localizedCapabilityFieldCopy("en", "explore_harness").mode.options,
@@ -693,3 +702,13 @@ for (const route of ["./views/frontstage-developer-page", "./views/benchmark-stu
 assert.equal((page.match(/<Suspense fallback=\{<p className="personal-lazy-loading" role="status">/g) ?? []).length, 1, "The lazy settings site shows a loading status");
 
 console.log("personal workspace drawer contract smoke passed");
+
+// An unavailable first Agent: the service refuses the creation preview with a
+// typed gate (kind, agent, catalog reason) and the page tells the owner in
+// their language, never with the protocol sentence; nothing is written.
+assert.match(page, /const agentGate = gateKind === "agent_unavailable"/, "The page maps the typed Agent gate to owner-language copy");
+assert.match(page, /reasonCode === "executable_not_found"[\s\S]*?reasonCode === "api_key_not_set"[\s\S]*?rawGate\.registered === false/, "The reason follows the catalog's own fields");
+assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === "agent_unavailable" \? selection\.item\.title/, "The drawer shows the Agent gate's own title, not host confirmation");
+for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
+  assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
+}

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark.runtime import sforge_warm_start as warm
-from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.effect_runtime import EffectRuntimeConflict, effect_runtime_result
 
 
 @pytest.mark.parametrize("extension", ["-1", "64800", str(2 ** 53)])
@@ -188,7 +188,7 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
         async def exec(self, command, **kwargs):
             commands.append(command)
             return SimpleNamespace(return_code=0)
-    asyncio.run(start.stage(Environment(), str(workspace)))
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == []
     assert "chmod -R" not in commands[0]
     effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(control / "restored-point"),
         "expected_sha256": start.sha256})
@@ -300,6 +300,7 @@ def research_point(point, tmp_path, monkeypatch, request):
         research.chmod(0o600)
     else:
         research.mkdir()
+        research.chmod(0o700)
         (research / "candidate.py").write_text("def predict(x): return x * 7\n")
         (research / "observations.json").write_text('[2, 3, 5]')
         (research / "candidate.py").chmod(0o600)
@@ -409,8 +410,9 @@ def test_research_copy_mismatch_is_an_unusable_attempt(research_point, monkeypat
     assert workspace.with_name("workspace.before-checkpoint").is_dir()
 
 
+@pytest.mark.parametrize("research_point", ["directory", "file"], indirect=True)
 def test_research_selection_survives_staging(research_point, monkeypatch, tmp_path):
-    start, workspace, _ = research_point
+    start, workspace, research = research_point
     control = tmp_path / "control"
     control.mkdir()
     monkeypatch.setattr(warm, "_CONTROL", str(control))
@@ -421,7 +423,7 @@ def test_research_selection_survives_staging(research_point, monkeypatch, tmp_pa
             shutil.copyfile(source, target)
         async def exec(self, command, **kwargs):
             return SimpleNamespace(return_code=0)
-    asyncio.run(start.stage(Environment(), str(workspace)))
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == [str(research)]
     declaration = json.loads((control / "warm-start.json").read_bytes())
     assert declaration["research_component_ids"] == ["experiments"]
 
@@ -549,3 +551,80 @@ def test_omitted_fresh_replan_keeps_default_native_history(tmp_path):
     declaration = tmp_path / "warm.json"
     declaration.write_text("{}")
     assert prepare_session_refresh({"LOOPX_WARM_START": str(declaration)}, None, tmp_path) == ""
+
+
+@pytest.fixture
+def parent_workspace_point(point, tmp_path, request):
+    start, original = point
+    parent = tmp_path / "captured-parent"
+    workspace = parent / "nested" / "task"
+    workspace.parent.mkdir(parents=True)
+    shutil.copytree(original, workspace)
+    (parent / "sibling-report").write_text("inert captured sibling")
+    manifest = json.loads((start.root / "checkpoint.json").read_bytes())
+    metadata = manifest["point_metadata"]
+    metadata["native_session"]["guest_workspace"] = str(workspace)
+    component = {"id": "workspace", "source_path": str(parent)}
+    metadata["worker_file_snapshot"]["components"] = [component]
+    variant = getattr(request, "param", "valid")
+    if variant == "ambiguous":
+        metadata["worker_file_snapshot"]["components"].append(
+            {"id": "context", "source_path": str(workspace.parent)})
+    elif variant == "missing":
+        metadata["native_session"]["guest_workspace"] = str(parent / "absent")
+        workspace = parent / "absent"
+    elif variant == "noncanonical":
+        metadata["worker_file_snapshot"]["components"] = [
+            {"id": "workspace", "source_path": str(parent) + "/"}]
+    components = [component, manifest["components"][1]]
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    unit = tmp_path / "parent-point"
+    sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
+        "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(unit)})
+    shutil.rmtree(parent)
+    workspace.mkdir(parents=True)
+    (workspace / "candidate").write_text("fresh image candidate")
+    (parent / "sibling-report").write_text("receiver sibling must survive")
+    return replace(start, root=unit, sha256=sealed["sha256"]), workspace, parent
+
+
+def test_parent_capture_restores_only_native_workspace_and_preserves_point(parent_workspace_point):
+    start, workspace, parent = parent_workspace_point
+    assert start.verify(str(workspace))
+    declaration = {"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}
+    warm.restore_workspace(declaration, workspace)
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (workspace / "candidate").stat().st_mode & 0o777 == 0o600
+    assert (workspace.with_name("task.before-checkpoint") / "candidate").read_text() == "fresh image candidate"
+    assert (parent / "sibling-report").read_text() == "receiver sibling must survive"
+    assert not (workspace / "sibling-report").exists()
+    effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(start.root),
+                                                          "expected_sha256": start.sha256})
+    with pytest.raises(ValueError, match="already prepared"):
+        warm.restore_workspace(declaration, workspace)
+
+
+@pytest.mark.parametrize("parent_workspace_point", ["ambiguous", "missing", "noncanonical"], indirect=True)
+def test_invalid_parent_capture_refuses_preflight_and_restore_before_mutation(parent_workspace_point):
+    start, workspace, parent = parent_workspace_point
+    with pytest.raises(ValueError):
+        start.verify(str(workspace))
+    with pytest.raises(ValueError):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "deadline_epoch": start.deadline_epoch}, workspace)
+    assert (workspace / "candidate").read_text() == "fresh image candidate"
+    assert (parent / "sibling-report").read_text() == "receiver sibling must survive"
+    assert not workspace.with_name(workspace.name + ".before-checkpoint").exists()
+
+
+def test_parent_capture_tamper_refuses_before_receiver_mutation(parent_workspace_point):
+    start, workspace, _ = parent_workspace_point
+    candidate = start.root / "components/workspace/nested/task/candidate"
+    candidate.chmod(0o600)
+    candidate.write_text("tampered")
+    with pytest.raises(EffectRuntimeConflict, match="artifact members differ"):
+        start.verify(str(workspace))
+    with pytest.raises(EffectRuntimeConflict, match="artifact members differ"):
+        warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                                "deadline_epoch": start.deadline_epoch}, workspace)
+    assert (workspace / "candidate").read_text() == "fresh image candidate"
