@@ -41,6 +41,15 @@ claim. A failed refresh does not present an earlier ownership observation as
 fresh. IDs, observation time and the receipt are available under **Claim
 details**. Private recall never enters this panel or the room card.
 
+Room reads carry the existing `loopx_projection_envelope_v0` freshness and coverage
+contract. Registry, connection and
+canonical Todo source timestamps precede assembly; a delayed read cannot make
+old inputs fresh. Unknown, stale, unreadable or incomplete reads are disclosed
+before counts or current ownership, and cannot enable a new browser claim.
+CLI Markdown and public room cards disclose the same envelope alerts. A claim
+replay rereads current sources; serving a saved copy retains its original read
+time and recomputes age through the existing envelope owner.
+
 The packaged browser scenario `room-work` uses a real disposable local authority
 and synthetic connection/provider transport. It verifies duplicate-click
 isolation, uncertain delivery, reload/same-key recovery, independent CLI
@@ -209,6 +218,17 @@ loopx --registry .loopx/registry.json --format json goal-channel work resume \
   --goal-id room-goal --agent-id agent-a --turn-instance-id '<admitted-turn-id>' \
   --quota-decision-json .local/admitted-quota.json
 ```
+
+Native discovery can bind the selected Todo later in the **same Turn**, yielding
+an `upgraded` receipt and then `replayed` on reread. Resume accepts those native
+outcomes, checks the original persisted event and settlement binding, and reads
+current quota for that exact Todo/Turn. It neither replaces the binding nor
+records another guard. If the work requires host capabilities, repeat current
+`--available-capability` flags as for `quota should-run`; the saved packet does
+not establish their present availability. The existing native capability owner
+also reads current host observations; omitting a flag does not revoke a
+still-valid observation. A changed native capability scope, revoked connection
+or mismatched receipt fails before retrieval.
 
 Preview performs no provider retrieval, receipt write, claim or room send.
 Add `--execute` to verify the current Bot identity and restore scoped context.

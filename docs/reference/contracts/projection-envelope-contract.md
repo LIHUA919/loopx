@@ -23,6 +23,7 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx global-gates` | `global_gates` | `global` |
 | `loopx global-todos` | `global_todos` | `global` |
 | `loopx global-risks` | `global_risks` | `global` |
+| `goal-channel work project/claim` and room-work HTTP | `room_work` | `goal_actor` |
 
 Other read models adopt the envelope in the order listed in the RFC; until
 then they carry no freshness guarantee and consumer rule 1 below applies.

@@ -323,6 +323,16 @@ by current verified recall receipts. It does not send private context to a room
 or accept/renew work. Source-session exact-instance profiles and arbitrary
 external artifact targets remain outside this local qualification stage.
 
+The local continuation retains the native persisted Todo/Turn binding across
+discovery, `upgraded` and `replayed` guard outcomes. Current capability input is
+re-evaluated instead of inherited from a saved quota packet. Room orientation
+uses the existing projection envelope owner for registry, connection and
+canonical-source read facts; its HTTP, CLI and packaged consumers disclose old,
+unreadable or incomplete scope before presenting current ownership. A claim
+replay rereads those sources without renewing the historical receipt. These
+local owner integrations still require exact-head installation and regression
+qualification; they do not close the live or independent-host acceptance.
+
 Validation uses synthetic Lark transport with disposable real local stores.
 Independent source CLI processes with separate TS runtimes compete for one
 File/SQLite claim; a fresh process replays its exact receipt, and direct CLI
