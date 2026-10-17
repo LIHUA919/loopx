@@ -250,6 +250,8 @@ def register_goal_channel_commands(
             work_parser.add_argument("--request-id", required=True)
         if work_command == "resume":
             work_parser.add_argument("--turn-instance-id", required=True)
+            work_parser.add_argument("--available-capability", action="append", dest="available_capabilities",
+                help="Current host capability; repeat as for quota should-run. Saved packets do not grant it.")
             work_parser.add_argument("--quota-decision-json", required=True,
                 help="Exact admitted quota packet saved in local private state.")
             work_parser.add_argument("--artifact-ref", action="append",
@@ -454,6 +456,8 @@ def _quota_packet(
     runtime_root_arg: str | None,
     goal_id: str,
     agent_id: str | None,
+    turn_instance_id: str | None = None,
+    available_capabilities: list[str] | None = None,
 ) -> dict[str, Any]:
     project_root = registry_project_root(registry_path)
     status = collect_status(
@@ -463,11 +467,30 @@ def _quota_packet(
         limit=20,
         goal_id=goal_id,
     )
+    binding: dict[str, Any] = {}
+    receipt = None
+    if turn_instance_id is not None:
+        from ..control_plane.quota.heartbeat_receipt import (
+            find_heartbeat_receipt, heartbeat_receipt_settlement_todo_id, heartbeat_receipt_view,
+        )
+        root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg, registry_path=registry_path)
+        receipt = find_heartbeat_receipt(root, goal_id=goal_id, agent_id=agent_id,
+            turn_instance_id=turn_instance_id)
+        todo_id = heartbeat_receipt_settlement_todo_id(receipt) if receipt else None
+        if not todo_id:
+            raise ValueError("resume requires the original native Todo-bound receipt")
+        binding = {"receipt_bound_todo_id": todo_id, "turn_instance_id": turn_instance_id,
+            "runtime_root": root, "receipt_bound_guard_recorded_at": receipt.get("recorded_at")}
     packet = build_quota_should_run(
         status,
         goal_id=goal_id,
         agent_id=agent_id,
+        available_capabilities=(available_capabilities or []) if turn_instance_id else available_capabilities,
+        **binding,
     )
+    if receipt is not None:
+        packet["heartbeat_receipt"] = heartbeat_receipt_view(receipt,
+            turn_instance_id=turn_instance_id, status="replayed")
     # Transport adapter: retain the complete same-read Todo projection only
     # for this notification. Quota's 180-character hot path stays unchanged;
     # the shared TS presentation owner checks identity/version/lifecycle.
@@ -511,7 +534,9 @@ def handle_goal_channel_command(
                 quota_decision=load_turn_quota_decision(args.quota_decision_json), execute=execute,
                 artifact_refs=args.artifact_ref,
                 read_current_quota=lambda: _quota_packet(registry_path=source_registry_path,
-                    runtime_root_arg=str(source_runtime_root), goal_id=goal_id, agent_id=args.agent_id))
+                    runtime_root_arg=str(source_runtime_root), goal_id=goal_id, agent_id=args.agent_id,
+                    turn_instance_id=args.turn_instance_id,
+                    available_capabilities=getattr(args, "available_capabilities", None)))
         elif args.goal_channel_work_command in {"offer", "revoke"}:
             from ..extensions.lark.room_claim import run_room_claim_offer
 
@@ -855,6 +880,9 @@ def render_goal_channel_markdown(payload: dict[str, object]) -> str:
         f"- external_write_performed: `{payload.get('external_write_performed')}`",
         f"- readback_verified: `{payload.get('readback_verified')}`",
     ]
+    if payload.get("operation") in {"work_project", "work_claim"}:
+        from ..control_plane.projection_envelope_facts import render_projection_envelope_markdown
+        lines.extend(render_projection_envelope_markdown(payload.get("projection_envelope")))
     if payload.get("blocker"):
         lines.append(f"- blocker: `{payload.get('blocker')}`")
     lines.extend(["", str(payload.get("public_summary") or "")])

@@ -20,7 +20,8 @@ from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.coordination.authority_source_capture import authority_registry_source
 from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ...control_plane.runtime.public_safety import validate_public_safe_value
-from ...control_plane.runtime.time import now_local_iso
+from ...control_plane.runtime.time import now_utc_iso
+from ...control_plane.projection_envelope_facts import source_fact, seal_projection_envelope
 from ...file_lock import exclusive_file_lock
 from ..runtime import default_extension_state_file, resolve_extension_activation
 from . import LARK_EXTENSION_ID, LARK_GOAL_CHANNEL_PERMISSION
@@ -70,6 +71,9 @@ def build_work_card(packet: dict[str, Any]) -> dict[str, Any]:
         # Replays publish the same semantic acceptance card and provider key.
         body += f"\nHistorical claim receipt: {receipt['acceptance']} · Task: {receipt['todo_id']}\nCurrent owner: {receipt.get('current_owner') or 'none'}\nReceipt: {receipt['receipt_id']}"
     body += "\nRead-only orientation. Claim through the scoped Agent CLI; recheck current authority after reconnect."
+    envelope = packet.get("projection_envelope") or {}
+    if envelope.get("alert") is not False:
+        body = "Read freshness or coverage is unknown; refresh before relying on this orientation.\n" + body
     return {"config": {"wide_screen_mode": True},
         "header": {"title": {"tag": "plain_text", "content": "LoopX work"}},
         "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": body}}]}
@@ -88,6 +92,22 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
         "status": "failed", "external_write_performed": False, "readback_verified": False,
         "canonical_claim_accepted": False, "execution_authority_granted": False, "public_summary": "Room work is unavailable."}
     stage = "scope"
+    reads = {name: source_fact(name, read_status="not_read")
+        for name in ("registry", "connection", "canonical_todos")}
+
+    def read_source(name, reader):
+        # Facts stay at the IO boundary. Keep the oldest read used by this
+        # projection; the TS envelope owner decides freshness and coverage.
+        observed = reads[name].get("last_read_at") or now_utc_iso()
+        try:
+            result = reader()
+        except Exception:
+            reads[name] = source_fact(name, read_status="unreadable", last_read_at=observed)
+            raise
+        reads[name] = source_fact(name, read_status="missing" if result is None else "read",
+            last_read_at=observed)
+        return result
+
     try:
         validate_public_safe_value({"goal_id": goal_id, "actor_id": actor_id})
         if command not in {"project", "claim"}:
@@ -102,7 +122,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                     Path(route["source_runtime_root"]).resolve() != runtime_root.resolve()):
                     raise ValueError("source route changed")
             registry_sources = sources
-        registered = registered_agent_ids_from_registry(registry_path, goal_id)
+        registered = read_source("registry", lambda: registered_agent_ids_from_registry(registry_path, goal_id))
         if actor_id not in registered:
             raise ValueError("actor is not registered")
         def current_binding() -> dict[str, Any]:
@@ -119,7 +139,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                 raise ValueError("binding changed")
             return current
 
-        binding = current_binding()
+        binding = read_source("connection", current_binding)
         session = GoalChannelMessageDeliverySession(goal_id=goal_id, binding=binding,
             binding_lock_path=binding_path, target_lock_path=target_path,
             history_start_at=str(binding.get("created_at") or "1970-01-01T00:00:00Z"),
@@ -160,13 +180,15 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                 "todo_id": str(todo_id), "actor_id": actor_id, "scope": "historical_acceptance_only",
                 "receipt_id": "sha256:" + hashlib.sha256(str(idempotency_key).encode()).hexdigest()}
         stage = "projection"
-        snapshot = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
+        snapshot = read_source("canonical_todos", lambda:
+            read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id))
         if snapshot is None:
             raise ValueError("canonical promotion required")
         packet["projection"] = effect_runtime_result("goal_channel.work.project", {
             "goal_id": goal_id, "actor_id": actor_id, "registered_agents": registered,
-            "snapshot": snapshot, "observed_at": now_local_iso(),
+            "snapshot": snapshot, "observed_at": now_utc_iso(), "read_sources": list(reads.values()),
             **({"inspected_todo_id": todo_id} if command == "project" and todo_id is not None else {})})
+        packet["projection_envelope"] = packet["projection"]["projection_envelope"]
         if command == "claim":
             current: dict[str, Any] = next((todo for todo in snapshot["todos"] if todo["todo_id"] == todo_id), {})
             packet["receipt"]["current_owner"] = current.get("claimed_by")
@@ -198,6 +220,12 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     except Exception:
         packet["blocker"] = f"{stage}_unavailable"
     packet["failure_stage"] = stage
+    # A refused/partial scope is also a read result, never a fresh whole view.
+    if "projection_envelope" not in packet:
+        packet["projection_envelope"] = seal_projection_envelope(projection="room_work",
+            observed_at=now_utc_iso(), sources=list(reads.values()),
+            coverage={"scope": "goal_actor", "expected_count": 1, "included_count": 0,
+                "omitted": [{"reason": "room_scope_unavailable", "count": 1}]})
     packet["public_summary"] = ("Claim accepted; room delivery/readback needs recovery using the same key."
         if packet["canonical_claim_accepted"] else "No claim acceptance is reported; refresh scope and canonical state.")
     try:

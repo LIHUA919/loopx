@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {createHash} from "node:crypto";
+import {settlementIdentity} from "../../loopx/control_plane/effect_program.ts";
 import {validateRoomResumeInput, projectRoomResumeReadback} from "../../loopx/control_plane/goals/room_resume.ts";
 
 const quota = {ok: true, status_health_ok: true, goal_id: "goal", mode: "should-run",
-  agent_identity: {agent_id: "actor"}, heartbeat_receipt: {status: "committed", turn_instance_id: "turn"},
+  agent_identity: {agent_id: "actor"}, heartbeat_receipt: {status: "committed", turn_instance_id: "turn", event_id: "native-event",
+    settlement_identity: settlementIdentity({goal_id: "goal", agent_id: "actor", todo_id: "todo", turn_instance_id: "turn"})},
   selected_todo: {todo_id: "todo", claimed_by: "actor", status: "open"}, should_run: true,
   interaction_contract: {mode: "run", agent_channel: {must_attempt: true, delivery_allowed: true}}};
 const projection = {goal_id: "goal", actor_id: "actor", authority_state: "available", source_revision: "revision"};
@@ -24,6 +26,17 @@ test("exact Turn/actor identity and current quota are required before retrieval"
   assert.throws(() => validateRoomResumeInput({...input, turn_instance_id: "old"}));
   assert.throws(() => validateRoomResumeInput({...input, artifact_refs: ["viking://user/example/../other"]}));
   assert.equal(validateRoomResumeInput({...input, current_quota: {...quota, should_run: false}}).matches, false);
+  assert.equal(validateRoomResumeInput({...input, current_quota: {...quota,
+    agent_identity: {...quota.agent_identity, runtime_available_capabilities: ["network"]}}}).matches, false);
+  for (const status of ["upgraded", "replayed"]) {
+    assert.equal(validateRoomResumeInput({...input, quota: {...quota,
+      heartbeat_receipt: {...quota.heartbeat_receipt, status}}}).matches, true);
+  }
+  for (const patch of [{status: "failed"}, {event_id: "different-event"},
+    {settlement_identity: {...quota.heartbeat_receipt.settlement_identity, todo_id: "other"}}]) {
+    assert.throws(() => validateRoomResumeInput({...input, quota: {...quota,
+      heartbeat_receipt: {...quota.heartbeat_receipt, ...patch}}}));
+  }
 });
 
 test("only explicitly requested references from current accepted recall may be carried", () => {

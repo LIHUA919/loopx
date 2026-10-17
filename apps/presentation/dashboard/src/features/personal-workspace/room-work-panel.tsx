@@ -18,6 +18,8 @@ export function RoomWorkPanel({connection, onClose, triggerElement}: {connection
   const [result, setResult] = useState<RoomWork | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const envelope = work?.projection_envelope;
+  const projectionReady = envelope?.fresh === true && envelope.complete && envelope.alert === false;
   const inFlight = useRef(false);
   const alive = useRef(true);
   const dialog = useRef<HTMLElement>(null);
@@ -54,7 +56,7 @@ export function RoomWorkPanel({connection, onClose, triggerElement}: {connection
   async function claim() {
     if (inFlight.current) return;
     const selected = work?.projection?.selected_todo;
-    if (!intent && (!work?.ok || !work.claim_available || !selected)) return;
+    if (!intent && (!work?.ok || !projectionReady || !work.claim_available || !selected)) return;
     const request = intent ?? {goal_id: connection.goal_id, connection_id: connection.connection_id,
       scope_revision: work!.scope_revision, todo_id: selected!.todo_id,
       expected_revision: work!.projection!.source_revision, idempotency_key: crypto.randomUUID()};
@@ -79,7 +81,7 @@ export function RoomWorkPanel({connection, onClose, triggerElement}: {connection
       } else setError(t("roomWork.unknown"));
     } finally {inFlight.current = false; if (alive.current) setBusy(false);}
   }
-  const observed = !work?.projection ? null : Object.hasOwn(work.projection, "inspected_todo")
+  const observed = !projectionReady || !work?.projection ? null : Object.hasOwn(work.projection, "inspected_todo")
     ? work.projection.inspected_todo : result?.receipt;
   return <div className="personal-lark-modal-backdrop" role="presentation">
     <section ref={dialog} tabIndex={-1} aria-labelledby="room-work-title" aria-modal="true" className="personal-lark-modal personal-room-work" role="dialog">
@@ -87,10 +89,11 @@ export function RoomWorkPanel({connection, onClose, triggerElement}: {connection
       <p>{connection.chat_name} · {connection.goal_title}</p>
       <p>{t("roomWork.agent")}: {work?.actor_id ?? connection.agent_id}</p>
       <p className="personal-room-work-boundary">{t("roomWork.boundary")}</p>
-      {work?.ok && !work.claim_available && !result ? <p role="status">{t("roomWork.readOnly")}</p> : null}
+      {work && !projectionReady ? <p role="alert">{t("roomWork.readUnavailable")}</p> : null}
+      {work?.ok && projectionReady && !work.claim_available && !result ? <p role="status">{t("roomWork.readOnly")}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {busy ? <p role="status">{t("roomWork.loading")}</p> : null}
-      {work?.projection ? <dl className="personal-room-work-counts"><div><dt>{t("roomWork.available")}</dt><dd>{work.projection.counts.unclaimed}</dd></div>
+      {work?.projection && projectionReady ? <dl className="personal-room-work-counts"><div><dt>{t("roomWork.available")}</dt><dd>{work.projection.counts.unclaimed}</dd></div>
         <div><dt>{t("roomWork.gates")}</dt><dd>{work.projection.counts.user_gates}</dd></div></dl> : null}
       {result?.canonical_claim_accepted && result.receipt ? <p role="status">{t("roomWork.accepted")}</p> : null}
       {result?.readback_verified ? <p role="status">{t("roomWork.messageVerified")}</p> : null}
@@ -98,11 +101,11 @@ export function RoomWorkPanel({connection, onClose, triggerElement}: {connection
       {intent ? <p>{t("roomWork.pending")}</p> : null}
       {work?.projection ? <details><summary>{t("roomWork.details")}</summary><dl>
         <dt>{t("roomWork.task")}</dt><dd>{intent?.todo_id ?? work.projection.inspected_todo?.todo_id ?? result?.receipt?.todo_id ?? work.projection.selected_todo?.todo_id ?? t("roomWork.none")}</dd>
-        <dt>{t("roomWork.observed")}</dt><dd>{work.projection.generated_at}</dd>
+        <dt>{t("roomWork.observed")}</dt><dd>{envelope?.observed_at ?? work.projection.generated_at}</dd>
         {result?.receipt ? <><dt>{t("roomWork.receipt")}</dt><dd>{result.receipt.receipt_id}</dd></> : null}
       </dl></details> : null}
       <footer><button type="button" disabled={busy} onClick={() => void refresh()}>{t("roomWork.refresh")}</button>
-        {intent || work?.projection?.selected_todo ? <button className="personal-primary-action" type="button" disabled={busy || (!intent && (!work?.ok || !work.claim_available))} onClick={() => void claim()}>{t(intent ? "roomWork.recover" : "roomWork.claim")}</button> : null}</footer>
+        {intent || work?.projection?.selected_todo ? <button className="personal-primary-action" type="button" disabled={busy || (!intent && (!work?.ok || !projectionReady || !work.claim_available))} onClick={() => void claim()}>{t(intent ? "roomWork.recover" : "roomWork.claim")}</button> : null}</footer>
     </section>
   </div>;
 }

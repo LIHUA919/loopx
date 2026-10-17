@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {createHash} from "node:crypto";
 import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {committedHeartbeatReceiptForTodo} from "../quota/heartbeat_receipt_identity.ts";
 
 /** Compare observations; this read model never accepts work or grants access. */
 function quotaKey(value: unknown, goal: string, actor: string): string {
@@ -14,6 +15,7 @@ function quotaKey(value: unknown, goal: string, actor: string): string {
   const selectedId = q.selected_todo == null ? null : requireNonEmptyString(selected.todo_id, "selected Todo id");
   return JSON.stringify([selectedId, selected.status ?? null,
     selected.claimed_by ?? null, selected.task_class ?? null, selected.action_kind ?? null,
+    requireStringArray(identity.runtime_available_capabilities ?? [], "current runtime capabilities").sort(),
     q.should_run === true, q.state ?? null, q.effective_action ?? null, agent.must_attempt === true,
     agent.delivery_allowed === true, interaction.mode ?? null]);
 }
@@ -24,10 +26,13 @@ export function validateRoomResumeInput(value: unknown): JsonObject {
   const actor = requireNonEmptyString(p.actor_id, "actor id");
   const turn = requireNonEmptyString(p.turn_instance_id, "turn identity");
   const q = requireJsonObject(p.quota, "input quota");
-  const receipt = requireJsonObject(q.heartbeat_receipt, "quota receipt");
-  requireNonEmptyString(requireJsonObject(q.selected_todo, "admitted selected Todo").todo_id, "admitted Todo id");
-  if (q.mode !== "should-run" || receipt.turn_instance_id !== turn ||
-      !["committed", "replayed"].includes(String(receipt.status))) throw new Error("resume Turn receipt mismatch");
+  const todo = requireNonEmptyString(requireJsonObject(q.selected_todo, "admitted selected Todo").todo_id, "admitted Todo id");
+  const receipt = committedHeartbeatReceiptForTodo(q.heartbeat_receipt, goal, actor, turn, todo);
+  const current = requireJsonObject(p.current_quota, "current quota");
+  const currentReceipt = committedHeartbeatReceiptForTodo(current.heartbeat_receipt, goal, actor, turn, todo);
+  if (q.mode !== "should-run" || current.mode !== "should-run" || receipt.event_id !== currentReceipt.event_id) {
+    throw new Error("resume Turn receipt mismatch");
+  }
   const refs = requireStringArray(p.artifact_refs, "requested artifact references");
   if (refs.length > 8 || new Set(refs).size !== refs.length || refs.some(ref =>
     !/^viking:\/\/[A-Za-z0-9_./:-]+$/.test(ref) || ref.split("/").some(part => part === "." || part === ".."))) {

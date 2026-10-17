@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {projectRoomWork} from "../../loopx/control_plane/goals/room_work_projection.ts";
+import {requireJsonObject} from "../../loopx/control_plane/runtime_decode.ts";
 
 const todo = (todo_id: string, patch = {}) => ({todo_id, role: "agent", status: "open",
   archive_state: "active", task_class: "advancement_task", text: "PRIVATE_TASK_TEXT", ...patch});
 const packet = (todos: unknown[], patch = {}) => ({goal_id: "room-goal", actor_id: "agent-a",
   registered_agents: ["agent-a", "agent-b"], observed_at: "2026-01-01T00:00:00Z",
+  read_sources: ["registry", "connection", "canonical_todos"].map(source_id => ({source_id,
+    read_status: "read", last_read_at: "2026-01-01T00:00:00Z"})),
   snapshot: {status: "loaded", provider_revision: "fixture:1", decision_read_from_provider: true,
     legacy_fallback_used: false, todos, ...patch}});
 
@@ -26,9 +29,19 @@ test("room orientation reuses claim admission and exposes no task content", () =
 
 test("room orientation refuses revoked identity, partial snapshot and invalid freshness", () => {
   for (const bad of [{...packet([]), registered_agents: []}, packet([], {status: "failed"}),
-    packet([], {legacy_fallback_used: true}), {...packet([]), observed_at: "not-a-date"}]) {
+    packet([], {legacy_fallback_used: true}), {...packet([]), observed_at: "not-a-date"},
+    {...packet([]), read_sources: []}]) {
     assert.throws(() => projectRoomWork(bad));
   }
+});
+
+test("room envelope inherits source read time and discloses unreadable source facts", () => {
+  const input = packet([todo("todo_available")]);
+  const stale = projectRoomWork({...input, observed_at: "2026-01-01T00:10:00Z"});
+  assert.equal(requireJsonObject(stale.projection_envelope, "envelope").fresh, false);
+  const unreadable = projectRoomWork({...input, read_sources: input.read_sources.map(row =>
+    row.source_id === "canonical_todos" ? {...row, read_status: "unreadable"} : row)});
+  assert.equal(requireJsonObject(unreadable.projection_envelope, "envelope").alert, true);
 });
 
 test("optional ownership readback is fresh, minimal and actor scoped", () => {

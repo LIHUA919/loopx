@@ -33,12 +33,22 @@ export const roomWorkScenario = {
       const backend=`http://127.0.0.1:${ready.port}`;
       const before=await (await fetch(backend+"/fixture/readback")).json();
       const submitted=[], responses=[];
+      let readMode=null;
       context=await openWorkspacePage(browser,url,{beforeGoto:async(api,page)=>{
         api.larkConnections.push(connection);
         await page.route("**/api/chat/lark/room-work**",async route=>{
           if(route.request().method()==="POST")submitted.push(route.request().postDataJSON());
           const response=await fetchWorkspaceBackend(route,backend);
-          responses.push(await response.json());await route.fulfill({response});
+          const payload=await response.json();
+          if (route.request().method()==="GET" && readMode) {
+            // Consumer negatives use copies of a real response. Producer source
+            // facts and envelope decisions are independently checked over HTTP.
+            if (readMode==="unknown") delete payload.projection_envelope;
+            else payload.projection_envelope={...payload.projection_envelope,
+              fresh:readMode==="incomplete",complete:readMode!=="incomplete",alert:true,
+              alert_reasons:[readMode==="incomplete"?"incomplete_coverage":readMode==="stale"?"stale_sources":"unreadable_sources"]};
+          }
+          responses.push(payload);await route.fulfill({response,json:payload});
         });
       }});
       const {page}=context;
@@ -54,6 +64,19 @@ export const roomWorkScenario = {
       await open();
       await page.screenshot({path:resolve(outputDir,"room-work-before-claim.png"),animations:"disabled"});
       await page.getByRole("dialog").screenshot({path:resolve(outputDir,"room-work-dialog-desktop.png"),animations:"disabled"});
+      for (const mode of ["unknown","stale","unreadable","incomplete"]) {
+        readMode=mode;
+        await page.getByRole("button",{name:"刷新当前状态"}).click();
+        await page.getByText("此读数可能已过时、不完整或未经核验。请刷新后再领取或确认归属。",{exact:true}).waitFor();
+        assert.equal(await page.getByRole("button",{name:"领取任务并发送凭据"}).isDisabled(),true);
+        assert.equal(await page.locator(".personal-room-work-counts").count(),0);
+        assert.equal(submitted.length,0,"old, unknown or partial readings cannot submit new claims");
+        if (mode==="stale") await page.getByRole("dialog").screenshot({path:resolve(outputDir,"room-work-stale.png"),animations:"disabled"});
+      }
+      readMode=null;
+      await page.getByRole("button",{name:"刷新当前状态"}).click();
+      await page.waitForFunction(()=>!document.querySelector(".personal-primary-action:disabled"));
+      await page.locator(".personal-room-work-counts").waitFor();
       await page.evaluate(()=>{
         window.__roomWorkSetItem = Storage.prototype.setItem;
         Storage.prototype.setItem = function(key,value) {

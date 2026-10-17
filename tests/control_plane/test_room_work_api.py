@@ -8,6 +8,7 @@ import pytest
 from test_room_work import setup as setup, snapshot, claim
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
+from loopx.extensions.lark import goal_channel_work as work
 
 
 @pytest.fixture
@@ -52,6 +53,8 @@ def test_http_claim_retry_and_independent_current_owner(api):
     request, args, room, _ = api
     status, preview = request()
     assert status == 200 and preview["ok"] and not room.messages
+    assert preview["projection_envelope"] == preview["projection"]["projection_envelope"]
+    assert preview["projection_envelope"]["fresh"] and preview["projection_envelope"]["complete"]
     assert "PRIVATE_" not in json.dumps(preview)
     body = intent(preview)
     status, accepted = request(body)
@@ -66,6 +69,71 @@ def test_http_claim_retry_and_independent_current_owner(api):
     _, current = request(query="goal_id=room-fixture&connection_id=agent-a&todo_id=" + body["todo_id"])
     assert current["projection"]["inspected_todo"]["current_owner"] == "agent-a"
     assert current["projection"]["counts"]["unclaimed"] == 0
+
+
+def test_http_slow_source_does_not_become_fresh_at_assembly(api, monkeypatch):
+    request, _, room, _ = api
+    clock = {"at": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(work, "now_utc_iso", lambda: clock["at"])
+    read = work.read_canonical_todos_if_promoted
+    def slow_read(**kwargs):
+        result = read(**kwargs)
+        clock["at"] = "2026-01-01T00:10:00Z"
+        return result
+    monkeypatch.setattr(work, "read_canonical_todos_if_promoted", slow_read)
+    status, result = request()
+    envelope = result["projection_envelope"]
+    assert status == 200 and result["ok"] and not result["claim_available"]
+    assert envelope["observed_at"] == "2026-01-01T00:10:00Z"
+    assert not envelope["fresh"] and envelope["complete"] and envelope["alert"]
+    assert all(row["last_read_at"] == "2026-01-01T00:00:00Z" for row in envelope["sources"])
+    assert "stale_sources" in envelope["alert_reasons"] and not room.messages
+
+
+def test_http_unreadable_authority_has_no_whole_current_projection(api, monkeypatch):
+    request, _, room, _ = api
+    def unavailable(**_):
+        raise OSError("synthetic authority read failure")
+    monkeypatch.setattr(work, "read_canonical_todos_if_promoted", unavailable)
+    status, result = request()
+    envelope = result["projection_envelope"]
+    assert status == 200 and not result["ok"] and "projection" not in result
+    assert not envelope["fresh"] and not envelope["complete"] and envelope["alert"]
+    assert "unreadable_sources" in envelope["alert_reasons"]
+    assert envelope["coverage"]["included_count"] == 0 and not room.messages
+
+
+def test_http_revoked_actor_discloses_the_uncovered_scope(api):
+    request, args, room, _ = api
+    registry = json.loads(args["registry_path"].read_text())
+    registry["goals"][0]["coordination"]["registered_agents"] = ["agent-b"]
+    args["registry_path"].write_text(json.dumps(registry))
+    _, result = request()
+    envelope = result["projection_envelope"]
+    assert not result["ok"] and not result["claim_available"] and not envelope["complete"]
+    assert envelope["coverage"]["expected_count"] == 1
+    assert envelope["coverage"]["omitted"] == [{"reason": "room_scope_unavailable", "count": 1, "refs": []}]
+    assert "incomplete_coverage" in envelope["alert_reasons"] and not room.messages
+
+
+def test_claim_replay_rereads_sources_but_a_saved_copy_retains_its_age(api, monkeypatch):
+    from loopx.control_plane.projection_envelope_facts import serve_projection_envelope
+    request, _, room, _ = api
+    clock = {"at": "2026-01-01T00:00:00Z"}
+    monkeypatch.setattr(work, "now_utc_iso", lambda: clock["at"])
+    _, preview = request()
+    body = intent(preview)
+    _, accepted = request(body)
+    clock["at"] = "2026-01-01T00:10:00Z"
+    _, replayed = request(body)
+    assert replayed["receipt"]["receipt_id"] == accepted["receipt"]["receipt_id"] and len(room.messages) == 1
+    assert replayed["projection_envelope"]["fresh"]
+    assert replayed["projection_envelope"]["observed_at"] == clock["at"]
+    assert replayed["projection_envelope"]["served_from_cache"] is False
+    saved_copy = serve_projection_envelope(accepted["projection_envelope"], served_at=clock["at"])
+    assert saved_copy["observed_at"] == "2026-01-01T00:00:00Z"
+    assert saved_copy["served_at"] == clock["at"] and saved_copy["served_from_cache"]
+    assert saved_copy["alert"] and not saved_copy["fresh"]
 
 
 def test_http_unknown_delivery_keeps_exact_request_recoverable(api):

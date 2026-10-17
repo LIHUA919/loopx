@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import os
 
 import pytest
 
@@ -20,8 +21,51 @@ from tests.capabilities.test_agent_turn_recall import raw_config, active_record
 TURN = "room-resume-fixture-turn"
 
 
+def native_cli(args, *command, ok=True):
+    installed = os.environ.get("LOOPX_ROOM_INSTALLED_PYTHON")
+    invocation = [installed, "-I"] if installed else [sys.executable]
+    completed = subprocess.run([*invocation, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
+        "--format", "json", *command], cwd=ROOT, text=True, capture_output=True, timeout=90)
+    payload = json.loads(completed.stdout)
+    assert (completed.returncode == 0) is ok, (payload, completed.stderr)
+    return payload
+
+
+@pytest.mark.parametrize("reconnect", ["portfolio"], indirect=True)
+def test_native_same_turn_portfolio_resumes_upgraded_and_replayed_receipts(reconnect, tmp_path):
+    args, room, _, kwargs = reconnect
+    turn = TURN
+    guard = ["quota", "should-run", "--goal-id", GOAL, "--agent-id", "agent-a", "--codex-app",
+        "--turn-instance-id", turn, "--available-capability", "network"]
+    discovery = kwargs["quota_decision"]
+    assert discovery["heartbeat_receipt"]["settlement_binding_owed"] is True
+    upgraded = native_cli(args, *guard, "--todo-id", TODO)
+    replayed = native_cli(args, *guard, "--todo-id", TODO)
+    revision = snapshot(args)["provider_revision"]
+    saved_packets = []
+    for packet, status in [(upgraded, "upgraded"), (replayed, "replayed")]:
+        assert packet["heartbeat_receipt"]["status"] == status, packet
+        assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        saved = tmp_path / (status + ".json")
+        saved.write_text(json.dumps(packet))
+        saved_packets.append(saved)
+        result = native_cli(args, "goal-channel", "work", "resume", "--goal-id", GOAL,
+            "--agent-id", "agent-a", "--turn-instance-id", turn, "--quota-decision-json", str(saved),
+            "--available-capability", "network")
+        assert result["status"] == "planned"
+        assert result["current_quota"]["selected_todo"]["todo_id"] == TODO
+        assert result["provider_call_count"] == 0
+    native_cli(args, "agent-capabilities", "--goal-id", GOAL, "--agent-id", "agent-a",
+        "--unavailable-capability", "network", "--execute")
+    for saved in saved_packets:
+        unavailable = native_cli(args, "goal-channel", "work", "resume", "--goal-id", GOAL,
+            "--agent-id", "agent-a", "--turn-instance-id", turn, "--quota-decision-json", str(saved), ok=False)
+        assert unavailable["provider_call_count"] == 0 and not unavailable["ok"]
+    assert snapshot(args)["provider_revision"] == revision and not room.messages
+
+
 @pytest.fixture
-def reconnect(room_setup, monkeypatch):  # noqa: F811
+def reconnect(room_setup, monkeypatch, request):  # noqa: F811
     args, room, binding = room_setup
     assert claim(args, "agent-a", snapshot(args)["provider_revision"], "resume-initial-claim")["ok"]
     room.messages.clear()
@@ -33,14 +77,18 @@ def reconnect(room_setup, monkeypatch):  # noqa: F811
     source["goals"][0]["source_registry"] = str(args["registry_path"])
     (args["runtime_root"] / "registry.global.json").write_text(json.dumps(source))
     monkeypatch.setattr(resume, "resolve_extension_activation", lambda *a, **k: {"enabled": True})
+    if getattr(request, "param", None) == "portfolio":
+        native_cli(args, "todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", "agent-a",
+            "--text", "Second independently eligible task")
+        native_cli(args, "todo", "update", "--goal-id", GOAL, "--agent-id", "agent-a", "--todo-id", TODO,
+            "--required-capability", "network")
 
     def fresh():
         return _quota_packet(registry_path=args["registry_path"], runtime_root_arg=str(args["runtime_root"]),
-            goal_id=GOAL, agent_id="agent-a")
+            goal_id=GOAL, agent_id="agent-a", turn_instance_id=TURN, available_capabilities=["network"])
 
-    quota = fresh()
-    admitted = copy.deepcopy(quota)
-    admitted.update(mode="should-run", heartbeat_receipt={"turn_instance_id": TURN, "status": "committed"})
+    admitted = native_cli(args, "quota", "should-run", "--goal-id", GOAL, "--agent-id", "agent-a",
+        "--codex-app", "--turn-instance-id", TURN, "--available-capability", "network")
     kwargs = dict(registry_path=args["registry_path"], authority_root=args["runtime_root"],
         broker_root=args["runtime_root"], binding_path=args["binding_path"], target_path=args["target_path"],
         goal_id=GOAL, actor_id="agent-a", quota_decision=admitted, turn_instance_id=TURN,
@@ -60,7 +108,7 @@ def test_source_cli_preview_is_private_and_performs_no_recall_or_claim(reconnect
         cwd=ROOT, text=True, capture_output=True)
     assert guard.returncode == 0, guard.stdout + guard.stderr
     admitted = json.loads(guard.stdout)
-    assert admitted["ok"] and admitted["heartbeat_receipt"]["status"] == "committed", admitted
+    assert admitted["ok"] and admitted["heartbeat_receipt"]["status"] == "replayed", admitted
     saved.write_text(guard.stdout)
     proc = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(args["registry_path"]),
         "--format", "json", "goal-channel", "work", "resume", "--goal-id", GOAL, "--agent-id", "agent-a",

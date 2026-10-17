@@ -71,8 +71,9 @@ class RoomWorkChatRequestMixin:
                 except ValueError:
                     # Inactive/incompatible extensions leave an explicitly read-only view.
                     pass
+            envelope = packet.get("projection_envelope") or {}
             self._send_json({**packet, "connection_id": connection_id, "scope_revision": scope,
-                "claim_available": packet.get("ok") is True and (activation.get("enabled") is True or
+                "claim_available": packet.get("ok") is True and envelope.get("alert") is False and (activation.get("enabled") is True or
                     (claim and packet.get("canonical_claim_accepted") is True and packet.get("readback_verified") is True))})
         except (ValueError, KeyError):
             self._send_error("Room work is unavailable for this connection. Check its Agent and authority, then refresh.",
