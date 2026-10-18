@@ -269,7 +269,12 @@ def handle_room_claim_callback(event: Mapping[str, Any], *, runtime_root: Path,
                 idempotency_key=request["idempotency_key"], runner=runner, publish_receipt=False,
                 # Provider reads can outlive the offer's original connection.
                 # Keep its witness through the facade's locked claim check.
-                expected_binding_digest=p["binding_digest"], registry_sources=sources)
+                expected_binding_digest=p["binding_digest"], registry_sources=sources,
+                admit_before=request["expires_at"])
+            if claimed.get("blocker") == "claim_expired":
+                # Refused admission must not publish a result card or change
+                # the durable offer. The native owner checks after its reads.
+                raise RoomClaimCallbackError("offer_expired")
             card = build_work_card(claimed) if claimed.get("projection") else {
                 "config": {"wide_screen_mode": True}, "header": {"title": {"tag": "plain_text", "content": "Claim readback"}},
                 "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": str(claimed.get("public_summary"))}}]}

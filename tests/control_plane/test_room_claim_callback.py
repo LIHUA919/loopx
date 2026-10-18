@@ -123,6 +123,34 @@ def test_two_actor_offers_compete_at_one_revision(offered):
     assert snapshot(args)["todos"][0]["claimed_by"] in {"agent-a", "agent-b"}
 
 
+def test_final_native_expiry_refusal_preserves_offer_message_and_authority(offered, monkeypatch):
+    from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityRejection
+    from loopx.extensions.lark import goal_channel_work
+
+    args, room, _, _, offer, event, callback_args, _ = offered
+    prepared = offer()
+    assert prepared["ok"], prepared
+    path = args["runtime_root"] / "room-claim-offers" / (prepared["request_id"] + ".json")
+    original_offer = path.read_bytes()
+    deadline = json.loads(original_offer)["request"]["expires_at"]
+    before, messages = snapshot(args), json.dumps(room.messages)
+    observed = []
+
+    def expired_at_native_admission(**kwargs):
+        observed.append(kwargs["admit_before"])
+        raise LocalCoordinationAuthorityRejection("Todo claim admission deadline elapsed",
+            code="claim_expired", payload={"failure_kind": "decision_rejection"})
+
+    monkeypatch.setattr(goal_channel_work, "claim_canonical_todo_if_promoted", expired_at_native_admission)
+    with pytest.raises(ingress.RoomClaimCallbackError) as rejected:
+        ingress.handle_room_claim_callback(event(prepared), **callback_args)
+    assert rejected.value.code == "offer_expired"
+    assert observed == [deadline]
+    assert snapshot(args) == before
+    assert json.dumps(room.messages) == messages
+    assert path.read_bytes() == original_offer
+
+
 @pytest.mark.parametrize("rejection", ["principal", "grant", "actor", "binding", "message", "app", "card", "expiry", "membership", "route"])
 def test_scope_and_stale_callback_rejections_preserve_canonical_state(offered, monkeypatch, rejection):
     args, room, binding, offer_args, offer, event, callback_args, transport = offered

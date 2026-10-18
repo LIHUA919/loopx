@@ -21,6 +21,7 @@ import {
   terminalLifecycleLocalCoordinationTodo, pollLocalCoordinationMonitor,
   LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
   LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA,
+  LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 
 test("registry witness captures primitive values across awaited request mutation", async t => {
@@ -64,6 +65,34 @@ test("claim source guards reject missing, duplicate, omitted primary and legacy 
       schema_version: `loopx_local_coordination_todo_claim_request_v${version}`, registry_sources,
     }, dependencies);
     assert.equal(result.failure_kind, "protocol_failure");
+    assert.equal(result.decision_read_from_provider, false);
+  }
+  assert.equal(opens, 0);
+});
+
+test("timed claim wire rejects absent/malformed deadlines and legacy smuggling before provider IO", async () => {
+  let opens = 0;
+  const dependencies = {createStore: (): AuthorityStore => {opens++; throw new Error("unexpected provider IO");}};
+  for (const admit_before of [undefined, null, "", 1, "2030-01-01", "2030Z", "not-a-dateZ"]) {
+    const result = await claimLocalCoordinationTodo({
+      schema_version: LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA, admit_before,
+    }, dependencies);
+    assert.equal(result.status, "failed");
+    assert.equal(result.decision_read_from_provider, false);
+  }
+  for (const version of [0, 1, 2]) for (const admit_before of [null, "2030-01-01T00:00:00Z"]) {
+    const result = await claimLocalCoordinationTodo({
+      schema_version: `loopx_local_coordination_todo_claim_request_v${version}`, admit_before,
+    }, dependencies);
+    assert.equal(result.failure_kind, "protocol_failure");
+    assert.equal(result.decision_read_from_provider, false);
+  }
+  for (const goal_ref of [null, {goal_id: "goal", goal_instance_id: "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]) {
+    const result = await claimLocalCoordinationTodo({
+      schema_version: LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA,
+      admit_before: "2030-01-01T00:00:00Z", goal_ref,
+    }, dependencies);
+    assert.equal(result.reason_code, "goal_ref_claim_contract_unqualified");
     assert.equal(result.decision_read_from_provider, false);
   }
   assert.equal(opens, 0);

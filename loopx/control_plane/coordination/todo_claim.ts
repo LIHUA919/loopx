@@ -62,6 +62,8 @@ export interface CoordinationTodoClaimInput {
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly dry_run: boolean;
   readonly now: Date;
+  /** Fresh admission deadline; never extends a lease or changes historical intent. */
+  readonly admit_before?: Date;
 }
 
 export interface CoordinationTodoClaimLeaseRequest {
@@ -144,6 +146,12 @@ function decisionFailure(
     reason_code: code,
     reason,
   };
+}
+
+function claimDeadlineFailure(input: CoordinationTodoClaimInput): CoordinationTodoClaimResult | null {
+  return input.admit_before !== undefined && Date.now() >= input.admit_before.valueOf()
+    ? failure("claim_expired", "Todo claim admission deadline elapsed", {}, "decision_rejection")
+    : null;
 }
 
 /** The legacy claim contract must never imply unimplemented lifetime binding. */
@@ -366,8 +374,13 @@ async function executeClaimAttempt(
   try {
     const scopeFailure = unqualifiedGoalRefClaimFailure(rawInput);
     if (scopeFailure !== null) return scopeFailure;
+    if (rawInput.admit_before !== undefined &&
+        (!(rawInput.admit_before instanceof Date) || Number.isNaN(rawInput.admit_before.valueOf()))) {
+      throw new AuthorityStoreProtocolError("admit_before must be a valid Date");
+    }
     input = {
       ...rawInput,
+      ...(rawInput.admit_before === undefined ? {} : {admit_before: new Date(rawInput.admit_before.valueOf())}),
       goal_id: requireAuthorityStoreId(rawInput.goal_id, "goal id"),
       todo_id: requireAuthorityStoreId(rawInput.todo_id, "todo id"),
       operation_id: requireAuthorityStoreId(rawInput.operation_id, "operation id"),
@@ -665,6 +678,8 @@ async function executeClaimAttempt(
 
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
   if (input.dry_run) {
+    const expired = claimDeadlineFailure(input);
+    if (expired !== null) return expired;
     return {
       ...result,
       schema_version: COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
@@ -709,5 +724,9 @@ async function executeClaimAttempt(
     request_sha256: requestSha,
     result,
   }];
+  // This is the final native admission, after provider/source reads and before
+  // dispatching the CAS. Persistence may finish later; replay above is historical.
+  const expired = claimDeadlineFailure(input);
+  if (expired !== null) return expired;
   return currentProof(await receipt.commit(store, commit));
 }

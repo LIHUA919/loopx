@@ -85,6 +85,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
     idempotency_key: str | None = None, runner: CommandRunner = default_subprocess_runner,
     publish_receipt: bool = True, expected_connection_id: str | None = None,
     expected_binding_digest: str | None = None,
+    admit_before: str | None = None,
     invoked_registry_path: Path | None = None,
     registry_sources: list[dict[str, str]] | None = None) -> dict[str, Any]:
     packet: dict[str, Any] = {"schema_version": GOAL_CHANNEL_WORK_RESULT_SCHEMA, "ok": False, "goal_id": goal_id,
@@ -167,7 +168,8 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
                     runtime_root=runtime_root, goal_id=goal_id, todo_id=str(todo_id), role="agent",
                     claimed_by=actor_id, actor_agent_id=actor_id, dry_run=not execute,
                     operation_id=str(idempotency_key), expected_provider_revision=str(expected_revision),
-                    registry_sources=registry_sources)
+                    registry_sources=registry_sources,
+                    **({"admit_before": admit_before} if admit_before is not None else {}))
             if result is None:
                 raise ValueError("canonical promotion required")
             accepted = result.get("status") in {"applied", "replayed", "recovered", "no_change"}
@@ -213,7 +215,7 @@ def run_goal_channel_work(*, registry_path: Path, runtime_root: Path, binding_pa
         return packet
     except LocalCoordinationAuthorityUnavailable as exc:
         packet["status"] = "conflict" if exc.code == "provider_revision_mismatch" else "rejected" if exc.payload.get("failure_kind") == "decision_rejection" else "failed"
-        packet["blocker"] = packet["status"]
+        packet["blocker"] = "claim_expired" if exc.code == "claim_expired" else packet["status"]
     except GoalChannelDeliveryStageError as exc:
         packet["external_write_performed"] = exc.external_write_performed is not False
         packet["blocker"] = exc.blocker

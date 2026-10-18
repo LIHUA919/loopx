@@ -179,6 +179,18 @@ Todo transaction then owns the claim and idempotent receipt; the result replaces
 the initiating card after independent provider readback. A callback ACK alone
 is not an accepted claim. No claim callback acquires or renews execution authority.
 
+The original offer expiry also travels to the canonical owner as `admit_before`
+in claim request v3. It retains v2's broker/source guards. After provider and
+source reads, the native Todo owner uses its current clock immediately before
+dispatching the new claim's CAS; equality with the deadline is expired. The
+provider may finish persistence later. A deadline rejection leaves ownership,
+revision, operation receipt, offer and room message unchanged. An already
+committed native receipt is historical acceptance, not a renewed offer or
+execution lease; the callback still applies its current offer admission.
+Old receivers reject v3, and v0/v1/v2 reject the deadline field rather than
+silently ignoring it. Untimed direct CLI claims retain their existing wire and
+behavior. This extends the existing claim owner, not a new permission service.
+
 The original broker/source witnesses survive remote member/card reads and the
 claim handoff. A route replacement at any of those stages leaves the old-source
 Todo, provider revision, exact operation receipt and room messages unchanged.
@@ -307,6 +319,13 @@ this change to remove the optional CLI facade; existing direct Todo CLI and
 Goal Channel configuration remain usable.
 
 ## 中文边界
+
+领取回调通过 v3 请求把原 offer 的 `expires_at` 作为 `admit_before` 传给既有
+canonical Todo owner，并保留 v2 的来源守卫。原生 owner 在 provider／来源读取后、
+派发新领取 CAS 前读取当前时钟；到达期限即拒绝，存储完成时间可以更晚。拒绝不改变
+归属、revision、操作回执、offer 或房间消息。既有回执只证明历史接受，不延长 offer
+或执行租约；回调仍检查当前 offer 准入。旧 receiver 拒绝 v3，旧 v0/v1/v2 请求拒绝
+夹带期限字段；不带期限的直接 CLI 领取行为保持不变。
 
 本阶段组合已有的 Agent CLI、Goal Channel 与 File/SQLite Todo 权威。默认仅预览；
 显式 `--execute` 才请求领取并发布房间回执。没有新增配置 owner 或前端开关，

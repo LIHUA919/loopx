@@ -304,6 +304,15 @@ registry administration with the canonical commit. Real File/SQLite regressions
 check unchanged full state and exact receipts after pre-commit route replacement;
 these bounded checks do not qualify independent hosts or native provider IO.
 
+The callback's original offer deadline is also enforced by the existing typed
+Todo owner. Claim request v3 retains the source guards and carries `admit_before`;
+the owner checks its current clock after reads, immediately before dispatching
+the new claim CAS. Expiry at that admission point refuses ownership and receipt
+creation without changing the offer or room message; persistence may finish
+later. Historical receipt recovery and untimed direct claims retain their
+existing semantics. This is a bounded local admission repair, not installed,
+independent-host or live-provider qualification.
+
 The proposed packaged workspace companion enters through the existing Lark
 connection. It reads canonical room orientation, explicitly claims through the
 same owner and reads historical acceptance, current ownership and message
