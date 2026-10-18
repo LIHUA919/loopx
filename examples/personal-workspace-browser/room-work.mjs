@@ -36,6 +36,16 @@ export const roomWorkScenario = {
       let readMode=null;
       context=await openWorkspacePage(browser,url,{beforeGoto:async(api,page)=>{
         api.larkConnections.push(connection);
+        // This room fixture has no separate private-conversation bindings.
+        // Supply that companion region's real empty readback shape.
+        await page.route("**/api/chat/lark/private-conversations",async route=>{
+          assert.equal(route.request().method(),"GET");
+          await route.fulfill({json:{ok:true,revision:0,connections:[],stop_recoveries:[]}});
+        });
+        await page.route("**/api/chat/projects",async route=>{
+          assert.equal(route.request().method(),"GET");
+          await route.fulfill({json:{ok:true,projects:[]}});
+        });
         await page.route("**/api/chat/lark/room-work**",async route=>{
           if(route.request().method()==="POST")submitted.push(route.request().postDataJSON());
           const response=await fetchWorkspaceBackend(route,backend);
@@ -109,6 +119,9 @@ export const roomWorkScenario = {
       assert.equal(direct.status,0,direct.stderr);assert.equal(JSON.parse(direct.stdout).todos[0].claimed_by,"agent-a");
       await page.getByRole("button",{name:"刷新当前状态"}).click();
       await page.getByText("最近回读的当前归属: agent-a",{exact:true}).waitFor();
+      await page.getByRole("button",{name:"刷新当前状态",exact:true}).click({trial:true});
+      assert.equal(await page.getByRole("dialog").getByRole("alert").count(),0);
+      assert.equal(await page.locator(".personal-private-conversation [role=alert]").count(),0);
       assert.equal(JSON.stringify(responses).includes("Synthetic private task text"),false);
       assert.ok(responses.every(p=>p.execution_authority_granted===false));
       await page.screenshot({path:resolve(outputDir,"room-work-recovered.png"),animations:"disabled"});
