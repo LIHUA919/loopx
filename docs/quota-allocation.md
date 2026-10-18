@@ -1571,7 +1571,20 @@ advances through `progression_minutes` only after the applied RRULE has had one
 real interval to run. An immediate post-ACK reconciliation therefore verifies
 the settled target instead of manufacturing the next backoff target in the
 same turn. A changed `reset_policy.reset_token`
-returns to the current profile's initial interval. This gives hosts a compact
+returns to the current profile's initial interval. A deadline-constrained wait
+binds its effective progression buckets into that reset token. For example,
+when the same monitor's remaining horizon shrinks from `[15, 30]` to `[15]`,
+the generated ACK starts a new identity at index zero; it does not bypass the
+native same-identity regression guard. Time passing within the same buckets
+keeps the identity stable. Host readback, receipt freshness, CAS and replay
+checks still apply, including when the host already uses the tighter RRULE.
+
+受截止时间约束的等待会将实际可用的节奏档位纳入重置令牌。同一监控的档位从
+`[15, 30]` 缩为 `[15]` 时，生成的 ACK 以新身份从索引零开始；同档位内的时间流逝
+保持身份稳定。原生同身份防倒退、宿主回读、回执时效、CAS 和重放校验仍然有效，
+包括宿主已经采用较短 RRULE 的情况。
+
+This gives hosts a compact
 post-update ack protocol instead of requiring them to own or diff the whole
 quota state. If `apply_needed=false` and `ack_needed=true`, the same command
 records an exact matching host readback without calling `automation_update`.
