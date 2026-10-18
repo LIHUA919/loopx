@@ -148,11 +148,11 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
   </> : null;
   return <section className={`delivery-acceptance-contract${overview ? " is-overview" : ""}`} aria-label={copy.title} aria-busy={busy}>
     <div className="delivery-acceptance-content">
-      <header className="delivery-check-heading"><div>{!overview || plan ? <h3>{copy.title}</h3> : null}
+      {!overview || plan || enabled ? <header className="delivery-check-heading"><div>{!overview || plan ? <h3>{copy.title}</h3> : null}
         <p className={overview && (plan || enabled) ? "goal-overview-objective" : undefined}>{plan ? plan.document.objective : enabled ? contract.objective : (zh ? "Agent 准备检查方案后，可在这里检查交付物。" : "Check the delivery here once the Agent prepares a plan.")}</p>{plan ? <p>{zh ? "将保存这份方案、更新相关任务的验收关联，并在本机运行以下检查。准备方案本身不会执行命令。" : "This saves the plan, updates its task associations and runs the following checks locally. Preparation itself executes no commands."}</p> : null}</div>
         {canManage && fresh && (plan || enabled) ? <button className={`delivery-check-primary${plan ? " is-prepared" : ""}`} type="button" disabled={busy || !!error}
           onClick={() => void operate(plan ? "adopt" : "verify")}>{busy ? (zh ? "正在检查…" : "Checking…") : plan ? (zh ? "采用并检查" : "Use plan and check") : (zh ? "检查交付" : "Check delivery")}</button> : null}
-      </header>
+      </header> : null}
       {overview && !enabled && !plan ? children : null}
       {plan ? <div className="delivery-check-plan">
         <p>{plan.document.scope.kind === "all_advancement" ? copy.allWork

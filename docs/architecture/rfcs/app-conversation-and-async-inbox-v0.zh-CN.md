@@ -470,6 +470,18 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
 | 执行与控制 | 现有 managed Turn、attached-session/host binding、Chat steering/interrupt | 验收精确受支持的 profile。已注册或 inbox acknowledged 都不等于正在运行；原生 steering、next-Turn queue 和 unsupported 必须分别表达 |
 | 结果 | Answer-report、artifact/revision、review/adoption 与 return owners | 读取已存版本，保留来源与独立审阅。report 读取失败重试读取，不重新运行模型 |
 
+本机输入修复复用现有 `POST /api/chat/sessions/{session_id}/turns`，传入
+`message` 与稳定的 `client_turn_id`；`delivery: "queue"` 仍可省略。
+对已经存在的本人私聊绑定会话，普通发送在重新核对 provider/本人、原 binding
+与工作区后进入同一队列，保留 `origin=web`、原 Session/thread 和原项目或管家受众，
+不伪装 provider 事件，也不扩大成本机全局 portfolio。群输入与直接 steering
+继续受来源守卫约束；请求体不能声明 origin、本人或 provider 身份。
+TS binding/source owner 决定准入和来源关联，Python 观测身份并在 binding 发布锁内落队列。
+管家 ingress 沿注册的 coordination root 和现有 source policy，执行授权仍独立。
+真实 File/SQLite HTTP 回归覆盖完整文本、重放、FIFO 和撤权竞态。
+此项是 Core/API 前置：打包前端发现、真实共享飞书会话采用、项目接收者协作与原会话
+结果返回仍须完成各自现有验收，不以合成测试宣称整条用户旅程完成。
+
 Lark 可读回复的出口还要检查实际强调呈现，不能把 Markdown 原文读回一致当成视觉验收。
 依照 [CommonMark 分隔符规则](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis)，
 共享 inbox 回复适配器对“加粗内的末尾标点紧接下一单词”做格式规范化：
@@ -773,6 +785,11 @@ message，仅以该 App 身份下载属于这条消息的资源，再将 PNG/JPE
 历史请求预算五秒，身份核验保留既有超时。分页未完、失败、过期或绑定变化均不推进覆盖时间。已发现缺口
 保留在私有回执中，不因后来窗口缺少该消息而消失；群话题与其他 provider 维持
 各自覆盖契约。
+
+停机后从最后完整 cursor 继续，以最多一天的窗口有界追平，不能把尚未扫描的区间标为
+已覆盖；每个绑定的回执锁覆盖读取、provider 查询和写回。回归通过真实原生绑定、Core
+与连接 HTTP 入口，配合合成 provider 历史及宿主执行，验证两天停机后仍能发现漏收；
+两个观察交错后只准入较晚消息，也不能抹掉较早缺口。
 
 原连接 API 与 Lark 设置将 `ingress` 原消息核对状态和实时监听、待执行数量分开，
 只展示未核对、已核对、有缺口或暂不可用，以及时间和计数，不返回原消息 ID 或正文。
