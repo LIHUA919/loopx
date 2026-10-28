@@ -559,14 +559,22 @@ def test_todo_claim_validation_preserves_exact_diagnostics(
     assert str(exc_info.value) == expected
 
 
-@pytest.mark.parametrize("command", ["add", "list", "update", "complete", "supersede"])
+@pytest.mark.parametrize("command", ["add", "list", "supersede"])
 @pytest.mark.parametrize("operation_id", ["retry-one", ""])
 def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, operation_id):
     args = build_parser().parse_args([
         "todo", command, "--goal-id", "example-goal", "--claim-operation-id", operation_id,
     ])
-    with pytest.raises(ValueError, match="supported only by todo claim"):
+    with pytest.raises(ValueError, match="supported only by todo claim/update/complete"):
         validate_shared_todo_options(args)
+
+
+@pytest.mark.parametrize("command", ["claim", "update", "complete"])
+def test_claim_operation_id_is_shared_by_lease_bound_commands(command):
+    args = build_parser().parse_args([
+        "todo", command, "--goal-id", "example-goal", "--claim-operation-id", "retry-one",
+    ])
+    validate_shared_todo_options(args)
 
 
 @pytest.mark.parametrize(
