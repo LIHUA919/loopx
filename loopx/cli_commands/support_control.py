@@ -16,7 +16,8 @@ from ..chat_server import (
     serve_chat,
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
+from ..dashboard_launcher import launch_dashboard
+from ..runtime_activation import replace_managed_loopx_chat as replace_existing_loopx_chat
 from ..execution_profile import execution_profile_turn_granularity
 from ..heartbeat_prequota import (
     render_heartbeat_pre_quota_markdown,
@@ -430,6 +431,9 @@ def handle_support_control_command(
                 payload["interface_budget"] = build_interface_budget(
                     task_body=body, goal_id=args.goal_id,
                     active_state=str(payload.get("active_state") or ""), thin=True,
+                    registry_path=str(agent_registry_path.resolve()),
+                    runtime_root=(str(Path(args.runtime_root).expanduser().resolve())
+                                  if args.runtime_root else None),
                 )
                 if not payload["interface_budget"]["within_budget"]:
                     raise ValueError("bootstrap exceeds the thin budget; move lengthy policy into registered state")
