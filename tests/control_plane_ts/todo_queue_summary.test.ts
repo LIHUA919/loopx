@@ -26,6 +26,7 @@ test("queue overview reports full matches and bounds Unicode titles without chan
   const rows = result.todos as JsonObject[];
   assert.equal(Array.from(String(rows[0]!.title)).length, 180);
   assert.equal(rows[0]!.title_truncated, true);
+  assert.equal(rows[1]!.title_truncated, false);
   assert.equal(rows[1]!.status, "done");
   assert.equal(rows[2]!.status, "blocked");
   assert.equal(rows[0]!.note, undefined);

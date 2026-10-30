@@ -64,7 +64,8 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
   const roles: unknown[] = query.role == null ? ["user", "agent"] : [query.role];
   const select = async (source: JsonObject) => selectTodoReadFields({...input, fields: source.fields,
     field_evaluations: source.field_evaluations, roles, status: query.status ?? null,
-    todo_id: query.todo_id ?? null, agent_id: query.agent_id ?? null, limit: query.limit ?? null, source_name: sourceName});
+    // The queue formatter applies its own row cap and needs the unshortened titles.
+    todo_id: query.todo_id ?? null, agent_id: query.agent_id ?? null, limit: summary ? null : query.limit ?? null, source_name: sourceName});
   let selected = await select(fields);
   if (selected.rejection) return selected;
   let projection = requireJsonObject(selected.projection, "Todo read projection");

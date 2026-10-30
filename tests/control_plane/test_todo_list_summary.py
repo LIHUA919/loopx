@@ -129,6 +129,29 @@ def test_queue_summary_preserves_filters_limits_and_hot_display_selection(queue_
     assert run("--summary")["returned_todo_count"] == 16
 
 
+def test_queue_summary_limit_preserves_title_truncation_and_exact_readback(queue_cli):
+    _, run, state, rows = queue_cli
+    display = state.read_bytes()
+    full, thin = run(), run("--thin")
+    summary = run("--summary")
+    limited = run("--summary", "--limit", "1")
+    original_by_id = {row["todo_id"]: row for row in summary["todos"]}
+    for row in limited["todos"]:
+        assert row == original_by_id[row["todo_id"]]
+        assert row["title_truncated"] is True
+        assert len(row["title"]) == 180
+        source = next(item for item in rows if item["todo_id"] == row["todo_id"])
+        exact = run("--todo-id", row["todo_id"])
+        assert exact["todo"]["text"] == source["text"]
+        assert exact["todo_detail_projection"]["source_complete"]
+    markdown = run("--summary", "--limit", "1", output_format="markdown")
+    assert "Title truncated; the exact read retains the full requirement." in markdown
+    assert run()["todos"] == full["todos"]
+    assert run("--thin")["todos"] == thin["todos"]
+    assert limited["authority_read"] == summary["authority_read"]
+    assert state.read_bytes() == display
+
+
 def test_queue_summary_markdown_and_invalid_mode_combinations(queue_cli):
     _, run, state, _ = queue_cli
     display = state.read_bytes()
